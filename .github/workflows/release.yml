@@ -1,0 +1,170 @@
+# Release des plugins : sur main, chaque plugin dont la version n'a pas encore de tag
+# `<id>-v<version>` est construit (serveurs sur 4 plateformes), assemblé et publié ;
+# le catalogue est ensuite régénéré sur la release fixe `catalog`.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # relance manuelle : publie ce qui manque et régénère le catalogue
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    name: Plugins à publier
+    runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.pending.outputs.plugins }}
+      count: ${{ steps.pending.outputs.count }}
+      servers: ${{ steps.pending.outputs.servers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm validate
+      - id: pending
+        run: pnpm --silent pending --github-output
+
+  build:
+    name: Serveurs ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.servers != '[]' && needs.plan.outputs.servers != ''
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: windows-x86_64
+            rust: x86_64-pc-windows-msvc
+            runner: windows-latest
+            exe: .exe
+          - target: macos-aarch64
+            rust: aarch64-apple-darwin
+            runner: macos-latest
+            exe: ""
+          - target: macos-x86_64
+            rust: x86_64-apple-darwin
+            runner: macos-latest # compilation croisée depuis un Mac Apple Silicon
+            exe: ""
+          - target: linux-x86_64
+            rust: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            exe: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Construire les serveurs
+        shell: bash
+        env:
+          SERVERS: ${{ needs.plan.outputs.servers }}
+        run: |
+          set -euo pipefail
+          mkdir -p "bins/${{ matrix.target }}"
+          while IFS= read -r row; do
+            crate=$(echo "$row" | jq -r .crate)
+            bin=$(echo "$row" | jq -r .bin)
+            cargo build --release --locked -p "$crate" --bin "$bin" --target ${{ matrix.rust }}
+            cp "target/${{ matrix.rust }}/release/${bin}${{ matrix.exe }}" "bins/${{ matrix.target }}/"
+          done < <(echo "$SERVERS" | jq -c '.[]')
+          ls -la "bins/${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-${{ matrix.target }}
+          path: bins/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publier
+    needs: [plan, build]
+    if: >-
+      always() && needs.plan.result == 'success' && needs.plan.outputs.count != '0' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build des UI
+        run: pnpm build
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        with:
+          pattern: bins-*
+          path: bins
+          merge-multiple: true
+      - name: Assembler et créer les releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGINS: ${{ needs.plan.outputs.plugins }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r row; do
+            id=$(echo "$row" | jq -r .id)
+            version=$(echo "$row" | jq -r .version)
+            name=$(echo "$row" | jq -r .name)
+            tag=$(echo "$row" | jq -r .tag)
+            pnpm package "$id" --bins bins --out out
+            zip="out/${id}-${version}.zip"
+            gh release create "$tag" "$zip" "$zip.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$name $version" \
+              --notes "Plugin **$name** $version pour Cadence. Installation depuis le catalogue de l'app (Réglages › Plugins) ; l'archive contient les binaires windows-x86_64, macos-aarch64, macos-x86_64 et linux-x86_64."
+          done < <(echo "$PLUGINS" | jq -c '.[]')
+
+  catalog:
+    name: Catalogue
+    needs: [plan, publish]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags : le manifeste est relu à chaque tag
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Régénérer catalog.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force
+          pnpm catalog --out catalog.json
+          cat catalog.json
+      - name: Publier sur la release « catalog »
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view catalog >/dev/null 2>&1; then
+            gh release create catalog --target "$GITHUB_SHA" --latest=false \
+              --title "Catalogue des plugins" \
+              --notes "Index lu par Cadence : https://github.com/${GITHUB_REPOSITORY}/releases/download/catalog/catalog.json — régénéré par la CI à chaque release de plugin."
+          fi
+          gh release upload catalog catalog.json --clobber

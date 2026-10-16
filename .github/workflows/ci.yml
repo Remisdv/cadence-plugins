@@ -1,0 +1,70 @@
+# CI des pull requests : manifestes, paquets TypeScript, UI des plugins, serveurs Rust.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Manifestes et skills
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # comparaison des versions avec la branche cible
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Valider les plugins (version incrémentée si modifiés)
+        if: github.event_name == 'pull_request'
+        run: pnpm validate --base origin/${{ github.base_ref }}
+      - name: Valider les plugins
+        if: github.event_name != 'pull_request'
+        run: pnpm validate
+
+  typescript:
+    name: SDK, kit UI et écrans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Build des UI de plugins
+        run: pnpm build
+
+  rust:
+    name: Serveurs (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all --check
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
