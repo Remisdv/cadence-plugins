@@ -1,0 +1,25 @@
+# Dépendances et builds
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+
+# Sorties des scripts (archives, catalogue, binaires rassemblés par la CI)
+/out/
+/bins/
+/catalog.json
+
+# Binaires : jamais commités (la CI les construit)
+plugins/*/bin/
+*.exe
+*.dll
+*.dylib
+*.so
+
+# Journaux et fichiers d'éditeur
+*.log
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.local

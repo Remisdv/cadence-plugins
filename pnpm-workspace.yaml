@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+  - "plugins/*/ui"
+
+# esbuild (Vite, tsx) installe son binaire natif au postinstall.
+onlyBuiltDependencies:
+  - esbuild

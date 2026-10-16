@@ -1,0 +1,27 @@
+# Workspace des serveurs MCP natifs des plugins (un crate par `plugins/<id>/server`).
+[workspace]
+resolver = "3"
+members = ["plugins/*/server"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["Rémi Lhuillier"]
+repository = "https://github.com/RemiSDV/cadence-plugins"
+publish = false
+
+[workspace.dependencies]
+rmcp = { version = "3.5.1", features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "fs", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

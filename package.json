@@ -1,0 +1,33 @@
+{
+  "name": "cadence-plugins",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Plugins officiels et communautaires de Cadence, SDK et kit UI.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.22.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "validate": "tsx scripts/validate.ts",
+    "package": "tsx scripts/package.ts",
+    "catalog": "tsx scripts/catalog.ts",
+    "pending": "tsx scripts/pending.ts",
+    "typecheck": "tsc --noEmit -p scripts && pnpm -r --parallel typecheck",
+    "test": "vitest run --root scripts && pnpm -r test",
+    "build": "pnpm -r --filter \"./plugins/*/ui\" build",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\""
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "ajv": "^8.20.0",
+    "fflate": "^0.8.3",
+    "prettier": "^3.9.10",
+    "smol-toml": "^1.9.1",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5",
+    "yaml": "^2.9.1"
+  }
+}
