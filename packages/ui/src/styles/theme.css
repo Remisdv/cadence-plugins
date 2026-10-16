@@ -1,0 +1,108 @@
+/*
+ * @cadence/ui — tokens Cadence pour Tailwind v4 (copie fidèle de src/styles/globals.css de l'app).
+ * À importer après Tailwind :
+ *   @import "tailwindcss";
+ *   @import "@cadence/ui/theme.css";
+ * Chaque token devient un utilitaire : bg-panel, text-tx2, border-line, text-caption, rounded-card…
+ */
+
+/* Les classes des composants du kit sont générées même s'ils vivent dans node_modules. */
+@source "../";
+
+@theme {
+  /* Surfaces, du plus profond au plus élevé */
+  --color-bg: #0b0d10;
+  --color-backdrop: #0a0c0f;
+  --color-console: #0a0c0f; /* panneau terminal des agents */
+  --color-panel: #111419;
+  --color-p2: #161a21;
+  --color-p3: #1c222a;
+  --color-p4: #222932;
+  --color-avatar: #2a3340;
+
+  /* Traits */
+  --color-line: #232a33;
+  --color-line2: #313a45;
+
+  /* Texte */
+  --color-tx: #e6e9ed;
+  --color-tx2: #9aa4b0;
+  --color-tx3: #7b8692;
+  --color-ink: #0b0d10; /* texte posé sur un aplat de couleur vive */
+
+  /* Accent principal */
+  --color-clay: #d97757;
+  --color-clay-hover: #ec9271;
+  --color-clay-d: #41261d;
+  --color-clay-line: #5c3527;
+  --color-clay-ink: #26140d;
+
+  /* Couleurs sémantiques : <couleur> = trait/texte, <couleur>-d = fond, <couleur>-line = bordure de fond */
+  --color-green: #3fb562;
+  --color-green-d: #16301f;
+  --color-green-line: #234a31;
+  --color-green-track: #1d3d28;
+  --color-purple: #a277f0;
+  --color-purple-d: #291e3c;
+  --color-purple-line: #3d2c5c;
+  --color-blue: #5b8def;
+  --color-blue-d: #1a2740;
+  --color-blue-line: #23395e;
+  --color-amber: #e0a44c;
+  --color-amber-d: #3a2c16;
+  --color-amber-line: #4e3d1f;
+  --color-red: #e0655a;
+  --color-red-d: #3a1d1a;
+  --color-red-line: #4e2621;
+
+  /* Diff */
+  --color-diff-del: #341b18;
+  --color-diff-add: #14301e;
+
+  /* Typographie */
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Échelle typographique des maquettes (px exacts) */
+  --text-micro: 10.5px; /* section labels, méta mono */
+  --text-tiny: 11px; /* compteurs, numéros d'issue, kbd */
+  --text-caption: 11.5px; /* sous-titres, badges, hints */
+  --text-small: 12px;
+  --text-body-sm: 12.5px;
+  --text-body: 13px; /* taille de base de l'app */
+  --text-body-lg: 13.5px;
+  --text-title-sm: 14px;
+  --text-title: 15px;
+  --text-kpi: 24px;
+  --text-display-sm: 24px;
+  --text-display: 27px;
+
+  /* Rayons */
+  --radius-badge: 5px;
+  --radius-control: 7px;
+  --radius-field: 9px;
+  --radius-card: 12px;
+  --radius-modal: 14px;
+
+  /* Ombres */
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.6);
+
+  /* Fond de la colonne d'onboarding */
+  --gradient-aside: linear-gradient(180deg, #12161c 0%, #0c0f13 100%);
+}
+
+/*
+ * Écran bas : 1080p avec mise à l'échelle Windows à 125 % ou plus (≈ 790 px utiles).
+ * `short:py-7` resserre les espacements verticaux sans toucher au rendu des maquettes (900 px).
+ */
+@custom-variant short (@media (max-height: 880px));
+
+@utility mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+@utility bg-aside {
+  background: var(--gradient-aside);
+}

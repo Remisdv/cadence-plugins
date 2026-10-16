@@ -1,0 +1,9 @@
+/*
+ * @cadence/ui — équivalent complet de src/styles/globals.css de Cadence :
+ * Tailwind v4, polices, tokens (@theme) et styles de base.
+ *   @import "@cadence/ui/globals.css";
+ */
+@import "tailwindcss";
+@import "./fonts.css";
+@import "./theme.css";
+@import "./base.css";
