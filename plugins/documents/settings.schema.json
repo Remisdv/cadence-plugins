@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Réglages de Documents (par espace)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "dossier_cours": {
+      "type": "string",
+      "title": "Dossier des cours",
+      "description": "Dossier où se trouvent les cours, relatif à l'espace. Vide : le dossier de l'espace.",
+      "default": ""
+    },
+    "questions_par_qcm": {
+      "type": "integer",
+      "title": "Questions par QCM",
+      "description": "Nombre de questions d'un QCM généré.",
+      "default": 10,
+      "minimum": 3,
+      "maximum": 40
+    },
+    "cartes_par_paquet": {
+      "type": "integer",
+      "title": "Cartes par paquet de flashcards",
+      "default": 20,
+      "minimum": 5,
+      "maximum": 100
+    }
+  }
+}

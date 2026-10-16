@@ -1,0 +1,64 @@
+api = 1
+id = "documents"
+name = "Documents"
+version = "0.1.0"
+description = "Cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre : réponses citées (document + page), QCM, questions ouvertes corrigées et flashcards."
+authors = ["Rémi Lhuillier"]
+icon = "icon.svg"
+min_cadence = "0.3.0"
+
+[server]
+bin = "cadence-documents"
+
+[ui]
+entry = "ui/index.html"
+
+[[ui.views]]
+id = "bibliotheque"
+title = "Bibliothèque"
+icon = "book"
+section = "Cours"
+
+[[ui.views]]
+id = "entrainement"
+title = "Entraînement"
+icon = "sparkle"
+section = "Cours"
+
+[[setup]]
+id = "dossier"
+title = "Dossier des cours"
+view = "setup-dossier"
+
+[settings]
+schema = "settings.schema.json"
+
+# Boutons liés aux skills. Contexte fourni par l'UI : { "subject", "chapter", "document"? }.
+
+[[actions]]
+id = "poser-question"
+label = "Poser une question"
+skill = "repondre-cours"
+mode = "chat"
+context = "chapitre"
+
+[[actions]]
+id = "generer-qcm"
+label = "Générer un QCM"
+skill = "generer-qcm"
+mode = "background"
+context = "chapitre"
+
+[[actions]]
+id = "questions-ouvertes"
+label = "Questions ouvertes"
+skill = "questions-ouvertes"
+mode = "chat"
+context = "chapitre"
+
+[[actions]]
+id = "flashcards"
+label = "Flashcards"
+skill = "flashcards"
+mode = "background"
+context = "chapitre"
