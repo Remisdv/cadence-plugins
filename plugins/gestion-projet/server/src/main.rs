@@ -1,7 +1,7 @@
 //! `cadence-gestion-projet` : serveur MCP (stdio) du plugin Cadence « Gestion de projet ».
 //!
-//! Lancé par Cadence, un processus par espace de travail. Journal sur stderr (stdout porte le
-//! protocole MCP) ; niveau réglable avec `RUST_LOG`.
+//! Lancé par Cadence, un seul processus pour le plugin (dépôts suivis via le service `repos`).
+//! Journal sur stderr (stdout porte le protocole MCP) ; niveau réglable avec `RUST_LOG`.
 
 mod config;
 mod github;
@@ -31,7 +31,11 @@ async fn main() -> Result<()> {
 
     let env = config::Env::from_process();
     let server = server::GestionProjet::new(&env)?;
-    tracing::info!(token = env.token.is_some(), "serveur gestion-projet prêt");
+    tracing::info!(
+        token = env.token.is_some(),
+        repos = env.repos.len(),
+        "serveur gestion-projet prêt"
+    );
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

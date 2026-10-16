@@ -1,4 +1,7 @@
-/** Vue « Issues » : liste des issues du dépôt via l'outil `list_issues`, actions des skills. */
+/**
+ * Vue « Issues » : issues du dépôt choisi dans le sélecteur de Cadence, ou de tous les dépôts
+ * suivis (« Tous les dépôts », avec une colonne dépôt), via l'outil `list_issues`.
+ */
 import { useState } from "react";
 import { cadence, isCadenceError, type RunUpdate } from "@cadence/plugin-sdk";
 import {
@@ -12,7 +15,18 @@ import {
   StatusDot,
   cn,
 } from "@cadence/ui";
-import { displayLabels, issueStatuses, issueTypeTone, statusOrder, type Issue, type IssueList } from "../domain";
+import {
+  displayLabels,
+  issueContext,
+  issueKey,
+  issueStatuses,
+  issueTypeTone,
+  repoShortName,
+  statusOrder,
+  type Issue,
+  type IssueList,
+} from "../domain";
+import { useRepos } from "../useRepos";
 import { useTool } from "../useTool";
 
 type StateFilter = "open" | "closed" | "all";
@@ -25,23 +39,34 @@ const filters: { id: StateFilter; label: string }[] = [
 
 export function IssuesView() {
   const [state, setState] = useState<StateFilter>("open");
-  const { data, error, loading, reload } = useTool<IssueList>("list_issues", { state, per_page: 100 });
-  const [runs, setRuns] = useState<Record<number, RunUpdate>>({});
+  const { repos, selection, error: reposError } = useRepos();
+  const repo = selection?.kind === "one" ? selection.repo : null;
+  const all = selection?.kind === "all";
+  const ready = selection !== null && (repos?.length ?? 0) > 0;
+  const { data, error, loading, reload } = useTool<IssueList>(
+    "list_issues",
+    repo ? { repo, state, per_page: 100 } : { state, per_page: 100 },
+    "",
+    ready,
+  );
+  const [runs, setRuns] = useState<Record<string, RunUpdate>>({});
 
   const implement = async (issue: Issue) => {
     try {
-      const runId = await cadence.runAction("implementer-issue", { issue: issue.number });
-      cadence.onRun(runId, (u) => setRuns((r) => ({ ...r, [issue.number]: u })));
+      const runId = await cadence.runAction("implementer-issue", issueContext(issue));
+      cadence.onRun(runId, (u) => setRuns((r) => ({ ...r, [issueKey(issue)]: u })));
     } catch (e) {
       await cadence.notify(isCadenceError(e) ? e.message : String(e), "error");
     }
   };
   const complete = (issue: Issue) =>
-    cadence.runAction("completer-issue", { issue: issue.number }).catch((e: unknown) =>
+    cadence.runAction("completer-issue", issueContext(issue)).catch((e: unknown) =>
       cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
     );
 
-  const issues = data?.issues ?? [];
+  // Une réponse d'une autre sélection (le temps du rechargement) n'est pas affichée.
+  const current = data && (repo ? data.repo === repo : data.repo === null) ? data : null;
+  const issues = current?.issues ?? [];
   const byStatus = statusOrder
     .map((s) => ({ status: s, items: issues.filter((i) => i.status === s) }))
     .filter((g) => g.items.length > 0);
@@ -51,7 +76,8 @@ export function IssuesView() {
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
         <Icon name="issue" size={17} className="text-clay" />
         <h1 className="font-display text-title">Issues</h1>
-        {data && <span className="mono text-caption text-tx3">{data.repository}</span>}
+        {repo && <span className="mono text-caption text-tx3">{repo}</span>}
+        {all && repos && <span className="text-caption text-tx3">Tous les dépôts · {repos.length}</span>}
         <div className="grow" />
         <div role="tablist" aria-label="État" className="flex gap-1 rounded-control bg-p2 p-0.5">
           {filters.map((f) => (
@@ -69,17 +95,36 @@ export function IssuesView() {
             </button>
           ))}
         </div>
-        <Button size="sm" variant="ghost" icon="refresh" iconOnly aria-label="Rafraîchir" onClick={reload} />
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="refresh"
+          iconOnly
+          aria-label="Rafraîchir"
+          onClick={reload}
+          disabled={!ready}
+        />
       </header>
 
       <main className="min-h-0 grow overflow-y-auto p-5">
-        {loading && !data && (
+        {reposError && (
+          <Callout tone="danger" className="mb-4">
+            {reposError.message}
+          </Callout>
+        )}
+        {repos && repos.length === 0 && <NoRepos />}
+        {ready && loading && !current && (
           <div className="flex items-center gap-2 text-body-sm text-tx3">
             <Spinner /> Chargement des issues…
           </div>
         )}
-        {error && <ToolError message={error.message} />}
-        {data && issues.length === 0 && !error && (
+        {ready && error && <ToolError message={error.message} />}
+        {current?.errors?.length ? (
+          <Callout tone="warning" className="mb-4">
+            Dépôts illisibles : {current.errors.map((e) => `${e.repo} (${e.message})`).join(" ; ")}
+          </Callout>
+        ) : null}
+        {current && issues.length === 0 && !error && (
           <Card className="p-6 text-center text-body-sm text-tx3">Aucune issue dans ce filtre.</Card>
         )}
         <div className="flex flex-col gap-5">
@@ -93,9 +138,10 @@ export function IssuesView() {
               <Card className="divide-y divide-line">
                 {group.items.map((issue) => (
                   <IssueRow
-                    key={issue.number}
+                    key={issueKey(issue)}
                     issue={issue}
-                    run={runs[issue.number]}
+                    showRepo={!repo}
+                    run={runs[issueKey(issue)]}
                     onComplete={() => void complete(issue)}
                     onImplement={() => void implement(issue)}
                   />
@@ -111,11 +157,14 @@ export function IssuesView() {
 
 function IssueRow({
   issue,
+  showRepo,
   run,
   onComplete,
   onImplement,
 }: {
   issue: Issue;
+  /** Colonne dépôt (mode « Tous les dépôts »). */
+  showRepo: boolean;
   run?: RunUpdate;
   onComplete: () => void;
   onImplement: () => void;
@@ -123,6 +172,11 @@ function IssueRow({
   const running = run && (run.status === "queued" || run.status === "running");
   return (
     <div className="group flex min-h-[46px] items-center gap-3 px-3.5 py-2">
+      {showRepo && (
+        <span className="mono w-[120px] shrink-0 truncate text-caption text-tx3" title={issue.repo}>
+          {repoShortName(issue.repo)}
+        </span>
+      )}
       <span className="mono w-[42px] shrink-0 text-tiny text-tx3">#{issue.number}</span>
       <div className="min-w-0 grow">
         <button
@@ -169,16 +223,27 @@ function IssueRow({
   );
 }
 
+function NoRepos() {
+  return (
+    <Card className="flex flex-col items-center gap-3 p-6 text-center">
+      <span className="text-body-sm text-tx2">Aucun dépôt suivi par Gestion de projet.</span>
+      <Button size="sm" variant="secondary" icon="github" onClick={() => void cadence.navigate("setup-depots")}>
+        Choisir des dépôts
+      </Button>
+    </Card>
+  );
+}
+
 function ToolError({ message }: { message: string }) {
-  const needsSetup = /Jeton GitHub|dépôt GitHub réglé/.test(message);
+  const needsRepos = /non suivi|Aucun dépôt suivi/.test(message);
   return (
     <Callout tone="danger" className="mb-4">
       <div className="flex flex-col gap-2">
         <span>{message}</span>
-        {needsSetup && (
+        {needsRepos && (
           <span>
-            <Button size="xs" variant="secondary" icon="github" onClick={() => void cadence.navigate("setup-github")}>
-              Configurer GitHub
+            <Button size="xs" variant="secondary" icon="github" onClick={() => void cadence.navigate("setup-depots")}>
+              Dépôts suivis
             </Button>
           </span>
         )}

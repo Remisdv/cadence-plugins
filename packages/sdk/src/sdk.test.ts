@@ -9,6 +9,7 @@ import {
   isMessage,
   memoryChannel,
   toolValue,
+  type ReposChange,
   type RunUpdate,
 } from "./index";
 
@@ -77,12 +78,12 @@ describe("requêtes", () => {
           kind: "response",
           id: m.id,
           ok: true,
-          result: { api: 1, plugin: { id: "x", version: "0" }, workspace: {}, theme: {}, route: { view: "a", params: {} } },
+          result: { api: 1, plugin: { id: "x", version: "0" }, theme: {}, route: { view: "a", params: {} } },
         });
       }
     });
     const cadence = createCadence(client, { timeoutMs: 20 });
-    await expect(cadence.workspace()).rejects.toMatchObject({ code: "timeout" });
+    await expect(cadence.settings.get()).rejects.toMatchObject({ code: "timeout" });
   });
 
   it("annule avec un AbortSignal", async () => {
@@ -96,10 +97,10 @@ describe("requêtes", () => {
 
   it("écrit les secrets sans jamais les relire", async () => {
     const { cadence, host } = connectMock();
-    expect(await cadence.secrets.has("github_token")).toBe(false);
-    await cadence.secrets.set("github_token", "ghp_test");
-    expect(await cadence.secrets.has("github_token")).toBe(true);
-    expect(host.secrets.has("github_token")).toBe(true);
+    expect(await cadence.secrets.has("api_key")).toBe(false);
+    await cadence.secrets.set("api_key", "cle-de-test");
+    expect(await cadence.secrets.has("api_key")).toBe(true);
+    expect(host.secrets.has("api_key")).toBe(true);
     expect("get" in cadence.secrets).toBe(false);
   });
 
@@ -153,6 +154,61 @@ describe("événements", () => {
     expect(routes).toEqual(["issues"]);
     expect(cadence.route).toEqual({ view: "issues", params: { number: "4" } });
     expect(cadence.theme["--color-clay"]).toBe("#d97757");
+  });
+});
+
+describe("service repos", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it("liste les dépôts suivis et la sélection courante", async () => {
+    const { cadence } = connectMock({ repos: { repos: ["me/app", "me/site"] } });
+    const repos = await cadence.repos.list();
+    expect(repos.map((r) => r.fullName)).toEqual(["me/app", "me/site"]);
+    expect(repos[0]).toMatchObject({ owner: "me", name: "app" });
+    expect(await cadence.repos.selection()).toEqual({ kind: "one", repo: "me/app" });
+    expect("workspace" in cadence).toBe(false);
+  });
+
+  it("suit et cesse de suivre, avec notification des changements", async () => {
+    const { cadence, host } = connectMock({ repos: { repos: ["me/app"], selection: { kind: "all" } } });
+    await cadence.ready();
+    const changes: ReposChange[] = [];
+    const off = cadence.repos.onChange((c) => changes.push(c));
+    expect((await cadence.repos.follow(" me/site ")).map((r) => r.fullName)).toEqual(["me/app", "me/site"]);
+    await tick();
+    host.select({ kind: "one", repo: "me/site" });
+    await tick();
+    expect((await cadence.repos.unfollow("me/site")).map((r) => r.fullName)).toEqual(["me/app"]);
+    await tick();
+    off();
+    host.select({ kind: "one", repo: "me/app" });
+    await tick();
+    expect(changes.map((c) => [c.repos.length, c.selection])).toEqual([
+      [2, { kind: "all" }],
+      [2, { kind: "one", repo: "me/site" }],
+      // Le dépôt sélectionné n'est plus suivi : retour à « tous ».
+      [1, { kind: "all" }],
+    ]);
+  });
+
+  it("refuse un nom de dépôt invalide sans appeler l'hôte", async () => {
+    const { cadence, host } = connectMock({ repos: {} });
+    await expect(cadence.repos.follow("pas un dépôt")).rejects.toMatchObject({ code: "invalid_params" });
+    expect(host.requests.some((r) => r.method === "repos.follow")).toBe(false);
+  });
+
+  it("prépare un worktree par tâche", async () => {
+    const { cadence, host } = connectMock({
+      repos: { repos: ["me/app"], checkout: (repo, task) => `/data/repos/${repo}/wt/${task}` },
+    });
+    expect(await cadence.repos.checkout("me/app", { task: "issue-42" })).toBe("/data/repos/me/app/wt/issue-42");
+    expect(host.requests.at(-1)).toEqual({ method: "repos.checkout", params: { repo: "me/app", task: "issue-42" } });
+    await expect(cadence.repos.checkout("me/autre")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("rejette en denied quand le plugin ne déclare pas le service", async () => {
+    const { cadence } = connectMock();
+    await expect(cadence.repos.list()).rejects.toMatchObject({ code: "denied" });
   });
 });
 

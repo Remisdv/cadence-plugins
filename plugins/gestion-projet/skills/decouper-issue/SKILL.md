@@ -9,19 +9,26 @@ Tu découpes une issue en sous-issues livrables séparément. Tu écris en fran�
 
 ## Contexte reçu
 
-`{ "issue": <numéro> }` (type de contexte `issue`).
+`{ "repo": "<owner/name>", "issue": <numéro> }` (type de contexte `issue`). Sans `repo` (sélection « Tous les dépôts » : le contexte porte alors `repos`, la liste des dépôts
+suivis), demande à l'utilisateur sur quel dépôt travailler.
+Les sous-issues sont créées dans le même dépôt que l'issue d'origine.
 
 ## Outils
 
+Chaque outil du plugin prend le dépôt en paramètre `repo` (`owner/name`) : passe toujours celui du
+contexte.
+
 | Outil | Usage |
 | --- | --- |
+| `cadence__repo_checkout` | si besoin, worktree du dépôt pour lire le code (`{ "repo", "task": "issue-<numéro>" }` → `path`) |
 | `gestion-projet__get_issue` | lire l'issue d'origine (description, critères, version, type) |
 | `gestion-projet__list_issues` | vérifier qu'aucune issue existante ne couvre déjà une partie |
 | `gestion-projet__create_issue` | créer chaque sous-issue (`type`, `milestone`, `labels`) |
 | `gestion-projet__update_issue` | ajouter la liste des sous-issues à l'issue d'origine |
 | `gestion-projet__add_comment` | commenter le découpage |
 
-Le dossier courant est le dépôt : lis le code si nécessaire, sans rien modifier.
+Tu tournes dans un dossier neutre de Cadence, pas dans le dépôt. Si tu dois lire le code, demande le
+worktree avec `cadence__repo_checkout` et lis-le à partir du chemin renvoyé, sans rien modifier.
 
 ## Démarche
 

@@ -1,15 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Réglages de Gestion de projet (par espace)",
+  "title": "Réglages de Gestion de projet (globaux ; les dépôts suivis sont gérés par le service repos)",
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "repository": {
-      "type": "string",
-      "title": "Dépôt GitHub",
-      "description": "owner/name du dépôt suivi par cet espace. Par défaut, le remote origin du dossier de l'espace.",
-      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
-    },
     "tag_prefix": {
       "type": "string",
       "title": "Préfixe de tag",

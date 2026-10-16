@@ -4,12 +4,16 @@ import {
   CHANNEL,
   isMessage,
   type BackendEvent,
+  type CheckoutOptions,
   type HelloResult,
   type Method,
   type NotifyKind,
   type ParamsOf,
   type PickFilesOptions,
   type PluginInfo,
+  type RepoInfo,
+  type ReposChange,
+  type RepoSelection,
   type RequestMessage,
   type ResultOf,
   type Route,
@@ -17,11 +21,13 @@ import {
   type Settings,
   type ThemeTokens,
   type ToolCallResult,
-  type WorkspaceInfo,
 } from "./protocol";
 import type { Port } from "./port";
 
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = "0.2.0";
+
+/** `owner/name` d'un dépôt GitHub. */
+export const REPO_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 export interface CallOptions {
   /** Délai de réponse en ms ; `0` pour attendre indéfiniment. */
@@ -66,7 +72,7 @@ export interface Cadence {
   onRun(runId: string, listener: (update: RunUpdate) => void): Unsubscribe;
   /** Notifications du backend (`notifications/cadence/event`) ; `"*"` les reçoit toutes. */
   on(event: string, listener: (data: unknown, event: BackendEvent) => void): Unsubscribe;
-  /** Changements de vue demandés par Cadence (barre latérale, `navigate`). */
+  /** Changements de vue demandés par Cadence (barre du plugin, `navigate`). */
   onRoute(listener: (route: Route) => void): Unsubscribe;
   onTheme(listener: (theme: ThemeTokens) => void): Unsubscribe;
 
@@ -75,12 +81,33 @@ export interface Cadence {
     set(id: string, value: string): Promise<void>;
     has(id: string): Promise<boolean>;
   };
-  /** Réglages du plugin pour l'espace courant. */
+  /** Réglages globaux du plugin (`[settings]`). */
   settings: {
     get<T extends Settings = Settings>(): Promise<T>;
     set<T extends Settings = Settings>(patch: Partial<T>): Promise<T>;
   };
-  workspace(): Promise<WorkspaceInfo>;
+  /**
+   * Service `repos` de Cadence (manifeste : `services = ["repos"]`) : dépôts GitHub suivis,
+   * sélecteur de la barre du plugin, clone et worktree à la demande. Sans le service déclaré,
+   * les appels rejettent en `denied`.
+   */
+  repos: {
+    /** Dépôts suivis par le plugin. */
+    list(): Promise<RepoInfo[]>;
+    /** Sélection courante du sélecteur : un dépôt, ou tous. */
+    selection(): Promise<RepoSelection>;
+    /** Changements de la liste suivie ou de la sélection. */
+    onChange(listener: (change: ReposChange) => void): Unsubscribe;
+    /** Suit un dépôt (`owner/name`) ; renvoie la liste à jour. */
+    follow(fullName: string): Promise<RepoInfo[]>;
+    /** Cesse de suivre un dépôt ; renvoie la liste à jour. */
+    unfollow(fullName: string): Promise<RepoInfo[]>;
+    /**
+     * Clone le dépôt au besoin et prépare un worktree pour la tâche ; renvoie son chemin.
+     * Côté IA, le même service est l'outil du cœur `cadence__repo_checkout`.
+     */
+    checkout(repo: string, options?: CheckoutOptions): Promise<string>;
+  };
   navigate(viewId: string, params?: Record<string, string>): Promise<void>;
   notify(message: string, kind?: NotifyKind): Promise<void>;
   openExternal(url: string): Promise<void>;
@@ -137,6 +164,7 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
   const events = new Map<string, Set<(data: unknown, e: BackendEvent) => void>>();
   const routeListeners = new Set<(r: Route) => void>();
   const themeListeners = new Set<(t: ThemeTokens) => void>();
+  const repoListeners = new Set<(c: ReposChange) => void>();
 
   const setTheme = (next: ThemeTokens) => {
     theme = Object.freeze({ ...next });
@@ -181,6 +209,11 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
         route = raw.data as Route;
         routeListeners.forEach((l) => l(route!));
         break;
+      case "repos": {
+        const change = raw.data as ReposChange;
+        repoListeners.forEach((l) => l(change));
+        break;
+      }
     }
   });
 
@@ -260,6 +293,13 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
     };
   };
 
+  const repoName = (fullName: string): Promise<string> => {
+    const repo = typeof fullName === "string" ? fullName.trim() : "";
+    return REPO_FULL_NAME.test(repo)
+      ? Promise.resolve(repo)
+      : Promise.reject(new CadenceError("invalid_params", `Dépôt invalide : « ${String(fullName)} » (attendu owner/name).`));
+  };
+
   const callRaw = (tool: string, args: Record<string, unknown> = {}, opts?: CallOptions) =>
     request("tool.call", { tool, args }, { timeoutMs: 120_000, ...opts });
 
@@ -317,7 +357,24 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       set: async <T extends Settings>(patch: Partial<T>) =>
         (await request("settings.set", { patch: patch as Settings })) as T,
     },
-    workspace: () => request("workspace.get", {}),
+    repos: {
+      list: () => request("repos.list", {}),
+      selection: () => request("repos.selection", {}),
+      onChange(listener) {
+        repoListeners.add(listener);
+        return () => {
+          repoListeners.delete(listener);
+        };
+      },
+      follow: async (fullName) => request("repos.follow", { repo: await repoName(fullName) }),
+      unfollow: async (fullName) => request("repos.unfollow", { repo: await repoName(fullName) }),
+      async checkout(repo, options = {}) {
+        const params = { repo: await repoName(repo), ...(options.task ? { task: options.task } : {}) };
+        // Un clone peut être long : pas de délai.
+        const { path } = await request("repos.checkout", params, { timeoutMs: 0 });
+        return path;
+      },
+    },
     async navigate(view, params = {}) {
       await request("navigate", { view, params });
     },

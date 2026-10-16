@@ -78,6 +78,8 @@ pub fn edit_labels(labels: &[String], add: &[String], remove: &[String]) -> Vec<
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Issue {
+    /// Dépôt de l'issue, `owner/name` (utile aux listes agrégées sur tous les dépôts suivis).
+    pub repo: String,
     pub number: u32,
     pub title: String,
     /// `open` ou `closed`.
@@ -114,7 +116,21 @@ pub fn is_pull_request(raw: &Value) -> bool {
     raw.get("pull_request").is_some_and(|v| !v.is_null())
 }
 
-/// Issue de l'API REST → forme Cadence. `with_body` garde la description.
+/// `owner/name` d'une URL d'API `…/repos/<owner>/<name>`.
+fn repo_of_api_url(url: &str) -> Option<String> {
+    let (_, rest) = url.rsplit_once("/repos/")?;
+    crate::config::normalize_repo(rest)
+}
+
+/// Issue d'un dépôt connu → forme Cadence.
+pub fn issue_in(repo: &str, raw: &Value, with_body: bool) -> Issue {
+    let mut issue = issue_from(raw, with_body);
+    issue.repo = repo.to_string();
+    issue
+}
+
+/// Issue de l'API REST → forme Cadence. `with_body` garde la description ; le dépôt est lu
+/// dans `repository_url`.
 pub fn issue_from(raw: &Value, with_body: bool) -> Issue {
     let labels: Vec<String> = raw["labels"]
         .as_array()
@@ -140,6 +156,10 @@ pub fn issue_from(raw: &Value, with_body: bool) -> Issue {
             .map(str::to_string)
     };
     Issue {
+        repo: raw["repository_url"]
+            .as_str()
+            .and_then(repo_of_api_url)
+            .unwrap_or_default(),
         number: u32_of(&raw["number"]),
         title: str_of(&raw["title"]).unwrap_or_default(),
         state,
@@ -221,6 +241,7 @@ mod tests {
             "labels": [{"name": "type/feat"}, {"name": "status/doing"}, {"name": "estimate/M"}, {"name": "area/auth"}],
             "milestone": {"title": "0.1.2"}, "assignees": [{"login": "RemiSDV"}], "user": {"login": "RemiSDV"},
             "comments": 3, "html_url": "https://github.com/me/app/issues/42",
+            "repository_url": "https://api.github.com/repos/me/app",
             "updated_at": "2026-10-01T10:00:00Z"
         })
     }
@@ -233,7 +254,9 @@ mod tests {
         assert_eq!(issue.estimate.as_deref(), Some("M"));
         assert_eq!(issue.milestone.as_deref(), Some("0.1.2"));
         assert_eq!(issue.body, None);
+        assert_eq!(issue.repo, "me/app");
         assert_eq!(issue_from(&raw(), true).body.as_deref(), Some("## Contexte"));
+        assert_eq!(issue_in("me/autre", &raw(), false).repo, "me/autre");
 
         let mut closed = raw();
         closed["state"] = json!("closed");

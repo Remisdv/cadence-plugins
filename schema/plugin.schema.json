@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/RemiSDV/cadence-plugins/schema/plugin.schema.json",
-  "title": "Manifeste de plugin Cadence (plugin.toml, API 1)",
+  "title": "Manifeste de plugin Cadence (plugin.toml, API 1, révision 1.1)",
   "description": "Structure de plugin.toml une fois lu en TOML. Les vérifications qui dépassent le schéma (fichiers référencés, skills, vues) sont faites par scripts/validate.ts.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["api", "id", "name", "version", "description", "authors", "min_cadence"],
+  "required": ["api", "id", "name", "version", "description", "authors", "category", "min_cadence"],
   "properties": {
     "api": {
       "description": "Version de l'API plugin visée.",
@@ -43,6 +43,16 @@
       "$ref": "#/$defs/relativePath",
       "pattern": "\\.svg$"
     },
+    "category": {
+      "description": "Groupe du plugin dans le rail de Cadence, dans cet ordre : projet (Projet), etudes (Études), code (Code), donnees (Données), outils (Outils).",
+      "enum": ["projet", "etudes", "code", "donnees", "outils"]
+    },
+    "services": {
+      "description": "Services fournis par Cadence que le plugin active. repos : connexion GitHub, dépôts suivis, sélecteur de dépôt, clone et worktree à la demande (CADENCE_GITHUB_TOKEN, CADENCE_REPOS).",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["repos"] }
+    },
     "min_cadence": {
       "description": "Version minimale de Cadence.",
       "$ref": "#/$defs/semver"
@@ -72,7 +82,7 @@
           "pattern": "^ui/.+\\.html$"
         },
         "views": {
-          "description": "Entrées de la barre latérale de l'espace.",
+          "description": "Entrées de la barre du plugin.",
           "type": "array",
           "items": {
             "type": "object",
@@ -123,7 +133,7 @@
       }
     },
     "settings": {
-      "description": "Réglages par espace : JSON Schema (sous-ensemble) rendu par Cadence.",
+      "description": "Réglages globaux du plugin : JSON Schema (sous-ensemble) rendu par Cadence, transmis au serveur en CADENCE_SETTINGS.",
       "type": "object",
       "additionalProperties": false,
       "required": ["schema"],

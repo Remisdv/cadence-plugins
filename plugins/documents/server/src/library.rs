@@ -1,4 +1,4 @@
-//! Bibliothèque de cours d'un espace : Matière → Chapitre → Documents.
+//! Bibliothèque de cours : Matière → Chapitre → Documents (une seule, globale au plugin).
 //!
 //! Tout est rangé dans `CADENCE_DATA_DIR` :
 //!
@@ -9,8 +9,9 @@
 //! results/<résultat>.json réponses et scores
 //! ```
 //!
-//! Les fichiers d'origine ne sont pas copiés : le document garde son chemin (relatif à
-//! l'espace quand il s'y trouve). L'IA lit le cache à la demande, sans index d'embeddings.
+//! Les fichiers d'origine ne sont pas copiés : le document garde leur chemin absolu. Un chemin
+//! relatif donné à l'import est lu depuis le dossier des cours (réglage global `dossier_cours`).
+//! L'IA lit le cache à la demande, sans index d'embeddings.
 
 use std::{
     fs,
@@ -52,7 +53,7 @@ pub struct Document {
     pub id: String,
     pub title: String,
     pub kind: DocKind,
-    /// Chemin d'origine, relatif à l'espace quand il s'y trouve.
+    /// Chemin absolu du fichier d'origine (barres obliques normalisées).
     pub source: String,
     pub pages: u32,
     pub chars: u32,
@@ -112,7 +113,8 @@ pub struct QuizResult {
 
 pub struct Library {
     data_dir: PathBuf,
-    workspace: Option<PathBuf>,
+    /// Dossier des cours (réglage `dossier_cours`), base des chemins relatifs à l'import.
+    courses_dir: Option<PathBuf>,
 }
 
 /* ---------- Utilitaires ---------- */
@@ -215,8 +217,20 @@ fn matches(id: &str, name: &str, wanted: &str) -> bool {
 }
 
 impl Library {
-    pub fn new(data_dir: PathBuf, workspace: Option<PathBuf>) -> Self {
-        Library { data_dir, workspace }
+    pub fn new(data_dir: PathBuf, courses_dir: Option<PathBuf>) -> Self {
+        Library {
+            data_dir,
+            courses_dir,
+        }
+    }
+
+    /// Nouveau dossier des cours (réglages modifiés dans Cadence).
+    pub fn set_courses_dir(&mut self, courses_dir: Option<PathBuf>) {
+        self.courses_dir = courses_dir;
+    }
+
+    pub fn courses_dir(&self) -> Option<&Path> {
+        self.courses_dir.as_deref()
     }
 
     fn library_path(&self) -> PathBuf {
@@ -307,17 +321,17 @@ impl Library {
             .ok_or_else(|| anyhow!("Document « {wanted} » introuvable : listez-les avec list_documents."))
     }
 
-    fn resolve_source(&self, path: &str) -> PathBuf {
+    /// Chemin absolu du fichier à importer : tel quel, ou relatif au dossier des cours.
+    fn resolve_source(&self, path: &str) -> Result<PathBuf> {
         let p = Path::new(path.trim());
-        match (&self.workspace, p.is_absolute()) {
-            (Some(ws), false) => ws.join(p),
-            _ => p.to_path_buf(),
+        match (&self.courses_dir, p.is_absolute()) {
+            (_, true) => Ok(p.to_path_buf()),
+            (Some(dir), false) => Ok(dir.join(p)),
+            (None, false) => bail!(
+                "Chemin relatif « {path} » : donnez un chemin absolu, ou réglez le dossier des cours \
+                 (étape « Dossier des cours » du plugin Documents)."
+            ),
         }
-    }
-
-    fn display_source(&self, path: &Path) -> String {
-        let rel = self.workspace.as_ref().and_then(|ws| path.strip_prefix(ws).ok());
-        rel.unwrap_or(path).to_string_lossy().replace('\\', "/")
     }
 
     /// Importe un fichier : extrait son texte, le met en cache, l'ajoute au chapitre (créé au besoin).
@@ -325,7 +339,7 @@ impl Library {
         if subject.trim().is_empty() || chapter.trim().is_empty() {
             bail!("Précisez la matière et le chapitre du document.");
         }
-        let source = self.resolve_source(path);
+        let source = self.resolve_source(path)?;
         if !source.is_file() {
             bail!("Fichier introuvable : {}", source.display());
         }
@@ -350,7 +364,7 @@ impl Library {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default()
             });
-        let source_text = self.display_source(&source);
+        let source_text = source.to_string_lossy().replace('\\', "/");
 
         // Matière et chapitre, créés s'ils n'existent pas.
         let si = match lib.subjects.iter().position(|s| matches(&s.id, &s.name, subject)) {
@@ -597,7 +611,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, Library) {
         let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path().join("espace");
+        let ws = dir.path().join("etudes");
         fs::create_dir_all(ws.join("cours")).unwrap();
         fs::write(
             ws.join("cours/atomes.pdf"),
@@ -633,7 +647,12 @@ mod tests {
             (a.document.pages, a.document.kind, a.page_unit),
             (2, DocKind::Pdf, "page")
         );
-        assert_eq!(a.document.source, "cours/atomes.pdf");
+        assert!(Path::new(&a.document.source).is_absolute());
+        assert!(
+            a.document.source.ends_with("/etudes/cours/atomes.pdf"),
+            "{}",
+            a.document.source
+        );
 
         // Même matière désignée par son nom accentué ou son id ; chapitre créé à la volée.
         lib.import(

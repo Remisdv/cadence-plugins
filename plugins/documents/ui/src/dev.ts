@@ -7,7 +7,7 @@ const docs: DocumentInfo[] = [
     id: "atomes",
     title: "Cours 1 — L'atome",
     kind: "pdf",
-    source: "cours/chimie/atomes.pdf",
+    source: "C:/etudes/l3/cours/chimie/atomes.pdf",
     pages: 24,
     chars: 41000,
     imported_at: "2026-10-12T08:00:00Z",
@@ -21,7 +21,7 @@ const docs: DocumentInfo[] = [
     id: "td-1",
     title: "TD 1",
     kind: "pptx",
-    source: "cours/chimie/td1.pptx",
+    source: "C:/etudes/l3/cours/chimie/td1.pptx",
     pages: 12,
     chars: 6000,
     imported_at: "2026-10-13T08:00:00Z",
@@ -34,8 +34,8 @@ const docs: DocumentInfo[] = [
 ];
 
 export const devHost: MockHostOptions = {
-  plugin: { id: "documents", version: "0.1.0" },
-  workspace: { name: "L3 Info", path: "C:/etudes/l3", ai: "claude-code" },
+  plugin: { id: "documents", version: "0.2.0" },
+  settings: { dossier_cours: "C:/etudes/l3/cours", questions_par_qcm: 10, cartes_par_paquet: 20 },
   route: { view: new URLSearchParams(location.search).get("view") ?? "bibliotheque", params: {} },
   pickFiles: () => ["C:/etudes/l3/cours/reseaux/tcp.pdf"],
   tools: {

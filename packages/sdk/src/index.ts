@@ -5,7 +5,7 @@
  * import { cadence } from "@cadence/plugin-sdk";
  *
  * const issues = await cadence.call("list_issues", { state: "open" });
- * const runId = await cadence.runAction("implementer-issue", { issue: 42 });
+ * const runId = await cadence.runAction("implementer-issue", { repo: "me/app", issue: 42 });
  * cadence.onRun(runId, (u) => console.log(u.status, u.message));
  * ```
  */
@@ -15,10 +15,18 @@ import { windowPort } from "./port";
 
 export * from "./protocol";
 export * from "./errors";
-export { createCadence, toolValue, SDK_VERSION } from "./client";
+export { createCadence, toolValue, SDK_VERSION, REPO_FULL_NAME } from "./client";
 export type { Cadence, CadenceOptions, CallOptions, Unsubscribe } from "./client";
 export { windowPort, memoryChannel, type Port } from "./port";
-export { createMockHost, connectMock, type MockHost, type MockHostOptions, type MockTool } from "./mock";
+export {
+  createMockHost,
+  connectMock,
+  repoInfo,
+  type MockHost,
+  type MockHostOptions,
+  type MockReposOptions,
+  type MockTool,
+} from "./mock";
 
 export interface ConnectOptions extends CadenceOptions {
   /**

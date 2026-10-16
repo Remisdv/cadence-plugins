@@ -14,6 +14,7 @@ Plugin(s) concerné(s) : `plugins/…`
 - [ ] `pnpm typecheck && pnpm test && pnpm build` passent
 - [ ] `cargo test --workspace` passe (si un serveur Rust est touché)
 - [ ] La `version` de chaque plugin modifié est incrémentée dans `plugin.toml`
+- [ ] Le manifeste déclare sa `category` et les `services` de Cadence utilisés (ex. `repos`)
 - [ ] Aucun binaire commité (`bin/`, `.exe`, `.dll`, `.so`, `.dylib`…)
 - [ ] Le README du plugin décrit ses outils, ses réglages et les services réseau qu'il contacte
 - [ ] Le code est sous licence MIT (ou le dossier du plugin contient sa propre `LICENSE`)

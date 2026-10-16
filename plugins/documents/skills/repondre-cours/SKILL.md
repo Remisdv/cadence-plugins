@@ -19,7 +19,7 @@ dans toute la bibliothèque.
 
 | Outil | Usage |
 | --- | --- |
-| `documents__list_subjects` | matières de l'espace |
+| `documents__list_subjects` | matières de la bibliothèque |
 | `documents__list_chapters` | chapitres d'une matière et leurs documents |
 | `documents__list_documents` | documents d'une matière / d'un chapitre (id, titre, pages, unité de page) |
 | `documents__search` | trouver les pages qui parlent d'une notion (sans accents ni casse) |
@@ -50,4 +50,5 @@ trois formulations, synonymes, notation), puis lis les pages trouvées et leurs 
 3. Un exemple ou un mini-exercice quand cela aide, en reprenant ceux du cours si possible.
 4. Termine par la liste des sources lues (document, pages).
 
-Ne modifie aucun fichier de l'espace.
+Tu tournes dans un dossier neutre de Cadence : n'accède aux cours que par les outils
+`documents__*`, et ne modifie aucun fichier.

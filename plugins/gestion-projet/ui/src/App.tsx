@@ -4,9 +4,9 @@ import { Callout, Spinner } from "@cadence/ui";
 import { isViewId, views } from "./domain";
 import { IssuesView } from "./views/IssuesView";
 import { PlaceholderView } from "./views/PlaceholderView";
-import { SetupGithubView } from "./views/SetupGithubView";
+import { SetupReposView } from "./views/SetupReposView";
 
-/** Route affichée : fournie par Cadence à la poignée de main, puis suivie (barre latérale). */
+/** Route affichée : fournie par Cadence à la poignée de main, puis suivie (barre du plugin). */
 export function App() {
   const [route, setRoute] = useState<Route | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +36,7 @@ export function App() {
 
   const id = route.view;
   if (id === "issues") return <IssuesView />;
-  if (id === "setup-github") return <SetupGithubView />;
+  if (id === "setup-depots") return <SetupReposView />;
   if (id === "sprint" || id === "roadmap" || id === "versions" || id === "pull-requests") {
     return <PlaceholderView id={id} meta={views[id]} />;
   }

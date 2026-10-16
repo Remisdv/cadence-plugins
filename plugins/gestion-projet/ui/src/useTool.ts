@@ -8,8 +8,16 @@ export interface ToolState<T> {
   reload: () => void;
 }
 
-/** Appelle un outil du serveur du plugin et garde son résultat (rechargé quand `key` change). */
-export function useTool<T>(tool: string, args: Record<string, unknown> = {}, key = ""): ToolState<T> {
+/**
+ * Appelle un outil du serveur du plugin et garde son résultat (rechargé quand les arguments ou
+ * `key` changent). `enabled: false` attend sans appeler (ex. sélection de dépôt pas encore connue).
+ */
+export function useTool<T>(
+  tool: string,
+  args: Record<string, unknown> = {},
+  key = "",
+  enabled = true,
+): ToolState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<CadenceError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -17,6 +25,7 @@ export function useTool<T>(tool: string, args: Record<string, unknown> = {}, key
   const serialized = JSON.stringify(args);
 
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     setLoading(true);
     cadence
@@ -34,7 +43,7 @@ export function useTool<T>(tool: string, args: Record<string, unknown> = {}, key
     return () => {
       alive = false;
     };
-  }, [tool, serialized, key, tick]);
+  }, [tool, serialized, key, tick, enabled]);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
   return { data, error, loading, reload };

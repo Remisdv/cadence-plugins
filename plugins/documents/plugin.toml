@@ -1,10 +1,11 @@
 api = 1
 id = "documents"
 name = "Documents"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre : réponses citées (document + page), QCM, questions ouvertes corrigées et flashcards."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
+category = "etudes"
 min_cadence = "0.3.0"
 
 [server]

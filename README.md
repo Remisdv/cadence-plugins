@@ -15,8 +15,10 @@ ils ne sont pas livrés dans l'app.
    [`catalog.json`](https://github.com/RemiSDV/cadence-plugins/releases/download/catalog/catalog.json).
 2. Choisissez un plugin et cliquez sur **Installer** : Cadence télécharge l'archive de sa dernière
    release, vérifie son empreinte sha256 et l'extrait dans `<données de l'app>/plugins/<id>/<version>/`.
-3. Activez-le dans un espace de travail et suivez ses étapes de configuration (ex. connexion GitHub
-   pour Gestion de projet). L'activation est enregistrée dans `<espace>/.cadence/workspace.toml`.
+3. Le plugin est **activé globalement** dès l'installation (on peut le désactiver sans le
+   désinstaller) et prend place dans le rail de Cadence, dans le groupe de sa catégorie. Suivez ses
+   étapes de configuration : pour Gestion de projet, la connexion GitHub du service `repos` puis le
+   choix des dépôts suivis.
 
 Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'archive peut aussi
 être partagé tel quel.
@@ -52,13 +54,65 @@ bin/<cible>/<exe>    serveur MCP natif par plateforme (optionnel)
 README.md
 ```
 
-Cibles : `windows-x86_64`, `macos-aarch64`, `macos-x86_64`, `linux-x86_64`. Cadence lance un
-processus serveur par plugin et par espace (MCP sur stdio) avec `CADENCE_API=1`,
-`CADENCE_WORKSPACE`, `CADENCE_DATA_DIR`, `CADENCE_GLOBAL_DIR` et chaque secret déclaré en
-`CADENCE_SECRET_<ID_MAJUSCULE>`. Les outils sont exposés aux IA préfixés `<plugin>__<outil>`.
+Cibles : `windows-x86_64`, `macos-aarch64`, `macos-x86_64`, `linux-x86_64`.
+
+Il n'y a pas d'espace de travail : Cadence lance **un seul processus serveur par plugin** (MCP sur
+stdio), avec l'environnement :
+
+| Variable | Contenu |
+| --- | --- |
+| `CADENCE_API` | `1` |
+| `CADENCE_DATA_DIR` | dossier de données du plugin, `<données de l'app>/plugins-data/<id>/` |
+| `CADENCE_SETTINGS` | réglages globaux du plugin (JSON) ; ensuite `notifications/cadence/settings` |
+| `CADENCE_SECRET_<ID_MAJUSCULE>` | chaque secret déclaré dans `[[secrets]]` |
+| `CADENCE_GITHUB_TOKEN`, `CADENCE_REPOS` | service `repos` activé (voir plus bas) |
+
+Les outils sont exposés aux IA préfixés `<plugin>__<outil>`. L'IA tourne toujours dans un dossier
+neutre de Cadence, jamais dans un dépôt de l'utilisateur : elle accède aux données par les outils
+MCP. Chaque plugin gère son propre contexte (dépôts suivis, matières…).
 
 Le manifeste est décrit par [`schema/plugin.schema.json`](schema/plugin.schema.json) ; un exemple
 complet : [`plugins/gestion-projet/plugin.toml`](plugins/gestion-projet/plugin.toml).
+
+### Catégories
+
+`category` est obligatoire et prise dans une liste fixe ; elle range le plugin dans le rail de
+Cadence, dans cet ordre :
+
+| `category` | Libellé |
+| --- | --- |
+| `projet` | Projet |
+| `etudes` | Études |
+| `code` | Code |
+| `donnees` | Données |
+| `outils` | Outils |
+
+### Services fournis par Cadence
+
+Un plugin active dans son manifeste les briques que l'app embarque :
+
+```toml
+services = ["repos"]
+```
+
+**`repos`** — dépôts GitHub :
+
+- Cadence gère la **connexion GitHub** (gh CLI, navigateur, code d'appairage ou jeton personnel,
+  rangé au trousseau) : le plugin ne déclare pas de secret pour son jeton.
+- Le plugin a une liste de **dépôts suivis** et un **sélecteur** en tête de sa barre : un dépôt, ou
+  « Tous les dépôts » pour les vues agrégées.
+- Le serveur reçoit `CADENCE_GITHUB_TOKEN` (si GitHub est connecté) et `CADENCE_REPOS` (JSON des
+  dépôts suivis), puis `notifications/cadence/repos` à chaque changement de la liste.
+- La lecture passe par l'API GitHub ; le **clone** n'a lieu qu'à la demande, quand un skill doit
+  toucher au code : l'outil du cœur `cadence__repo_checkout` (ou `cadence.repos.checkout` côté UI)
+  prépare un worktree par tâche sous `<données de l'app>/repos/<owner>/<name>/` et l'ouvre à l'IA
+  pour cette session seulement.
+- Écrans : `cadence.repos.list()`, `selection()`, `onChange()`, `follow()`, `unfollow()`,
+  `checkout()` (voir [`packages/sdk`](packages/sdk)). Le contexte d'une action reçoit la sélection
+  courante (`repo` ou `repos`).
+
+`pnpm validate` avertit quand un plugin lit `CADENCE_GITHUB_TOKEN` ou `CADENCE_REPOS`, appelle
+`cadence.repos` ou cite `cadence__repo_checkout` sans déclarer `repos`.
 
 ## Développer
 
@@ -66,7 +120,7 @@ Prérequis : Node ≥ 20, pnpm 10, Rust stable.
 
 ```sh
 pnpm install
-pnpm validate                 # manifestes, skills, vues, réglages
+pnpm validate                 # manifestes, catégories, services, skills, vues, réglages
 pnpm typecheck && pnpm test   # SDK, kit UI, scripts, écrans
 pnpm build                    # build des UI de plugins (plugins/*/ui/dist)
 cargo test --workspace        # serveurs MCP Rust

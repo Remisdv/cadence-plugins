@@ -10,7 +10,9 @@ avant la fusion sur `main` qui déclenche la publication.
 1. Forkez le dépôt et créez une branche.
 2. Ajoutez un dossier `plugins/<id>/` (`id` : minuscules, chiffres et tirets, unique dans le
    catalogue) avec au minimum :
-   - `plugin.toml` — manifeste API 1, décrit par `schema/plugin.schema.json` ;
+   - `plugin.toml` — manifeste API 1, décrit par `schema/plugin.schema.json`, avec sa `category`
+     (`projet`, `etudes`, `code`, `donnees` ou `outils`) et, au besoin, les `services` de Cadence
+     qu'il active (`repos`) ;
    - `README.md` — ce que fait le plugin, ses réglages, ses outils ;
    - selon les besoins : `icon.svg`, `ui/` (écrans), `skills/<skill>/SKILL.md`, `server/`
      (sources du serveur MCP), un schéma de réglages.
@@ -31,8 +33,18 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
 - **Manifeste valide** : `pnpm validate` passe. Il vérifie le schéma, que l'`id` est celui du
   dossier, que chaque skill d'une action existe (`skills/<skill>/SKILL.md` avec un frontmatter
   `name` égal au dossier et une `description`), que chaque vue et étape de setup est gérée par
-  `ui/src`, que les icônes existent dans le kit (`@cadence/ui/icons`) et que le schéma de
-  réglages reste dans le sous-ensemble rendu par Cadence.
+  `ui/src`, que les icônes existent dans le kit (`@cadence/ui/icons`), que la catégorie et les
+  services sont connus de l'API et que le schéma de réglages reste dans le sous-ensemble rendu
+  par Cadence.
+- **Pas d'espace de travail** : un plugin est activé globalement et n'a qu'un processus serveur.
+  Ses données vont dans `CADENCE_DATA_DIR`, ses réglages sont globaux (`CADENCE_SETTINGS`) et il
+  gère lui-même son contexte (dépôts suivis, matières…). `CADENCE_WORKSPACE` et
+  `CADENCE_GLOBAL_DIR` n'existent plus.
+- **Services plutôt que secrets maison** : un plugin qui travaille sur des dépôts GitHub déclare
+  `services = ["repos"]` et lit `CADENCE_GITHUB_TOKEN` et `CADENCE_REPOS` ; il ne demande pas son
+  propre jeton. Pour toucher au code, ses skills appellent `cadence__repo_checkout`, qui renvoie
+  le worktree ouvert à l'IA pour la session : l'IA n'est jamais lancée dans un dépôt. La
+  validation avertit d'un usage du service sans déclaration.
 - **Version incrémentée** : toute modification d'un plugin déjà publié monte sa `version`
   (semver) dans `plugin.toml`. La CI compare avec la branche cible et refuse sinon. C'est cette
   nouvelle version qui déclenche la release `<id>-v<version>` après fusion.
@@ -45,7 +57,8 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
   plugin contient son propre fichier `LICENSE` (licence libre compatible). Pas de code dont vous
   n'avez pas les droits.
 - **Pas d'appel réseau caché** : un plugin ne parle qu'aux services qu'il annonce dans son README,
-  et ne lit ni n'exfiltre de données hors de l'espace de travail sans le dire.
+  et ne lit ni n'exfiltre de données hors de son dossier de données, des dossiers que
+  l'utilisateur lui désigne et des dépôts suivis sans le dire.
 - **Secrets** : déclarés dans `[[secrets]]`, rangés par Cadence dans le trousseau de l'OS et
   passés au serveur en `CADENCE_SECRET_<ID>`. L'UI ne peut que les écrire (`cadence.secrets.set`) ;
   ne les journalisez jamais.

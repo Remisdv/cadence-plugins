@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Réglages de Documents (par espace)",
+  "title": "Réglages de Documents (globaux)",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "dossier_cours": {
       "type": "string",
       "title": "Dossier des cours",
-      "description": "Dossier où se trouvent les cours, relatif à l'espace. Vide : le dossier de l'espace.",
+      "description": "Chemin absolu du dossier où sont rangés les cours ; les chemins relatifs donnés à l'import sont lus depuis ce dossier. Vide : chemins absolus seulement.",
       "default": ""
     },
     "questions_par_qcm": {

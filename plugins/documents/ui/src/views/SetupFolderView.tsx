@@ -1,4 +1,4 @@
-/** Étape de setup « Dossier des cours » : choisit le dossier, enregistré dans les réglages de l'espace. */
+/** Étape de setup « Dossier des cours » : choisit le dossier, enregistré dans les réglages globaux du plugin. */
 import { useEffect, useState } from "react";
 import { cadence } from "@cadence/plugin-sdk";
 import { Button, Card, Icon, KeyValue } from "@cadence/ui";
@@ -13,12 +13,9 @@ export function SetupFolderView() {
   const pick = async () => {
     const [dir] = await cadence.pickFiles({ title: "Dossier des cours", directory: true });
     if (!dir) return;
-    const ws = await cadence.workspace();
-    // Relatif à l'espace quand le dossier s'y trouve.
-    const norm = (p: string) => p.replaceAll("\\", "/").replace(/\/$/, "");
-    const rel = norm(dir).startsWith(`${norm(ws.path)}/`) ? norm(dir).slice(norm(ws.path).length + 1) : dir;
-    await cadence.settings.set({ dossier_cours: rel });
-    setFolder(rel);
+    // Chemin absolu : il n'y a plus d'espace de travail auquel le rapporter.
+    await cadence.settings.set({ dossier_cours: dir });
+    setFolder(dir);
   };
 
   return (
@@ -33,7 +30,7 @@ export function SetupFolderView() {
           bibliothèque, par matière et chapitre ; les fichiers restent à leur place.
         </p>
         <Card className="flex flex-col gap-3 p-[18px]">
-          <KeyValue label="Dossier" value={folder || "dossier de l'espace"} last />
+          <KeyValue label="Dossier" value={folder || "aucun — chemins absolus seulement"} last />
           <div className="flex justify-end">
             <Button variant="primary" icon="folder" onClick={() => void pick()}>
               Choisir un dossier

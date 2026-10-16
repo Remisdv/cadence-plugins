@@ -27,6 +27,7 @@ name = "Exemple"
 version = "0.1.0"
 description = "Plugin d'exemple."
 authors = ["Test"]
+category = "outils"
 min_cadence = "0.3.0"
 
 [ui]
@@ -97,6 +98,7 @@ name = "Exemple"
 version = "0.1"
 description = "x"
 authors = ["Test"]
+category = "outils"
 min_cadence = "0.3.0"
 `,
     });
@@ -109,6 +111,7 @@ name = "Exemple"
 version = "0.1.0"
 description = "x"
 authors = ["Test"]
+category = "outils"
 min_cadence = "0.3.0"
 
 [ui]
@@ -143,11 +146,75 @@ name = "Exemple"
 version = "0.1.0"
 description = "x"
 authors = ["Test"]
+category = "outils"
 min_cadence = "0.3.0"
 permissions = ["reseau"]
 `,
     });
     expect(validatePlugin(dir).errors).toEqual(["racine : champ « permissions » inconnu de l'API 1"]);
+  });
+
+  it("exige une catégorie de la liste fixe et des services connus", () => {
+    const base = `api = 1
+id = "exemple"
+name = "Exemple"
+version = "0.1.0"
+description = "x"
+authors = ["Test"]
+min_cadence = "0.3.0"
+`;
+    expect(validatePlugin(fixture({ "plugin.toml": base })).errors).toEqual([
+      "racine : champ obligatoire « category » absent",
+    ]);
+    const unknown = validatePlugin(fixture({ "plugin.toml": `${base}category = "jeux"\n` }));
+    expect(unknown.errors[0]).toContain("category : valeur parmi");
+    const services = (list: string) => `${base}category = "projet"\nservices = ${list}\n`;
+    expect(validatePlugin(fixture({ "plugin.toml": services(`["repos"]`) })).errors).toEqual([]);
+    expect(validatePlugin(fixture({ "plugin.toml": services(`["calendrier"]`) })).errors).toEqual([
+      'services.0 : valeur parmi "repos"',
+    ]);
+    expect(validatePlugin(fixture({ "plugin.toml": services(`["repos", "repos"]`) })).errors).toEqual([
+      "services : valeur en double",
+    ]);
+  });
+
+  it("signale l'usage du service repos sans le déclarer", () => {
+    const manifest = `api = 1
+id = "exemple"
+name = "Exemple"
+version = "0.1.0"
+description = "x"
+authors = ["Test"]
+category = "code"
+min_cadence = "0.3.0"
+
+[server]
+bin = "cadence-exemple"
+
+[ui]
+entry = "ui/index.html"
+
+[[ui.views]]
+id = "accueil"
+title = "Accueil"
+`;
+    const files = {
+      "server/Cargo.toml": `[package]\nname = "cadence-exemple"\nversion = "0.1.0"\n`,
+      "server/src/main.rs": `fn main() {\n    let token = std::env::var("CADENCE_GITHUB_TOKEN");\n    let ws = std::env::var("CADENCE_WORKSPACE");\n}\n`,
+      "ui/src/main.ts": `export const views = ["accueil"];\nawait cadence.repos.selection();\n`,
+      "skills/resumer/SKILL.md":
+        "---\nname: resumer\ndescription: Résume.\n---\n\nAppelle `cadence__repo_checkout` avant d'écrire.\n",
+    };
+    const warnings = validatePlugin(fixture({ "plugin.toml": manifest, ...files })).warnings.join("\n");
+    expect(warnings).toContain('server/src/main.rs lit CADENCE_GITHUB_TOKEN sans déclarer services = ["repos"]');
+    expect(warnings).toContain("ui/src/main.ts utilise cadence.repos sans déclarer");
+    expect(warnings).toContain("skills/resumer/SKILL.md cite cadence__repo_checkout sans déclarer");
+    expect(warnings).toContain("server/src/main.rs lit CADENCE_WORKSPACE, supprimée");
+
+    const declared = manifest.replace('min_cadence = "0.3.0"', 'services = ["repos"]\nmin_cadence = "0.3.0"');
+    const report = validatePlugin(fixture({ "plugin.toml": declared, ...files }));
+    expect(report.errors).toEqual([]);
+    expect(report.warnings.join("\n")).not.toContain("sans déclarer");
   });
 
   it("vérifie le serveur et les outils cités par les skills", () => {
@@ -157,6 +224,7 @@ name = "Exemple"
 version = "0.1.0"
 description = "x"
 authors = ["Test"]
+category = "outils"
 min_cadence = "0.3.0"
 
 [server]
@@ -264,6 +332,7 @@ describe("catalogue", () => {
       description: "Cours.",
       authors: ["Rémi Lhuillier"],
       icon: "icon.svg",
+      category: "etudes",
       min_cadence: "0.3.0",
     } satisfies Manifest;
     const hash = "a".repeat(64);
@@ -273,6 +342,7 @@ describe("catalogue", () => {
       version: "0.2.0",
       description: "Cours.",
       authors: ["Rémi Lhuillier"],
+      category: "etudes",
       icon_url: "https://raw.githubusercontent.com/RemiSDV/cadence-plugins/documents-v0.2.0/plugins/documents/icon.svg",
       url: "https://dl/documents-0.2.0.zip",
       sha256: hash,

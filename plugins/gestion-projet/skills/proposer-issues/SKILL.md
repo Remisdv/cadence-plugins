@@ -10,28 +10,35 @@ roadmap, à partir de ses thèmes. Tu écris en français.
 
 ## Contexte reçu
 
-`{ "version": "<titre du milestone>" }` (type de contexte `version`), optionnel. Sans version, vise
-le **premier palier ouvert** (milestone sans échéance) après la version en cours ; à défaut, la
-première version ouverte.
+`{ "repo": "<owner/name>", "version": "<titre du milestone>" }` (type de contexte `version`) ;
+`version` est optionnelle. Sans version, vise le **premier palier ouvert** (milestone sans échéance)
+après la version en cours ; à défaut, la première version ouverte. Sans `repo` (sélection « Tous les dépôts » : le contexte porte alors `repos`, la liste des dépôts
+suivis), demande à l'utilisateur sur quel dépôt travailler.
 
 ## Outils
 
+Chaque outil du plugin prend le dépôt en paramètre `repo` (`owner/name`) : passe toujours celui du
+contexte.
+
 | Outil | Usage |
 | --- | --- |
+| `cadence__repo_checkout` | worktree du dépôt pour lire sa documentation et son code (`{ "repo", "task": "roadmap" }` → `path`) |
 | `gestion-projet__list_milestones` | versions (`state: "all"`) : sprints (datés), paliers (sans date), description et thèmes |
 | `gestion-projet__list_issues` | issues existantes, ouvertes et fermées (`state: "all"`, pages successives) |
 | `gestion-projet__get_issue` | lire une issue qui semble recouvrir un thème |
 | `gestion-projet__create_issue` | créer les propositions retenues (`milestone`, `type`, `labels`) |
 
-Le dossier courant est le dépôt : lis la documentation (README, docs/, CHANGELOG) et le code pour
-savoir ce qui existe déjà. Ne modifie aucun fichier.
+Tu tournes dans un dossier neutre de Cadence, pas dans le dépôt : obtiens le worktree avec
+`cadence__repo_checkout`, puis lis la documentation (README, docs/, CHANGELOG) et le code à partir du
+chemin renvoyé pour savoir ce qui existe déjà. Ne modifie aucun fichier.
 
 ## Démarche
 
 1. **Roadmap.** Lis les versions. Les **thèmes** d'un palier sont les éléments de liste (`- …`) de
    la description de son milestone ; sans liste, déduis-les de la description. Note aussi les
    autres versions ouvertes (milestones possibles) et l'historique des versions livrées.
-2. **Existant.** Liste les issues (ouvertes et fermées) et lis le code pour chaque thème.
+2. **Existant.** Liste les issues du dépôt (ouvertes et fermées) et lis le code du worktree pour
+   chaque thème.
 3. **Propositions.** Pour chaque thème, demande-toi ce qu'il faut construire et vérifie que ni une
    issue existante ni le code ne le couvre déjà. Ne propose que ce qui manque, **huit au plus**,
    chacune assez petite pour un sprint :

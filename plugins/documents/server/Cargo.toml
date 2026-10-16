@@ -1,6 +1,6 @@
 [package]
 name = "cadence-documents"
-version = "0.1.0"
+version = "0.2.0"
 description = "Serveur MCP du plugin Cadence « Documents » (cours PDF, Word, PowerPoint, Markdown ; entraînement)."
 edition.workspace = true
 license.workspace = true

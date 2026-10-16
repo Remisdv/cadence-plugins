@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import { ICON_NAMES } from "../../packages/ui/src/icons/names";
-import { parseManifestText, SCHEMA_PATH, type Manifest } from "./manifest";
+import { parseManifestText, SCHEMA_PATH, type Manifest, type Service } from "./manifest";
 import { checkSkill } from "./skill";
 
 export interface Report {
@@ -40,6 +40,8 @@ export function describeSchemaError(e: ErrorObject): string {
       return `${at} : valeur parmi ${(p.allowedValues as unknown[]).map((v) => JSON.stringify(v)).join(", ")}`;
     case "pattern":
       return `${at} : format invalide (motif ${String(p.pattern)})`;
+    case "uniqueItems":
+      return `${at} : valeur en double`;
     case "minItems":
       return `${at} : au moins ${String(p.limit)} élément(s)`;
     case "minLength":
@@ -119,6 +121,58 @@ function serverTools(serverDir: string): Set<string> | null {
     }
   }
   return names;
+}
+
+/** Fichiers texte d'un sous-dossier du plugin, avec leur chemin relatif. */
+function sourcesOf(dir: string, sub: string, ext: RegExp): { rel: string; text: string }[] {
+  const root = join(dir, sub);
+  if (!existsSync(root)) return [];
+  return walk(root)
+    .filter((f) => ext.test(f))
+    .map((f) => ({ rel: relative(dir, f).replaceAll("\\", "/"), text: readFileSync(f, "utf8") }));
+}
+
+const CODE_EXT = /\.(rs|go|ts|tsx|js|jsx|mjs|cjs|py|zig|c|cc|cpp|h|swift|kt|cs)$/;
+/** Lecture d'une variable d'environnement (littéral entre guillemets, pas une mention en commentaire). */
+const readsEnv = (text: string, name: string) => new RegExp(`["']${name}["']`).test(text);
+
+/**
+ * Cohérence entre `services` et ce que le plugin utilise : variables du service lues par le
+ * serveur, `cadence.repos` dans l'UI, outil du cœur cité par les skills ; variables retirées.
+ */
+function checkServices(dir: string, m: Manifest, warnings: string[]) {
+  const declared = new Set<Service>(m.services ?? []);
+  const server = sourcesOf(dir, "server", CODE_EXT);
+  const ui = sourcesOf(dir, "ui/src", /\.(tsx?|jsx?|vue|svelte|html)$/);
+  const skills = sourcesOf(dir, "skills", /SKILL\.md$/);
+  const missing = (what: string) =>
+    warnings.push(`${what} sans déclarer services = ["repos"] : Cadence ne le fournira pas`);
+
+  if (!declared.has("repos")) {
+    for (const f of server) {
+      for (const name of ["CADENCE_GITHUB_TOKEN", "CADENCE_REPOS"]) {
+        if (readsEnv(f.text, name)) missing(`${f.rel} lit ${name}`);
+      }
+    }
+    for (const f of ui) {
+      if (/\brepos\.(list|selection|onChange|follow|unfollow|checkout)\s*\(/.test(f.text)) {
+        missing(`${f.rel} utilise cadence.repos`);
+      }
+    }
+    for (const f of skills) {
+      if (f.text.includes("cadence__repo_checkout")) missing(`${f.rel} cite cadence__repo_checkout`);
+    }
+  } else if ((m.secrets ?? []).some((s) => s.id === "github_token")) {
+    warnings.push("secret « github_token » inutile : le service repos fournit CADENCE_GITHUB_TOKEN");
+  }
+
+  for (const f of server) {
+    for (const name of ["CADENCE_WORKSPACE", "CADENCE_GLOBAL_DIR"]) {
+      if (readsEnv(f.text, name)) {
+        warnings.push(`${f.rel} lit ${name}, supprimée (plus d'espaces de travail) : utiliser CADENCE_DATA_DIR`);
+      }
+    }
+  }
 }
 
 export function validatePlugin(dir: string, dirName = basename(dir)): Report {
@@ -251,6 +305,9 @@ export function validatePlugin(dir: string, dirName = basename(dir)): Report {
   for (const skill of skills.filter((s) => !used.has(s))) {
     warnings.push(`skill « ${skill} » lié à aucune action (utilisable seulement depuis le chat)`);
   }
+
+  /* Services */
+  checkServices(dir, m, warnings);
 
   /* Binaires et gros fichiers */
   for (const file of walk(dir)) {

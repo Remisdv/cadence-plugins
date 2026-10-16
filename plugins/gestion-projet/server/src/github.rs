@@ -53,7 +53,10 @@ impl GitHub {
         body: Option<&Value>,
     ) -> Result<Page> {
         let token = self.token.as_deref().ok_or_else(|| {
-            anyhow!("Jeton GitHub absent : renseignez-le dans l'étape « Compte GitHub » du plugin Gestion de projet.")
+            anyhow!(
+                "GitHub n'est pas connecté : connectez votre compte dans Cadence (service Dépôts, \
+                 réglages du plugin Gestion de projet)."
+            )
         })?;
         let mut req = self
             .http
@@ -113,7 +116,8 @@ pub fn describe_error(status: StatusCode, headers: &HeaderMap, body: &str, path:
         .collect();
     let remaining = headers.get("x-ratelimit-remaining").and_then(|v| v.to_str().ok());
     match status.as_u16() {
-        401 => "Jeton GitHub refusé (401) : il a expiré ou a été révoqué.".into(),
+        401 => "Jeton GitHub refusé (401) : il a expiré ou a été révoqué. Reconnectez GitHub dans Cadence."
+            .into(),
         403 | 429 if remaining == Some("0") => {
             let reset = headers
                 .get("x-ratelimit-reset")
@@ -125,7 +129,9 @@ pub fn describe_error(status: StatusCode, headers: &HeaderMap, body: &str, path:
         }
         403 => format!("Accès refusé par GitHub (403) : {message}"),
         404 => {
-            format!("Introuvable sur GitHub (404) : {path}. Vérifiez le dépôt réglé et les droits du jeton.")
+            format!(
+                "Introuvable sur GitHub (404) : {path}. Vérifiez le nom du dépôt et les droits du compte GitHub connecté."
+            )
         }
         422 => format!(
             "GitHub a refusé la requête (422) : {message}{}",

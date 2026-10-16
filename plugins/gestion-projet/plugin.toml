@@ -1,10 +1,13 @@
 api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
-version = "0.1.0"
-description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests, avec des skills pour compléter, implémenter et livrer."
+version = "0.2.0"
+description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
+category = "projet"
+# Connexion GitHub, dépôts suivis, sélecteur de dépôt, clone et worktree à la demande : fournis par Cadence.
+services = ["repos"]
 min_cadence = "0.3.0"
 
 [server]
@@ -43,19 +46,17 @@ title = "Pull requests"
 icon = "pullRequest"
 section = "Code"
 
-[[secrets]]
-id = "github_token"
-label = "Jeton GitHub"
-
+# Après la connexion GitHub du service repos (étape gérée par Cadence) : choix des dépôts suivis.
 [[setup]]
-id = "github"
-title = "Compte GitHub"
-view = "setup-github"
+id = "depots"
+title = "Dépôts suivis"
+view = "setup-depots"
 
 [settings]
 schema = "settings.schema.json"
 
-# Boutons liés aux skills (ex-agents CTO, développeur, CEO et déploiement).
+# Boutons liés aux skills (ex-agents CTO, développeur, CEO et déploiement). Le contexte porte
+# toujours le dépôt concerné : { "repo": "owner/name", "issue": 42 } ou { "repo", "version" }.
 
 [[actions]]
 id = "completer-issue"

@@ -1,4 +1,4 @@
-/** Lecture des manifestes `plugins/<id>/plugin.toml` (API 1). */
+/** Lecture des manifestes `plugins/<id>/plugin.toml` (API 1, révision 1.1). */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,14 @@ export const SCHEMA_PATH = join(REPO_ROOT, "schema", "plugin.schema.json");
 export const DEFAULT_REPO = "RemiSDV/cadence-plugins";
 
 export type ActionMode = "chat" | "background";
+
+/** Catégories de l'API, dans l'ordre des groupes du rail de Cadence. */
+export const CATEGORIES = ["projet", "etudes", "code", "donnees", "outils"] as const;
+export type Category = (typeof CATEGORIES)[number];
+
+/** Services fournis par Cadence qu'un plugin peut activer (`services = [...]`). */
+export const SERVICES = ["repos"] as const;
+export type Service = (typeof SERVICES)[number];
 
 export interface ViewDecl {
   id: string;
@@ -27,6 +35,8 @@ export interface Manifest {
   description: string;
   authors: string[];
   icon?: string;
+  category: Category;
+  services?: Service[];
   min_cadence: string;
   server?: { bin: string };
   ui?: { entry: string; views?: ViewDecl[] };

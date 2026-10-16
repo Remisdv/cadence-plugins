@@ -1,12 +1,22 @@
 //! Outils MCP du plugin Documents (exposés aux IA en `documents__<outil>`).
+//!
+//! Un seul processus pour le plugin : une bibliothèque dans `CADENCE_DATA_DIR`, et le dossier
+//! des cours lu dans les réglages globaux (`CADENCE_SETTINGS`, puis
+//! `notifications/cadence/settings`).
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Result, anyhow};
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
+    model::{
+        CallToolResult, ContentBlock, CustomNotification, Implementation, ServerCapabilities, ServerConfig,
+    },
+    service::NotificationContext,
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -20,6 +30,24 @@ use crate::{
 };
 
 type ToolResult = Result<CallToolResult, McpError>;
+
+/// Notification de Cadence : réglages globaux modifiés.
+pub const SETTINGS_NOTIFICATION: &str = "notifications/cadence/settings";
+
+/// Dossier des cours d'après les réglages (`dossier_cours`) : `{ "settings": {…} }` ou l'objet
+/// seul. Vide ou relatif (ancien réglage « relatif à l'espace ») : aucun dossier.
+pub fn courses_dir_from_settings(settings: &Value) -> Option<PathBuf> {
+    let settings = settings.get("settings").unwrap_or(settings);
+    let dir = settings.get("dossier_cours")?.as_str()?.trim();
+    if dir.is_empty() {
+        return None;
+    }
+    if !Path::new(dir).is_absolute() {
+        tracing::warn!("dossier des cours « {dir} » ignoré : chemin absolu attendu");
+        return None;
+    }
+    Some(PathBuf::from(dir))
+}
 
 fn respond(result: Result<Value>) -> ToolResult {
     Ok(match result {
@@ -50,7 +78,7 @@ pub struct ListDocumentsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ImportParams {
-    /// Chemin du fichier, absolu ou relatif au dossier de l'espace.
+    /// Chemin du fichier, absolu ou relatif au dossier des cours (réglage).
     pub path: String,
     /// Matière (créée si elle n'existe pas).
     pub subject: String,
@@ -132,11 +160,22 @@ pub struct Documents {
 }
 
 impl Documents {
-    pub fn new(data_dir: PathBuf, workspace: Option<PathBuf>) -> Self {
+    pub fn new(data_dir: PathBuf, courses_dir: Option<PathBuf>) -> Self {
         Documents {
-            library: Arc::new(Mutex::new(Library::new(data_dir, workspace))),
+            library: Arc::new(Mutex::new(Library::new(data_dir, courses_dir))),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Applique une notification de Cadence ; faux si elle ne concerne pas ce serveur.
+    pub async fn apply_notification(&self, method: &str, params: Option<&Value>) -> bool {
+        if method != SETTINGS_NOTIFICATION {
+            return false;
+        }
+        let dir = params.and_then(courses_dir_from_settings);
+        tracing::info!(dossier = ?dir, "réglages mis à jour");
+        self.library.lock().await.set_courses_dir(dir);
+        true
     }
 
     /// Exécute une opération de bibliothèque (E/S bloquantes) hors du fil asynchrone.
@@ -153,7 +192,9 @@ impl Documents {
 
 #[tool_router]
 impl Documents {
-    #[tool(description = "Liste les matières de l'espace avec leur nombre de chapitres et de documents.")]
+    #[tool(
+        description = "Liste les matières de la bibliothèque avec leur nombre de chapitres et de documents, et le dossier des cours réglé."
+    )]
     async fn list_subjects(&self, Parameters(_): Parameters<Empty>) -> ToolResult {
         respond(
             self.with(|lib| {
@@ -168,7 +209,7 @@ impl Documents {
                         })
                     })
                     .collect();
-                Ok(json!({ "subjects": subjects }))
+                Ok(json!({ "subjects": subjects, "courses_dir": lib.courses_dir() }))
             })
             .await,
         )
@@ -352,6 +393,21 @@ impl ServerHandler for Documents {
                  Les entraînements générés s'enregistrent avec save_quiz, les résultats avec save_result.",
             )
     }
+
+    fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        _context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        async move {
+            if !self
+                .apply_notification(&notification.method, notification.params.as_ref())
+                .await
+            {
+                tracing::debug!(method = %notification.method, "notification ignorée");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -362,10 +418,10 @@ mod tests {
     #[tokio::test]
     async fn imports_then_reads_through_tools() {
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().join("espace");
-        std::fs::create_dir_all(&ws).unwrap();
-        std::fs::write(ws.join("cours.pptx"), pptx(&["Intro", "Suite"])).unwrap();
-        let server = Documents::new(tmp.path().join("data"), Some(ws));
+        let courses = tmp.path().join("cours");
+        std::fs::create_dir_all(&courses).unwrap();
+        std::fs::write(courses.join("cours.pptx"), pptx(&["Intro", "Suite"])).unwrap();
+        let server = Documents::new(tmp.path().join("data"), Some(courses));
 
         let imported = server
             .import_document(Parameters(ImportParams {
@@ -401,6 +457,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn follows_the_courses_folder_setting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let courses = tmp.path().join("cours");
+        std::fs::create_dir_all(&courses).unwrap();
+        std::fs::write(courses.join("td.pptx"), pptx(&["Exercice"])).unwrap();
+        let server = Documents::new(tmp.path().join("data"), None);
+        let import = || {
+            server.import_document(Parameters(ImportParams {
+                path: "td.pptx".into(),
+                subject: "Info".into(),
+                chapter: "TD".into(),
+                title: None,
+            }))
+        };
+
+        // Sans dossier des cours, un chemin relatif est refusé.
+        let r = import().await.unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(format!("{:?}", r.content).contains("dossier des cours"));
+
+        let settings = json!({ "settings": { "dossier_cours": courses.to_string_lossy() } });
+        assert!(
+            server
+                .apply_notification(SETTINGS_NOTIFICATION, Some(&settings))
+                .await
+        );
+        let r = import().await.unwrap();
+        assert_ne!(r.is_error, Some(true), "{:?}", r.content);
+        assert!(!server.apply_notification("notifications/autre", None).await);
+    }
+
+    #[test]
+    fn reads_the_courses_folder_from_settings() {
+        let abs = std::env::temp_dir();
+        let abs_str = abs.to_string_lossy().to_string();
+        assert_eq!(
+            courses_dir_from_settings(&json!({ "dossier_cours": abs_str })),
+            Some(abs.clone())
+        );
+        assert_eq!(
+            courses_dir_from_settings(&json!({ "settings": { "dossier_cours": abs_str } })),
+            Some(abs)
+        );
+        assert_eq!(courses_dir_from_settings(&json!({ "dossier_cours": "" })), None);
+        assert_eq!(
+            courses_dir_from_settings(&json!({ "dossier_cours": "cours/l3" })),
+            None
+        );
+        assert_eq!(courses_dir_from_settings(&json!({})), None);
     }
 
     #[test]

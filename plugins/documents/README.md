@@ -1,14 +1,20 @@
 # Documents
 
-Plugin officiel de Cadence pour réviser ses cours : PDF, Word (.docx), PowerPoint (.pptx),
+Plugin officiel de Cadence (catégorie **Études**) pour réviser ses cours : PDF, Word (.docx), PowerPoint (.pptx),
 Markdown et texte, rangés en **Matière → Chapitre → Documents**. L'IA lit les cours **à la
 demande** (pas d'index d'embeddings) et **cite le document et la page** de ce qu'elle avance.
 Entraînement : QCM, questions ouvertes corrigées par l'IA, flashcards.
 
 ## Configuration
 
-- **Dossier des cours** (étape de setup `setup-dossier`) : le dossier où sont rangés les cours.
-- **Réglages par espace** (`settings.schema.json`) : `dossier_cours`, `questions_par_qcm` (10),
+Il n'y a pas d'espace de travail : le plugin a une seule bibliothèque, ses réglages sont globaux et
+il gère lui-même son contexte (matières et chapitres).
+
+- **Dossier des cours** (étape de setup `setup-dossier`) : le dossier où sont rangés les cours,
+  enregistré en chemin absolu dans le réglage `dossier_cours`. Les chemins relatifs donnés à
+  l'import sont lus depuis ce dossier.
+- **Réglages globaux** (`settings.schema.json`, reçus en `CADENCE_SETTINGS` puis
+  `notifications/cadence/settings`) : `dossier_cours`, `questions_par_qcm` (10),
   `cartes_par_paquet` (20).
 
 ## Écrans
@@ -43,9 +49,10 @@ Pages : une page de PDF ; une **diapositive** de PowerPoint ; pour Word, Markdow
 
 ## Données
 
-Dans `CADENCE_DATA_DIR` (`<espace>/.cadence/plugins/documents/`) : `library.json`,
+Dans `CADENCE_DATA_DIR` (`<données de l'app>/plugins-data/documents/`) : `library.json`,
 `cache/<document>.json` (texte par page), `quizzes/`, `results/`. Les fichiers d'origine ne sont
-pas copiés. Aucun accès réseau.
+pas copiés : chaque document garde leur chemin absolu. Aucun accès réseau. L'IA tourne dans un
+dossier neutre de Cadence et lit les cours par les outils ci-dessus.
 
 ## Développement
 

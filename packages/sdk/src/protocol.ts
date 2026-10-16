@@ -8,7 +8,8 @@
  *   exécution de fond, changement de thème ou de route.
  *
  * Le premier appel est toujours `hello` : il négocie la version d'API et renvoie le contexte
- * (plugin, espace, thème, route affichée).
+ * (plugin, thème, route affichée). Il n'y a pas d'espace de travail (révision 1.1) : un plugin
+ * est global et gère son propre contexte, par exemple les dépôts suivis du service `repos`.
  */
 
 export const API_VERSION = 1 as const;
@@ -18,15 +19,6 @@ export const CHANNEL = "cadence" as const;
 
 /** IA de code pilotée par Cadence. Les identifiants connus sont listés ; d'autres peuvent venir. */
 export type AiId = "claude-code" | "codex" | "opencode" | (string & {});
-
-export interface WorkspaceInfo {
-  /** Nom de l'espace de travail (« Projet X », « L3 Info »). */
-  name: string;
-  /** Dossier local de l'espace. */
-  path: string;
-  /** IA par défaut de l'espace. */
-  ai: AiId;
-}
 
 export interface PluginInfo {
   id: string;
@@ -51,7 +43,6 @@ export interface HelloParams {
 export interface HelloResult {
   api: number;
   plugin: PluginInfo;
-  workspace: WorkspaceInfo;
   theme: ThemeTokens;
   route: Route;
 }
@@ -104,6 +95,36 @@ export interface PickFilesOptions {
 
 export type Settings = Record<string, unknown>;
 
+/* ---------- Service `repos` (manifeste : `services = ["repos"]`) ---------- */
+
+/** Dépôt GitHub suivi par le plugin. */
+export interface RepoInfo {
+  /** `owner/name`. */
+  fullName: string;
+  owner: string;
+  name: string;
+  defaultBranch?: string;
+  private?: boolean;
+  /** Page GitHub du dépôt. */
+  url?: string;
+  /** Clone local (fait par Cadence ou désigné par l'utilisateur), s'il existe déjà. */
+  localPath?: string | null;
+}
+
+/** Sélecteur de la barre du plugin : un dépôt courant (`owner/name`) ou « Tous les dépôts ». */
+export type RepoSelection = { kind: "one"; repo: string } | { kind: "all" };
+
+/** Dépôts suivis et sélection, envoyés à chaque changement de l'un ou de l'autre. */
+export interface ReposChange {
+  repos: RepoInfo[];
+  selection: RepoSelection;
+}
+
+export interface CheckoutOptions {
+  /** Tâche pour laquelle le worktree est préparé (un worktree par tâche, ex. « issue-42 »). */
+  task?: string;
+}
+
 /** Événement émis par le backend du plugin (`notifications/cadence/event`). */
 export interface BackendEvent {
   name: string;
@@ -120,7 +141,11 @@ export interface Methods {
   "secrets.has": { params: { id: string }; result: boolean };
   "settings.get": { params: Record<string, never>; result: Settings };
   "settings.set": { params: { patch: Settings }; result: Settings };
-  "workspace.get": { params: Record<string, never>; result: WorkspaceInfo };
+  "repos.list": { params: Record<string, never>; result: RepoInfo[] };
+  "repos.selection": { params: Record<string, never>; result: RepoSelection };
+  "repos.follow": { params: { repo: string }; result: RepoInfo[] };
+  "repos.unfollow": { params: { repo: string }; result: RepoInfo[] };
+  "repos.checkout": { params: { repo: string; task?: string }; result: { path: string } };
   navigate: { params: Route; result: null };
   notify: { params: { message: string; kind: NotifyKind }; result: null };
   openExternal: { params: { url: string }; result: null };
@@ -136,6 +161,7 @@ export interface Topics {
   run: RunUpdate;
   theme: ThemeTokens;
   route: Route;
+  repos: ReposChange;
 }
 
 export type Topic = keyof Topics;

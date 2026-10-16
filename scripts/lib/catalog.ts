@@ -1,5 +1,5 @@
 /** Construction du catalogue `catalog.json` à partir des releases GitHub. */
-import { archiveName, parseReleaseTag, type Manifest } from "./manifest";
+import { archiveName, parseReleaseTag, type Category, type Manifest } from "./manifest";
 import { compareSemver } from "./semver";
 
 export interface CatalogEntry {
@@ -8,6 +8,8 @@ export interface CatalogEntry {
   version: string;
   description: string;
   authors: string[];
+  /** Groupe du rail (révision 1.1) ; `null` pour un manifeste antérieur sans `category`. */
+  category: Category | null;
   icon_url: string | null;
   url: string;
   sha256: string;
@@ -91,6 +93,7 @@ export function catalogEntry(
     version: manifest.version,
     description: manifest.description,
     authors: manifest.authors,
+    category: manifest.category ?? null,
     icon_url: manifest.icon ? rawUrl(repo, release.tag, `plugins/${manifest.id}/${manifest.icon}`) : null,
     url: release.zipUrl,
     sha256,
