@@ -1,12 +1,22 @@
 /**
  * Validation d'un dossier de plugin : manifeste contre le schéma, puis tout ce que le schéma ne
- * peut pas voir (fichiers référencés, skills, vues, réglages, binaires commités).
+ * peut pas voir (fichiers référencés, skills, vues, réglages, services, dépendances externes,
+ * binaires commités).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, join, relative } from "node:path";
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import { ICON_NAMES } from "../../packages/ui/src/icons/names";
-import { parseManifestText, SCHEMA_PATH, type Manifest, type Service } from "./manifest";
+import {
+  effectiveRequires,
+  parseManifestText,
+  SCHEMA_PATH,
+  TOOLS,
+  TOOLS_WITHOUT_AUTH,
+  type Manifest,
+  type Service,
+  type ToolId,
+} from "./manifest";
 import { checkSkill } from "./skill";
 
 export interface Report {
@@ -175,6 +185,65 @@ function checkServices(dir: string, m: Manifest, warnings: string[]) {
   }
 }
 
+const TOOL_ALT = TOOLS.join("|");
+/** Outil du registre lancé par son nom plutôt que par le chemin de `CADENCE_TOOLS`. */
+const LAUNCH_BY_NAME = [
+  // Rust : Command::new("git")
+  new RegExp(`Command::new\\(\\s*"(${TOOL_ALT})"\\s*\\)`, "g"),
+  // Node : spawn("git", …), execFile('gh', …), execa("git", …), spawnSync…
+  new RegExp(`\\b(?:spawn|spawnSync|execFile|execFileSync|execa)\\(\\s*["'\`](${TOOL_ALT})["'\`]`, "g"),
+  // Python : subprocess.run(["git", …])
+  new RegExp(`\\bsubprocess\\.\\w+\\(\\s*\\[\\s*["'](${TOOL_ALT})["']`, "g"),
+];
+
+/**
+ * Dépendances externes (`[[requires]]`, révision 1.2) : doublons et connexion sans objet, puis
+ * cohérence avec le serveur, qui trouve ses outils dans `CADENCE_TOOLS` (id → chemin absolu).
+ */
+function checkRequires(dir: string, m: Manifest, errors: string[], warnings: string[]) {
+  const requires = m.requires ?? [];
+  const seen = new Set<ToolId>();
+  for (const r of requires) {
+    if (seen.has(r.tool)) errors.push(`requires : outil « ${r.tool} » déclaré deux fois`);
+    seen.add(r.tool);
+    if (r.auth && TOOLS_WITHOUT_AUTH.includes(r.tool)) {
+      errors.push(`requires : « ${r.tool} » n'a pas de connexion, retirer auth = true`);
+    }
+    if (!r.reason.trim()) errors.push(`requires : raison vide pour « ${r.tool} »`);
+  }
+
+  // Outils fournis : déclarés par le plugin ou par un service activé.
+  const available = new Set(effectiveRequires(m).map((r) => r.tool));
+  const used = new Map<ToolId, string>();
+  for (const f of sourcesOf(dir, "server", CODE_EXT)) {
+    if (readsEnv(f.text, "CADENCE_TOOLS")) {
+      // Identifiants d'outils cités par un fichier qui lit CADENCE_TOOLS, hors lancements par le nom.
+      const lookups = LAUNCH_BY_NAME.reduce((text, re) => text.replace(re, ""), f.text);
+      for (const tool of TOOLS) {
+        if (new RegExp(`["'\`]${tool}["'\`]`).test(lookups) && !used.has(tool)) {
+          used.set(tool, `${f.rel} lit CADENCE_TOOLS pour « ${tool} »`);
+        }
+      }
+    }
+    for (const re of LAUNCH_BY_NAME) {
+      for (const match of f.text.matchAll(re)) {
+        const tool = match[1] as ToolId;
+        warnings.push(
+          `${f.rel} lance « ${tool} » par son nom : prendre son chemin dans CADENCE_TOOLS (outil détecté par Cadence)`,
+        );
+        if (!used.has(tool)) used.set(tool, `${f.rel} lance « ${tool} »`);
+      }
+    }
+  }
+  for (const [tool, what] of used) {
+    if (!available.has(tool)) {
+      warnings.push(
+        `${what} sans le déclarer dans [[requires]] (ni par un service) : Cadence ne le détectera ni ne l'installera`,
+      );
+    }
+  }
+}
+
 export function validatePlugin(dir: string, dirName = basename(dir)): Report {
   const report: Report = { id: dirName, errors: [], warnings: [] };
   const { errors, warnings } = report;
@@ -308,6 +377,9 @@ export function validatePlugin(dir: string, dirName = basename(dir)): Report {
 
   /* Services */
   checkServices(dir, m, warnings);
+
+  /* Dépendances externes */
+  checkRequires(dir, m, errors, warnings);
 
   /* Binaires et gros fichiers */
   for (const file of walk(dir)) {

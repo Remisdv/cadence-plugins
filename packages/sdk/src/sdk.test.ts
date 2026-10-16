@@ -212,6 +212,56 @@ describe("service repos", () => {
   });
 });
 
+describe("outils externes", () => {
+  it("lit l'état détecté par Cadence", async () => {
+    const { cadence, host } = connectMock({
+      externalTools: {
+        git: { installed: true, version: "2.45.1" },
+        gh: { installed: true, version: "2.60.0", authenticated: false },
+        node: {},
+      },
+    });
+    expect(await cadence.tools.status("git")).toEqual({ installed: true, version: "2.45.1", authenticated: null });
+    expect(await cadence.tools.status("gh")).toEqual({ installed: true, version: "2.60.0", authenticated: false });
+    expect(await cadence.tools.status("node")).toEqual({ installed: false, version: null, authenticated: null });
+    expect(host.requests.at(-1)).toEqual({ method: "tools.status", params: { tool: "node" } });
+  });
+
+  it("ouvre la boîte d'installation et renvoie l'état final", async () => {
+    const { cadence, host } = connectMock({
+      externalTools: {
+        git: { installed: true, version: "2.45.1" },
+        gh: { installed: true, version: "2.60.0", authenticated: false },
+        codex: { onEnsure: "dismiss" },
+        node: {},
+      },
+    });
+    // Déjà prêt : rien à faire.
+    expect(await cadence.tools.ensure("git")).toEqual({ installed: true, version: "2.45.1", authenticated: null });
+    // Installé mais non connecté : « Se connecter ».
+    expect(await cadence.tools.ensure("gh")).toMatchObject({ installed: true, authenticated: true });
+    // Absent : « Installer ».
+    expect(await cadence.tools.ensure("node")).toMatchObject({ installed: true, authenticated: null });
+    expect(host.externalTools.node?.installed).toBe(true);
+    // L'utilisateur ignore : état inchangé, pas d'erreur.
+    expect(await cadence.tools.ensure("codex")).toEqual({ installed: false, version: null, authenticated: null });
+  });
+
+  it("suit une nouvelle détection", async () => {
+    const { cadence, host } = connectMock({ externalTools: { claude: {} } });
+    host.setExternalTool("claude", { installed: true, version: "2.1.0", authenticated: true });
+    expect(await cadence.tools.status("claude")).toEqual({ installed: true, version: "2.1.0", authenticated: true });
+  });
+
+  it("refuse un outil non déclaré, inconnu ou mal nommé", async () => {
+    const { cadence, host } = connectMock({ externalTools: { git: { installed: true } } });
+    await expect(cadence.tools.status("gh")).rejects.toMatchObject({ code: "denied" });
+    await expect(cadence.tools.ensure("docker")).rejects.toMatchObject({ code: "not_found" });
+    await expect(cadence.tools.status("Git CLI")).rejects.toMatchObject({ code: "invalid_params" });
+    expect(host.requests.some((r) => (r.params as { tool?: string }).tool === "Git CLI")).toBe(false);
+  });
+});
+
 describe("toolValue", () => {
   it("décode le JSON textuel et signale isError", () => {
     expect(toolValue({ content: [{ type: "text", text: '{"a":1}' }] })).toEqual({ a: 1 });

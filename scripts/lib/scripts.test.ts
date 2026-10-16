@@ -5,8 +5,8 @@ import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildZip, collectFiles, sha256 } from "./archive";
 import { catalogEntry, latestReleases, parseSha256, type GithubRelease } from "./catalog";
-import { listPlugins, parseReleaseTag, readManifest, type Manifest } from "./manifest";
-import { compareSemver } from "./semver";
+import { effectiveRequires, listPlugins, parseReleaseTag, readManifest, type Manifest } from "./manifest";
+import { compareLooseVersion, compareSemver } from "./semver";
 import { checkSkill } from "./skill";
 import { validatePlugin } from "./validate";
 
@@ -63,6 +63,13 @@ describe("semver et tags", () => {
     expect(compareSemver("1.0.0", "1.0.0-rc.1")).toBeGreaterThan(0);
     expect(compareSemver("1.0.0-rc.2", "1.0.0-rc.10")).toBeLessThan(0);
     expect(compareSemver("0.2.0", "0.2.0")).toBe(0);
+  });
+
+  it("compare les versions souples des outils", () => {
+    expect(compareLooseVersion("2.30", "2.30.0")).toBe(0);
+    expect(compareLooseVersion("2.31", "2.30.9")).toBeGreaterThan(0);
+    expect(compareLooseVersion("2", "10")).toBeLessThan(0);
+    expect(() => compareLooseVersion("v2", "2")).toThrow();
   });
 
   it("lit les tags de release", () => {
@@ -217,6 +224,128 @@ title = "Accueil"
     expect(report.warnings.join("\n")).not.toContain("sans déclarer");
   });
 
+  it("valide les dépendances externes [[requires]]", () => {
+    const base = `api = 1
+id = "exemple"
+name = "Exemple"
+version = "0.1.0"
+description = "x"
+authors = ["Test"]
+category = "code"
+min_cadence = "0.3.0"
+`;
+    const requires = (body: string) => validatePlugin(fixture({ "plugin.toml": `${base}\n${body}` })).errors;
+    expect(
+      requires(`[[requires]]
+tool = "git"
+min_version = "2.30"
+reason = "Cloner les dépôts"
+
+[[requires]]
+tool = "gh"
+optional = true
+auth = true
+reason = "Réutiliser votre connexion GitHub"
+
+[[requires]]
+tool = "node"
+min_version = "20"
+reason = "Lancer les scripts du projet"
+`),
+    ).toEqual([]);
+    expect(requires(`[[requires]]\ntool = "docker"\nreason = "x"\n`)[0]).toContain("requires.0.tool : valeur parmi");
+    expect(requires(`[[requires]]\ntool = "git"\nmin_version = "v2.30"\nreason = "x"\n`)[0]).toContain(
+      "requires.0.min_version : format invalide",
+    );
+    expect(requires(`[[requires]]\ntool = "git"\n`)).toEqual(["requires.0 : champ obligatoire « reason » absent"]);
+    expect(requires(`[[requires]]\ntool = "git"\nreason = "x"\nurl = "https://git-scm.com"\n`)).toEqual([
+      "requires.0 : champ « url » inconnu de l'API 1",
+    ]);
+    expect(
+      requires(`[[requires]]
+tool = "git"
+auth = true
+reason = "Cloner"
+
+[[requires]]
+tool = "git"
+reason = "  "
+`),
+    ).toEqual([
+      "requires : « git » n'a pas de connexion, retirer auth = true",
+      "requires : outil « git » déclaré deux fois",
+      "requires : raison vide pour « git »",
+    ]);
+  });
+
+  it("signale les outils de CADENCE_TOOLS non déclarés", () => {
+    const manifest = `api = 1
+id = "exemple"
+name = "Exemple"
+version = "0.1.0"
+description = "x"
+authors = ["Test"]
+category = "code"
+min_cadence = "0.3.0"
+
+[server]
+bin = "cadence-exemple"
+`;
+    const cargo = `[package]\nname = "cadence-exemple"\nversion = "0.1.0"\n`;
+    const main = `fn main() {
+    let tools: HashMap<String, PathBuf> = serde_json::from_str(&std::env::var("CADENCE_TOOLS").unwrap()).unwrap();
+    let git = tools.get("git").cloned();
+    let gh = tools.get("gh").cloned();
+    let status = Command::new("codex").status();
+}
+`;
+    const warnings = (toml: string) =>
+      validatePlugin(fixture({ "plugin.toml": toml, "server/Cargo.toml": cargo, "server/src/main.rs": main }))
+        .warnings;
+
+    const bare = warnings(manifest).join("\n");
+    expect(bare).toContain("server/src/main.rs lit CADENCE_TOOLS pour « git » sans le déclarer dans [[requires]]");
+    expect(bare).toContain("server/src/main.rs lit CADENCE_TOOLS pour « gh » sans le déclarer");
+    expect(bare).toContain("server/src/main.rs lance « codex » par son nom : prendre son chemin dans CADENCE_TOOLS");
+    expect(bare).toContain("server/src/main.rs lance « codex » sans le déclarer");
+    expect(bare).not.toContain("CADENCE_TOOLS pour « codex »");
+
+    // git et gh viennent du service repos ; codex est déclaré.
+    const withRepos = manifest.replace('min_cadence = "0.3.0"', 'services = ["repos"]\nmin_cadence = "0.3.0"');
+    const declared = warnings(`${withRepos}\n[[requires]]\ntool = "codex"\nreason = "Relire le code"\n`);
+    expect(declared.join("\n")).not.toContain("sans le déclarer");
+    expect(declared.join("\n")).toContain("lance « codex » par son nom");
+
+    // Redéclarer un outil du service passe sans erreur ni avertissement.
+    const redeclared = validatePlugin(
+      fixture({
+        "plugin.toml": `${withRepos}\n[[requires]]\ntool = "git"\nreason = "Cloner les dépôts et préparer les worktrees"\n`,
+        "server/Cargo.toml": cargo,
+        "server/src/main.rs": `fn main() {\n    let tools = std::env::var("CADENCE_TOOLS");\n    let git = "git";\n}\n`,
+      }),
+    );
+    expect(redeclared.errors).toEqual([]);
+    expect(redeclared.warnings.join("\n")).not.toContain("requires");
+  });
+
+  it("fusionne les dépendances du plugin et de ses services", () => {
+    expect(effectiveRequires({})).toEqual([]);
+    expect(
+      effectiveRequires({
+        services: ["repos"],
+        requires: [
+          { tool: "node", reason: "Scripts" },
+          { tool: "git", min_version: "2.40", reason: "Worktrees" },
+          { tool: "gh", reason: "Créer les PR" },
+        ],
+      }),
+    ).toEqual([
+      { tool: "git", min_version: "2.40", optional: false, auth: false, reason: "Worktrees", service: "repos" },
+      { tool: "gh", min_version: null, optional: false, auth: true, reason: "Créer les PR", service: "repos" },
+      { tool: "node", min_version: null, optional: false, auth: false, reason: "Scripts", service: null },
+    ]);
+  });
+
   it("vérifie le serveur et les outils cités par les skills", () => {
     const manifest = `api = 1
 id = "exemple"
@@ -343,11 +472,47 @@ describe("catalogue", () => {
       description: "Cours.",
       authors: ["Rémi Lhuillier"],
       category: "etudes",
+      requires: [],
       icon_url: "https://raw.githubusercontent.com/RemiSDV/cadence-plugins/documents-v0.2.0/plugins/documents/icon.svg",
       url: "https://dl/documents-0.2.0.zip",
       sha256: hash,
       min_cadence: "0.3.0",
     });
     expect(() => catalogEntry("r", release!, { ...manifest, version: "0.1.0" }, hash)).toThrow();
+  });
+
+  it("liste les dépendances externes, services compris", () => {
+    const [release] = latestReleases(releases, ["documents"]);
+    const manifest = {
+      api: 1,
+      id: "documents",
+      name: "Documents",
+      version: "0.2.0",
+      description: "Cours.",
+      authors: ["Test"],
+      category: "etudes",
+      services: ["repos"],
+      requires: [{ tool: "node", min_version: "20", optional: true, reason: "Convertir les diapositives" }],
+      min_cadence: "0.3.0",
+    } satisfies Manifest;
+    expect(catalogEntry("r", release!, manifest, "a".repeat(64)).requires).toEqual([
+      {
+        tool: "git",
+        min_version: null,
+        optional: false,
+        auth: false,
+        reason: "Cloner les dépôts et préparer les worktrees",
+        service: "repos",
+      },
+      {
+        tool: "gh",
+        min_version: null,
+        optional: true,
+        auth: true,
+        reason: "Réutiliser votre connexion GitHub existante",
+        service: "repos",
+      },
+      { tool: "node", min_version: "20", optional: true, auth: false, reason: "Convertir les diapositives", service: null },
+    ]);
   });
 });

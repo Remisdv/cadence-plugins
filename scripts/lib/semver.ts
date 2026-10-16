@@ -31,3 +31,19 @@ export function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+
+/** Version minimale d'un outil externe, semver souple : `2`, `2.30` ou `2.30.1`. */
+export const LOOSE_VERSION_RE = /^(0|[1-9]\d*)(\.(0|[1-9]\d*)){0,2}$/;
+
+/** Compare deux versions souples (composantes absentes = 0) : `2.30` = `2.30.0` < `2.31`. */
+export function compareLooseVersion(a: string, b: string): number {
+  if (!LOOSE_VERSION_RE.test(a) || !LOOSE_VERSION_RE.test(b)) {
+    throw new Error(`Version invalide : ${LOOSE_VERSION_RE.test(a) ? b : a}`);
+  }
+  const [pa, pb] = [a.split(".").map(Number), b.split(".").map(Number)];
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}

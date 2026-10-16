@@ -23,6 +23,12 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
   | `tag_prefix` | `v` | préfixe des tags de version (`v0.1.2`) |
   | `sprint_length_days` | `14` | durée d'un nouveau sprint |
 
+- **Dépendances externes** : celles du service `repos`, que le plugin ne redéclare pas — `git`
+  (requis, pour cloner et préparer les worktrees) et `gh` (optionnel, connecté, pour réutiliser
+  une connexion GitHub existante). Cadence les détecte et propose de les installer. Le serveur ne
+  lance aucun outil externe (il passe par l'API GitHub) ; s'il devait lancer `git`, il en lirait
+  le chemin dans `CADENCE_TOOLS`.
+
 Conventions GitHub reprises de Cadence : labels `type/feat|fix|chore|perf|docs`,
 `status/todo|doing|review` (une issue fermée est « faite »), `estimate/S|M|L|XL` ; une version est
 un milestone semver, **daté = sprint**, **sans date = palier** de roadmap dont les thèmes sont les

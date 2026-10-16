@@ -15,7 +15,7 @@ import { windowPort } from "./port";
 
 export * from "./protocol";
 export * from "./errors";
-export { createCadence, toolValue, SDK_VERSION, REPO_FULL_NAME } from "./client";
+export { createCadence, toolValue, SDK_VERSION, REPO_FULL_NAME, EXTERNAL_TOOL_ID } from "./client";
 export type { Cadence, CadenceOptions, CallOptions, Unsubscribe } from "./client";
 export { windowPort, memoryChannel, type Port } from "./port";
 export {
@@ -23,6 +23,7 @@ export {
   connectMock,
   repoInfo,
   type MockHost,
+  type MockExternalTool,
   type MockHostOptions,
   type MockReposOptions,
   type MockTool,

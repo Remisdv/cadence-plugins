@@ -10,6 +10,7 @@
  * Le premier appel est toujours `hello` : il négocie la version d'API et renvoie le contexte
  * (plugin, thème, route affichée). Il n'y a pas d'espace de travail (révision 1.1) : un plugin
  * est global et gère son propre contexte, par exemple les dépôts suivis du service `repos`.
+ * Les outils externes dont il dépend (`[[requires]]`, révision 1.2) se consultent par `tools.*`.
  */
 
 export const API_VERSION = 1 as const;
@@ -125,6 +126,24 @@ export interface CheckoutOptions {
   task?: string;
 }
 
+/* ---------- Outils externes (révision 1.2, manifeste : `[[requires]]`) ---------- */
+
+/**
+ * Outil externe du registre de Cadence. Les identifiants connus sont listés ; une version plus
+ * récente de l'app peut en ajouter.
+ */
+export type ExternalToolId = "git" | "gh" | "claude" | "codex" | "opencode" | "node" | (string & {});
+
+/** État d'un outil externe tel que Cadence l'a détecté (lecture seule). */
+export interface ExternalToolStatus {
+  /** Exécutable trouvé (chemin détecté ou chemin personnalisé des réglages). */
+  installed: boolean;
+  /** Version détectée (`2.45.1`), `null` si l'outil est absent ou sa version illisible. */
+  version: string | null;
+  /** Connexion de l'outil (`gh auth status`…) ; `null` pour un outil sans connexion (git, node) ou absent. */
+  authenticated: boolean | null;
+}
+
 /** Événement émis par le backend du plugin (`notifications/cadence/event`). */
 export interface BackendEvent {
   name: string;
@@ -146,6 +165,8 @@ export interface Methods {
   "repos.follow": { params: { repo: string }; result: RepoInfo[] };
   "repos.unfollow": { params: { repo: string }; result: RepoInfo[] };
   "repos.checkout": { params: { repo: string; task?: string }; result: { path: string } };
+  "tools.status": { params: { tool: string }; result: ExternalToolStatus };
+  "tools.ensure": { params: { tool: string }; result: ExternalToolStatus };
   navigate: { params: Route; result: null };
   notify: { params: { message: string; kind: NotifyKind }; result: null };
   openExternal: { params: { url: string }; result: null };

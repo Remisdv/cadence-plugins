@@ -16,9 +16,10 @@ ils ne sont pas livrés dans l'app.
 2. Choisissez un plugin et cliquez sur **Installer** : Cadence télécharge l'archive de sa dernière
    release, vérifie son empreinte sha256 et l'extrait dans `<données de l'app>/plugins/<id>/<version>/`.
 3. Le plugin est **activé globalement** dès l'installation (on peut le désactiver sans le
-   désinstaller) et prend place dans le rail de Cadence, dans le groupe de sa catégorie. Suivez ses
-   étapes de configuration : pour Gestion de projet, la connexion GitHub du service `repos` puis le
-   choix des dépôts suivis.
+   désinstaller) et prend place dans le rail de Cadence, dans le groupe de sa catégorie. Cadence
+   vérifie les outils externes dont il dépend (installation et connexion proposées, voir
+   [Dépendances externes](#dépendances-externes)), puis vous suivez ses étapes de configuration :
+   pour Gestion de projet, la connexion GitHub du service `repos` puis le choix des dépôts suivis.
 
 Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'archive peut aussi
 être partagé tel quel.
@@ -36,7 +37,7 @@ Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'
 plugins/<id>/            un dossier par plugin : plugin.toml, README.md, ui/, skills/, server/
 packages/sdk/            @cadence/plugin-sdk — SDK postMessage des écrans de plugin
 packages/ui/             @cadence/ui — tokens CSS et composants React du kit Cadence
-schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1)
+schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1, révision 1.2)
 scripts/                 validate.ts, package.ts, catalog.ts, pending.ts
 .github/workflows/       ci.yml (pull requests) et release.yml (main)
 ```
@@ -66,6 +67,7 @@ stdio), avec l'environnement :
 | `CADENCE_SETTINGS` | réglages globaux du plugin (JSON) ; ensuite `notifications/cadence/settings` |
 | `CADENCE_SECRET_<ID_MAJUSCULE>` | chaque secret déclaré dans `[[secrets]]` |
 | `CADENCE_GITHUB_TOKEN`, `CADENCE_REPOS` | service `repos` activé (voir plus bas) |
+| `CADENCE_TOOLS` | outils externes détectés (JSON : id → chemin absolu de l'exécutable, voir plus bas) |
 
 Les outils sont exposés aux IA préfixés `<plugin>__<outil>`. L'IA tourne toujours dans un dossier
 neutre de Cadence, jamais dans un dépôt de l'utilisateur : elle accède aux données par les outils
@@ -114,13 +116,64 @@ services = ["repos"]
 `pnpm validate` avertit quand un plugin lit `CADENCE_GITHUB_TOKEN` ou `CADENCE_REPOS`, appelle
 `cadence.repos` ou cite `cadence__repo_checkout` sans déclarer `repos`.
 
+### Dépendances externes
+
+Cadence connaît une liste fermée d'**outils externes** (enrichie à chaque version de l'app). Il les
+détecte, les installe et les connecte pour l'utilisateur, toujours sur un clic : il affiche la
+commande exacte qu'il va lancer et pourquoi, la lance dans un terminal intégré, puis revérifie.
+Les identifiants de connexion restent dans le stockage propre de chaque outil.
+
+| `tool` | Outil | Connexion |
+| --- | --- | --- |
+| `git` | Git | — |
+| `gh` | GitHub CLI | `gh auth login` |
+| `claude` | Claude Code | `claude auth login` |
+| `codex` | Codex CLI | `codex login` |
+| `opencode` | OpenCode | `opencode auth login` |
+| `node` | Node.js (prérequis des installations npm) | — |
+
+Un plugin déclare les outils dont il a besoin :
+
+```toml
+[[requires]]
+tool = "git"                # id du registre
+min_version = "2.30"        # optionnel, semver souple : 2, 2.30 ou 2.30.1
+reason = "Cloner les dépôts et préparer les worktrees"   # obligatoire, en français
+
+[[requires]]
+tool = "gh"
+optional = true             # le plugin fonctionne sans, en mode dégradé
+auth = true                 # l'outil doit aussi être connecté
+reason = "Réutiliser votre connexion GitHub existante"
+```
+
+- Un **service** déclare lui-même ses outils : `repos` apporte `git` (requis) et `gh` (optionnel,
+  connecté). Un plugin qui active `repos` n'a pas à les redéclarer (il peut le faire, par exemple
+  pour exiger une version plus récente).
+- Les IA de code (`claude`, `codex`, `opencode`) sont gérées par l'étape « IA de code » de
+  l'onboarding ; un plugin ne les déclare que s'il lance lui-même une CLI précise.
+- Un outil requis manquant met le plugin « à configurer » : bandeau dans sa barre avec « Installer ».
+  Les outils apparaissent aussi dans l'étape « Outils nécessaires » de l'onboarding, dans
+  **Réglages › Outils** et dans la section « Dépendances » du catalogue (champ `requires` de
+  `catalog.json`, services compris).
+- Le **serveur** ne lance jamais un outil par son nom : il lit son chemin dans `CADENCE_TOOLS`
+  (`{ "git": "/usr/bin/git", "gh": "/opt/homebrew/bin/gh" }`), qui tient compte des chemins
+  personnalisés des réglages.
+- Les **écrans** consultent l'état d'un outil avec `cadence.tools.status(id)`
+  (`{ installed, version, authenticated }`) et ouvrent la boîte d'installation de Cadence avec
+  `cadence.tools.ensure(id)`.
+
+`pnpm validate` refuse un outil déclaré deux fois ou `auth = true` sur un outil sans connexion
+(`git`, `node`), et avertit quand un serveur lit dans `CADENCE_TOOLS` un outil que ni le plugin ni
+ses services ne déclarent, ou lance un outil du registre par son nom.
+
 ## Développer
 
 Prérequis : Node ≥ 20, pnpm 10, Rust stable.
 
 ```sh
 pnpm install
-pnpm validate                 # manifestes, catégories, services, skills, vues, réglages
+pnpm validate                 # manifestes, catégories, services, dépendances, skills, vues, réglages
 pnpm typecheck && pnpm test   # SDK, kit UI, scripts, écrans
 pnpm build                    # build des UI de plugins (plugins/*/ui/dist)
 cargo test --workspace        # serveurs MCP Rust

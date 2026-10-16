@@ -1,7 +1,7 @@
 {
   "name": "@cadence/plugin-sdk",
   "version": "0.2.0",
-  "description": "SDK des écrans de plugin Cadence : appels d'outils MCP, actions, secrets, réglages, service repos (postMessage, API 1).",
+  "description": "SDK des écrans de plugin Cadence : appels d'outils MCP, actions, secrets, réglages, service repos, outils externes (postMessage, API 1).",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,

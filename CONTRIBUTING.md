@@ -12,7 +12,7 @@ avant la fusion sur `main` qui déclenche la publication.
    catalogue) avec au minimum :
    - `plugin.toml` — manifeste API 1, décrit par `schema/plugin.schema.json`, avec sa `category`
      (`projet`, `etudes`, `code`, `donnees` ou `outils`) et, au besoin, les `services` de Cadence
-     qu'il active (`repos`) ;
+     qu'il active (`repos`) et les outils externes dont il dépend (`[[requires]]`) ;
    - `README.md` — ce que fait le plugin, ses réglages, ses outils ;
    - selon les besoins : `icon.svg`, `ui/` (écrans), `skills/<skill>/SKILL.md`, `server/`
      (sources du serveur MCP), un schéma de réglages.
@@ -33,9 +33,9 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
 - **Manifeste valide** : `pnpm validate` passe. Il vérifie le schéma, que l'`id` est celui du
   dossier, que chaque skill d'une action existe (`skills/<skill>/SKILL.md` avec un frontmatter
   `name` égal au dossier et une `description`), que chaque vue et étape de setup est gérée par
-  `ui/src`, que les icônes existent dans le kit (`@cadence/ui/icons`), que la catégorie et les
-  services sont connus de l'API et que le schéma de réglages reste dans le sous-ensemble rendu
-  par Cadence.
+  `ui/src`, que les icônes existent dans le kit (`@cadence/ui/icons`), que la catégorie, les
+  services et les outils de `[[requires]]` sont connus de l'API et que le schéma de réglages reste
+  dans le sous-ensemble rendu par Cadence.
 - **Pas d'espace de travail** : un plugin est activé globalement et n'a qu'un processus serveur.
   Ses données vont dans `CADENCE_DATA_DIR`, ses réglages sont globaux (`CADENCE_SETTINGS`) et il
   gère lui-même son contexte (dépôts suivis, matières…). `CADENCE_WORKSPACE` et
@@ -45,6 +45,15 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
   propre jeton. Pour toucher au code, ses skills appellent `cadence__repo_checkout`, qui renvoie
   le worktree ouvert à l'IA pour la session : l'IA n'est jamais lancée dans un dépôt. La
   validation avertit d'un usage du service sans déclaration.
+- **Dépendances externes** : tout outil externe que le plugin utilise (`git`, `gh`, `claude`,
+  `codex`, `opencode`, `node`) est déclaré dans `[[requires]]`, avec une `reason` en français
+  (affichée à l'utilisateur avant l'installation), `optional = true` si le plugin s'en passe en
+  mode dégradé, `auth = true` s'il doit être connecté, `min_version` au besoin. Les outils d'un
+  service activé sont déjà déclarés (`repos` : `git` requis, `gh` optionnel et connecté). Le
+  serveur trouve leurs exécutables dans `CADENCE_TOOLS` (id → chemin absolu) et ne les lance
+  jamais par leur seul nom. Un plugin n'installe rien lui-même : Cadence propose l'installation et
+  la connexion, sur un clic de l'utilisateur (`cadence.tools.ensure` côté écran). Pas de
+  dépendance hors du registre : pour en ajouter une, ouvrez d'abord une issue.
 - **Version incrémentée** : toute modification d'un plugin déjà publié monte sa `version`
   (semver) dans `plugin.toml`. La CI compare avec la branche cible et refuse sinon. C'est cette
   nouvelle version qui déclenche la release `<id>-v<version>` après fusion.

@@ -5,6 +5,8 @@ import {
   isMessage,
   type BackendEvent,
   type CheckoutOptions,
+  type ExternalToolId,
+  type ExternalToolStatus,
   type HelloResult,
   type Method,
   type NotifyKind,
@@ -28,6 +30,9 @@ export const SDK_VERSION = "0.2.0";
 
 /** `owner/name` d'un dépôt GitHub. */
 export const REPO_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** Identifiant d'un outil du registre de Cadence (`git`, `gh`, `claude`…). */
+export const EXTERNAL_TOOL_ID = /^[a-z][a-z0-9-]*$/;
 
 export interface CallOptions {
   /** Délai de réponse en ms ; `0` pour attendre indéfiniment. */
@@ -107,6 +112,21 @@ export interface Cadence {
      * Côté IA, le même service est l'outil du cœur `cadence__repo_checkout`.
      */
     checkout(repo: string, options?: CheckoutOptions): Promise<string>;
+  };
+  /**
+   * Outils externes du registre de Cadence (`git`, `gh`, `claude`, `codex`, `opencode`, `node`),
+   * déclarés par le manifeste (`[[requires]]`) ou par un service activé. Un outil non déclaré
+   * rejette en `denied`, un identifiant inconnu de l'app en `not_found`.
+   */
+  tools: {
+    /** État détecté par Cadence : installé, version, connecté (lecture seule). */
+    status(id: ExternalToolId): Promise<ExternalToolStatus>;
+    /**
+     * Ouvre la boîte d'installation (et de connexion) de Cadence pour l'outil, si besoin ; rien
+     * n'est installé sans le clic de l'utilisateur. Renvoie l'état une fois la boîte fermée
+     * (tout de suite si l'outil est déjà prêt) : `installed` reste faux si l'utilisateur ignore.
+     */
+    ensure(id: ExternalToolId): Promise<ExternalToolStatus>;
   };
   navigate(viewId: string, params?: Record<string, string>): Promise<void>;
   notify(message: string, kind?: NotifyKind): Promise<void>;
@@ -300,6 +320,11 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       : Promise.reject(new CadenceError("invalid_params", `Dépôt invalide : « ${String(fullName)} » (attendu owner/name).`));
   };
 
+  const toolId = (id: string): Promise<string> =>
+    typeof id === "string" && EXTERNAL_TOOL_ID.test(id)
+      ? Promise.resolve(id)
+      : Promise.reject(new CadenceError("invalid_params", `Outil externe invalide : « ${String(id)} ».`));
+
   const callRaw = (tool: string, args: Record<string, unknown> = {}, opts?: CallOptions) =>
     request("tool.call", { tool, args }, { timeoutMs: 120_000, ...opts });
 
@@ -374,6 +399,11 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
         const { path } = await request("repos.checkout", params, { timeoutMs: 0 });
         return path;
       },
+    },
+    tools: {
+      status: async (id) => request("tools.status", { tool: await toolId(id) }),
+      // L'utilisateur lit la commande, installe, se connecte : pas de délai.
+      ensure: async (id) => request("tools.ensure", { tool: await toolId(id) }, { timeoutMs: 0 }),
     },
     async navigate(view, params = {}) {
       await request("navigate", { view, params });

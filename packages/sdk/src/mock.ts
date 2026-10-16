@@ -11,6 +11,7 @@ import {
   isMessage,
   type BackendEvent,
   type EventMessage,
+  type ExternalToolStatus,
   type Method,
   type PickFilesOptions,
   type PluginInfo,
@@ -39,6 +40,23 @@ export interface MockReposOptions {
   checkout?: (repo: string, task: string | undefined) => string | Promise<string>;
 }
 
+/** Identifiants du registre d'outils externes de Cadence (révision 1.2). */
+const KNOWN_EXTERNAL_TOOLS = ["git", "gh", "claude", "codex", "opencode", "node"];
+
+/** Outil externe déclaré par le plugin simulé (`[[requires]]` ou service) et son état détecté. */
+export interface MockExternalTool {
+  /** Exécutable trouvé (faux par défaut). */
+  installed?: boolean;
+  version?: string | null;
+  /** Connexion : `null` (défaut) pour un outil sans connexion, comme git et node. */
+  authenticated?: boolean | null;
+  /**
+   * Issue de la boîte d'installation ouverte par `ensure` : `install` (défaut) simule le clic
+   * « Installer » puis « Se connecter » ; `dismiss`, « Ignorer » (état inchangé).
+   */
+  onEnsure?: "install" | "dismiss";
+}
+
 export interface MockHostOptions {
   plugin?: PluginInfo;
   theme?: ThemeTokens;
@@ -52,6 +70,11 @@ export interface MockHostOptions {
   pickFiles?: (options: PickFilesOptions) => string[] | Promise<string[]>;
   /** Service `repos` (manifeste : `services = ["repos"]`). */
   repos?: MockReposOptions;
+  /**
+   * Outils externes déclarés par le plugin (`[[requires]]` ou service), par identifiant. Un
+   * outil du registre absent d'ici rejette en `denied`, un identifiant inconnu en `not_found`.
+   */
+  externalTools?: Record<string, MockExternalTool>;
   /** Version d'API annoncée (pour tester le refus de version). */
   api?: number;
 }
@@ -72,6 +95,10 @@ export interface MockHost {
   select(selection: RepoSelection): void;
   /** Remplace la liste suivie (ajout/retrait depuis Cadence). */
   setRepos(repos: (string | RepoInfo)[]): void;
+  /** État courant des outils externes déclarés. */
+  readonly externalTools: Readonly<Record<string, ExternalToolStatus>>;
+  /** Simule une nouvelle détection (installation faite hors de Cadence, chemin personnalisé…). */
+  setExternalTool(id: string, status: ExternalToolStatus): void;
   dispose(): void;
 }
 
@@ -95,6 +122,26 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
   let repos: RepoInfo[] = (reposService?.repos ?? []).map(repoInfo);
   let selection: RepoSelection =
     reposService?.selection ?? (repos[0] ? { kind: "one", repo: repos[0].fullName } : { kind: "all" });
+
+  const externalTools: Record<string, ExternalToolStatus> = {};
+  const ensureOutcome: Record<string, "install" | "dismiss"> = {};
+  for (const [id, tool] of Object.entries(options.externalTools ?? {})) {
+    externalTools[id] = {
+      installed: tool.installed ?? false,
+      version: tool.installed ? (tool.version ?? null) : null,
+      authenticated: tool.authenticated ?? null,
+    };
+    ensureOutcome[id] = tool.onEnsure ?? "install";
+  }
+
+  const declaredTool = (id: string): ExternalToolStatus => {
+    const status = externalTools[id];
+    if (status) return status;
+    if (KNOWN_EXTERNAL_TOOLS.includes(id)) {
+      throw new CadenceError("denied", `Outil « ${id} » non déclaré : ajouter [[requires]] tool = "${id}" au manifeste.`);
+    }
+    throw new CadenceError("not_found", `Outil externe inconnu de Cadence : ${id}.`);
+  };
 
   const send = <T extends Topic>(topic: T, data: Topics[T]) => {
     const message: EventMessage<T> = { channel: CHANNEL, api: API_VERSION, kind: "event", topic, data };
@@ -177,6 +224,20 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
           : `/tmp/cadence/repos/${params.repo}/worktrees/${params.task ?? "tache"}`;
         return { path };
       }
+      case "tools.status":
+        return { ...declaredTool(params.tool) };
+      case "tools.ensure": {
+        const current = declaredTool(params.tool);
+        const ready = current.installed && current.authenticated !== false;
+        if (ready || ensureOutcome[params.tool] === "dismiss") return { ...current };
+        const next: ExternalToolStatus = {
+          installed: true,
+          version: current.version ?? "1.0.0",
+          authenticated: current.authenticated === null ? null : true,
+        };
+        externalTools[params.tool] = next;
+        return { ...next };
+      }
       case "navigate":
         route = { view: params.view, params: params.params ?? {} };
         queueMicrotask(() => send("route", route));
@@ -247,6 +308,12 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
     setRepos(next) {
       repos = next.map(repoInfo);
       reposChanged();
+    },
+    get externalTools() {
+      return externalTools;
+    },
+    setExternalTool(id, status) {
+      externalTools[id] = { ...status };
     },
     dispose: stop,
   };

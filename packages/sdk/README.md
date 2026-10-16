@@ -31,6 +31,7 @@ const files = await cadence.pickFiles({ multiple: true, filters: [{ name: "Cours
 | `secrets.set / has` | secrets déclarés dans `[[secrets]]`, jamais relus par l'UI |
 | `settings.get / set` | réglages globaux du plugin (`[settings]`) |
 | `repos.*` | service `repos` de Cadence (voir plus bas) |
+| `tools.status / ensure` | outils externes déclarés par `[[requires]]` (voir plus bas) |
 | `navigate(view, params?)`, `notify(message, kind?)` | navigation et notifications de Cadence |
 | `openExternal(url)`, `pickFiles(options)` | navigateur par défaut, sélecteur de fichiers natif |
 | `theme`, `onTheme` | variables CSS injectées (`--color-*`, `--text-*`…) |
@@ -66,6 +67,31 @@ Côté IA, `checkout` est l'outil du cœur `cadence__repo_checkout` : l'IA reste
 neutre et Cadence ne lui ouvre que ce worktree, pour la session. Le serveur du plugin reçoit
 `CADENCE_GITHUB_TOKEN` et `CADENCE_REPOS`, puis `notifications/cadence/repos`.
 
+## Outils externes
+
+Un plugin déclare les outils dont il dépend (`git`, `gh`, `claude`, `codex`, `opencode`, `node`)
+dans `[[requires]]` ; ceux d'un service activé (`repos` : `git`, `gh`) sont déjà déclarés. Cadence
+les détecte, propose de les installer et de les connecter ; l'écran peut consulter leur état et
+ouvrir la boîte d'installation de Cadence :
+
+```ts
+const gh = await cadence.tools.status("gh"); // { installed: true, version: "2.60.0", authenticated: false }
+if (!gh.installed || gh.authenticated === false) {
+  const after = await cadence.tools.ensure("gh"); // commande affichée, clic « Installer » / « Se connecter »
+  if (!after.installed) showDegradedMode();
+}
+```
+
+| API | Rôle |
+| --- | --- |
+| `tools.status(id)` | état détecté, en lecture seule : `{ installed, version, authenticated }` (`authenticated` vaut `null` pour un outil sans connexion, comme `git` ou `node`) |
+| `tools.ensure(id)` | ouvre la boîte d'installation (et de connexion) si l'outil n'est pas prêt, sans délai ; renvoie l'état une fois la boîte fermée (`installed` reste faux si l'utilisateur ignore) |
+
+Un outil non déclaré rejette en `denied`, un identifiant inconnu de l'app en `not_found`. Rien
+n'est installé sans clic de l'utilisateur, et l'écran ne voit jamais les identifiants des outils.
+Le serveur du plugin, lui, trouve leurs exécutables dans `CADENCE_TOOLS` (JSON : id → chemin
+absolu).
+
 ## Erreurs
 
 Toutes les promesses rejettent avec une `CadenceError` dont le `code` vaut `not_connected`,
@@ -93,6 +119,7 @@ setCadence(
       route: { view: "issues", params: {} },
       tools: { list_issues: () => ({ issues: [{ number: 1, title: "Exemple" }] }) },
       repos: { repos: ["me/app", "me/site"] }, // service repos simulé
+      externalTools: { git: { installed: true, version: "2.45.1" }, gh: { authenticated: false } },
     },
   }),
 );
@@ -106,8 +133,8 @@ Messages `{ channel: "cadence", api: 1, kind, … }` :
 
 - `request` (plugin → Cadence) : `{ id, method, params }`, méthodes `hello`, `tool.call`,
   `action.run`, `secrets.set`, `secrets.has`, `settings.get`, `settings.set`, `repos.list`,
-  `repos.selection`, `repos.follow`, `repos.unfollow`, `repos.checkout`, `navigate`, `notify`,
-  `openExternal`, `pickFiles` ;
+  `repos.selection`, `repos.follow`, `repos.unfollow`, `repos.checkout`, `tools.status`,
+  `tools.ensure`, `navigate`, `notify`, `openExternal`, `pickFiles` ;
 - `response` (Cadence → plugin) : `{ id, ok: true, result }` ou `{ id, ok: false, error: { code, message, data? } }` ;
 - `event` (Cadence → plugin) : `{ topic, data }`, sujets `event`, `run`, `theme`, `route`, `repos`.
 
