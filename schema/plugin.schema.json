@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RemiSDV/cadence-plugins/schema/plugin.schema.json",
+  "title": "Manifeste de plugin Cadence (plugin.toml, API 1)",
+  "description": "Structure de plugin.toml une fois lu en TOML. Les vérifications qui dépassent le schéma (fichiers référencés, skills, vues) sont faites par scripts/validate.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api", "id", "name", "version", "description", "authors", "min_cadence"],
+  "properties": {
+    "api": {
+      "description": "Version de l'API plugin visée.",
+      "const": 1
+    },
+    "id": {
+      "description": "Identifiant unique dans le catalogue : minuscules, chiffres et tirets.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "name": {
+      "description": "Nom affiché.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "description": "Version semver du plugin ; la CI publie une release à chaque changement sur main.",
+      "$ref": "#/$defs/semver"
+    },
+    "description": {
+      "description": "Une phrase, affichée dans le catalogue.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "authors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "icon": {
+      "description": "Chemin d'une icône SVG dans le dossier du plugin.",
+      "$ref": "#/$defs/relativePath",
+      "pattern": "\\.svg$"
+    },
+    "min_cadence": {
+      "description": "Version minimale de Cadence.",
+      "$ref": "#/$defs/semver"
+    },
+    "server": {
+      "description": "Backend MCP (stdio).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bin"],
+      "properties": {
+        "bin": {
+          "description": "Nom de l'exécutable, résolu en bin/<cible>/<bin>[.exe].",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        }
+      }
+    },
+    "ui": {
+      "description": "Écrans web servis dans un iframe isolé.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry"],
+      "properties": {
+        "entry": {
+          "description": "Page d'entrée dans l'archive.",
+          "$ref": "#/$defs/relativePath",
+          "pattern": "^ui/.+\\.html$"
+        },
+        "views": {
+          "description": "Entrées de la barre latérale de l'espace.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "$ref": "#/$defs/slug" },
+              "title": { "type": "string", "minLength": 1, "maxLength": 40 },
+              "icon": {
+                "description": "Nom d'icône du kit Cadence (@cadence/ui).",
+                "type": "string",
+                "pattern": "^[a-zA-Z]+$"
+              },
+              "section": { "type": "string", "minLength": 1, "maxLength": 40 }
+            }
+          }
+        }
+      }
+    },
+    "secrets": {
+      "description": "Secrets rangés dans le trousseau de l'OS, passés au serveur en CADENCE_SECRET_<ID_MAJUSCULE>.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64 },
+          "label": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "setup": {
+      "description": "Étapes d'onboarding / de configuration du plugin.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "view"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "title": { "type": "string", "minLength": 1 },
+          "view": {
+            "description": "Route de l'UI du plugin affichée dans l'onboarding.",
+            "$ref": "#/$defs/slug"
+          }
+        }
+      }
+    },
+    "settings": {
+      "description": "Réglages par espace : JSON Schema (sous-ensemble) rendu par Cadence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/relativePath", "pattern": "\\.json$" }
+      }
+    },
+    "actions": {
+      "description": "Boutons liés à un skill.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "skill", "mode"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "skill": {
+            "description": "Dossier skills/<skill>/ du plugin.",
+            "$ref": "#/$defs/slug"
+          },
+          "mode": {
+            "description": "chat : ouvre le chat ; background : tourne en fond.",
+            "enum": ["chat", "background"]
+          },
+          "context": {
+            "description": "Type de contexte attendu, fourni par l'UI au déclenchement (ex. issue).",
+            "$ref": "#/$defs/slug"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "relativePath": {
+      "description": "Chemin relatif au dossier du plugin, sans remontée.",
+      "type": "string",
+      "minLength": 1,
+      "not": { "pattern": "(^/|^[A-Za-z]:|\\\\|(^|/)\\.\\.(/|$))" }
+    }
+  }
+}
