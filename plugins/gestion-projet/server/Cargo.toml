@@ -1,0 +1,20 @@
+[package]
+name = "cadence-gestion-projet"
+version = "0.1.0"
+description = "Serveur MCP du plugin Cadence « Gestion de projet » (issues, sprints, versions, PR GitHub)."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rmcp.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "http2"] }

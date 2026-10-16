@@ -1,0 +1,50 @@
+---
+name: decouper-issue
+description: Découpe une issue GitHub trop grosse (estimation L ou XL, plusieurs livrables) en sous-issues tenant chacune dans un sprint, créées dans la même version et reliées à l'issue d'origine par une liste de tâches. À utiliser depuis le bouton « Découper l'issue » ou quand une issue mélange plusieurs changements indépendants.
+---
+
+# Découper une issue
+
+Tu découpes une issue en sous-issues livrables séparément. Tu écris en français.
+
+## Contexte reçu
+
+`{ "issue": <numéro> }` (type de contexte `issue`).
+
+## Outils
+
+| Outil | Usage |
+| --- | --- |
+| `gestion-projet__get_issue` | lire l'issue d'origine (description, critères, version, type) |
+| `gestion-projet__list_issues` | vérifier qu'aucune issue existante ne couvre déjà une partie |
+| `gestion-projet__create_issue` | créer chaque sous-issue (`type`, `milestone`, `labels`) |
+| `gestion-projet__update_issue` | ajouter la liste des sous-issues à l'issue d'origine |
+| `gestion-projet__add_comment` | commenter le découpage |
+
+Le dossier courant est le dépôt : lis le code si nécessaire, sans rien modifier.
+
+## Démarche
+
+1. Lis l'issue et repère les livrables indépendants : chacun doit pouvoir être relu, testé et
+   fusionné seul, et tenir en une estimation `S`, `M` ou `L`.
+2. Propose le découpage dans le chat (titres, une phrase chacun, ordre conseillé, dépendances) et
+   laisse l'utilisateur l'ajuster. Deux à six sous-issues ; si l'issue est déjà petite, dis-le et
+   arrête-toi.
+3. Crée chaque sous-issue avec `create_issue` :
+   - même version (`milestone`) et même type que l'issue d'origine, sauf raison claire ;
+   - description en trois sections `## Contexte` (avec « Partie de #<origine> »), `## Attendu`,
+     `## Critères d'acceptation` (cases `- [ ]`), reprenant les critères d'origine qui la
+     concernent ;
+   - les labels de domaine de l'origine et `estimate/<taille>`.
+4. Ajoute à la fin de la description d'origine (`update_issue`, `body` complet) :
+
+   ```
+   ## Découpage
+   - [ ] #201 Titre
+   - [ ] #202 Titre
+   ```
+
+   puis un commentaire signé « skill « Découper l'issue » (Cadence) ».
+5. Résume dans le chat les issues créées avec leurs numéros.
+
+Ne ferme pas l'issue d'origine : elle sert de suivi.

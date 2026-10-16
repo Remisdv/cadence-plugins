@@ -1,0 +1,93 @@
+api = 1
+id = "gestion-projet"
+name = "Gestion de projet"
+version = "0.1.0"
+description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests, avec des skills pour compléter, implémenter et livrer."
+authors = ["Rémi Lhuillier"]
+icon = "icon.svg"
+min_cadence = "0.3.0"
+
+[server]
+bin = "cadence-gestion-projet"
+
+[ui]
+entry = "ui/index.html"
+
+[[ui.views]]
+id = "sprint"
+title = "Sprint en cours"
+icon = "sprint"
+section = "Pilotage"
+
+[[ui.views]]
+id = "issues"
+title = "Issues"
+icon = "issue"
+section = "Pilotage"
+
+[[ui.views]]
+id = "roadmap"
+title = "Roadmap"
+icon = "roadmap"
+section = "Planification"
+
+[[ui.views]]
+id = "versions"
+title = "Versions"
+icon = "tag"
+section = "Planification"
+
+[[ui.views]]
+id = "pull-requests"
+title = "Pull requests"
+icon = "pullRequest"
+section = "Code"
+
+[[secrets]]
+id = "github_token"
+label = "Jeton GitHub"
+
+[[setup]]
+id = "github"
+title = "Compte GitHub"
+view = "setup-github"
+
+[settings]
+schema = "settings.schema.json"
+
+# Boutons liés aux skills (ex-agents CTO, développeur, CEO et déploiement).
+
+[[actions]]
+id = "completer-issue"
+label = "Compléter l'issue"
+skill = "completer-issue"
+mode = "chat"
+context = "issue"
+
+[[actions]]
+id = "decouper-issue"
+label = "Découper l'issue"
+skill = "decouper-issue"
+mode = "chat"
+context = "issue"
+
+[[actions]]
+id = "implementer-issue"
+label = "Implémenter"
+skill = "implementer-issue"
+mode = "background"
+context = "issue"
+
+[[actions]]
+id = "proposer-issues"
+label = "Proposer des issues"
+skill = "proposer-issues"
+mode = "chat"
+context = "version"
+
+[[actions]]
+id = "preparer-release"
+label = "Préparer la release"
+skill = "preparer-release"
+mode = "background"
+context = "version"
