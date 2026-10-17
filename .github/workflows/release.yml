@@ -77,7 +77,9 @@ jobs:
           targets: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          # L'image du runner fait partie de la clé : des objets C compilés sur une glibc plus
+          # récente (ubuntu-latest) ne se lient pas sur ubuntu-22.04 (`__isoc23_sscanf`).
+          key: ${{ matrix.target }}-${{ matrix.runner }}
       - name: Tester et construire les serveurs
         shell: bash
         env:

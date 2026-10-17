@@ -91,7 +91,9 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          # L'image du runner fait partie de la clé : des objets C compilés sur une glibc plus
+          # récente (ubuntu-latest) ne se lient pas sur ubuntu-22.04 (`__isoc23_sscanf`).
+          key: ${{ matrix.target }}-${{ matrix.runner }}
       - name: Format
         if: matrix.target == 'linux-x86_64'
         run: cargo fmt --all --check
