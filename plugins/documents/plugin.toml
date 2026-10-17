@@ -6,6 +6,7 @@ description = "Cours PDF, Word, PowerPoint et Markdown rangés par matière et c
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
 category = "etudes"
+color = "green"
 min_cadence = "0.3.0"
 
 [server]

@@ -5,8 +5,10 @@
  *
  * Pour chaque plugin encore présent dans plugins/, retient sa dernière release publiée
  * (tag `<id>-v<version>`, assets `<id>-<version>.zip` et `.sha256`), relit le manifeste au tag
- * (git, sinon raw.githubusercontent.com) et l'empreinte publiée. La CI téléverse ensuite le
- * fichier sur la release fixe `catalog`.
+ * (git, sinon raw.githubusercontent.com), les sources de son serveur (outils MCP exposés) et
+ * l'empreinte publiée. Chaque entrée porte ce que Cadence montre sans télécharger l'archive :
+ * `official`, `category`, `color`, `icon`, `services`, `requires`, `views`, `actions`, `tools`,
+ * `targets`, `size`. La CI téléverse ensuite le fichier sur la release fixe `catalog`.
  */
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -19,8 +21,9 @@ import {
   type Catalog,
   type GithubRelease,
 } from "./lib/catalog";
-import { showFile } from "./lib/git";
+import { listFiles, showFile } from "./lib/git";
 import { DEFAULT_REPO, listPlugins, parseManifestText, REPO_ROOT, type Manifest } from "./lib/manifest";
+import { exposedTools } from "./lib/tools";
 
 const { values } = parseArgs({
   options: {
@@ -54,17 +57,35 @@ async function allReleases(): Promise<GithubRelease[]> {
   }
 }
 
+/** Fichier du dépôt au tag : git local, sinon raw.githubusercontent.com. */
+async function fileAt(tag: string, path: string): Promise<string> {
+  return showFile(tag, path) ?? (await fetchText(rawUrl(repo, tag, path)));
+}
+
+/** Sources Rust du serveur d'un plugin au tag (git local, sinon l'arbre du tag par l'API). */
+async function serverSources(tag: string, id: string): Promise<string[]> {
+  const dir = `plugins/${id}/server/src/`;
+  let paths = listFiles(tag, dir);
+  if (paths === null) {
+    const tree = JSON.parse(
+      await fetchText(`https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(tag)}?recursive=1`, true),
+    ) as { tree: { path: string; type: string }[] };
+    paths = tree.tree.filter((e) => e.type === "blob" && e.path.startsWith(dir)).map((e) => e.path);
+  }
+  return Promise.all(paths.filter((p) => p.endsWith(".rs")).map((p) => fileAt(tag, p)));
+}
+
 const ids = listPlugins().map((p) => p.id);
 const latest = latestReleases(await allReleases(), ids);
-const catalog: Catalog = { api: 1, plugins: [] };
+const catalog: Catalog = { api: 1, generated_at: new Date().toISOString().replace(/\.\d+Z$/, "Z"), plugins: [] };
 
 for (const release of latest) {
-  const path = `plugins/${release.id}/plugin.toml`;
-  const text = showFile(release.tag, path) ?? (await fetchText(rawUrl(repo, release.tag, path)));
-  const manifest = parseManifestText(text) as Manifest;
+  const manifest = parseManifestText(await fileAt(release.tag, `plugins/${release.id}/plugin.toml`)) as Manifest;
   const sha = parseSha256(await fetchText(release.shaUrl));
-  catalog.plugins.push(catalogEntry(repo, release, manifest, sha));
-  console.log(`✓ ${release.id} ${release.version}`);
+  const tools = manifest.server ? exposedTools(await serverSources(release.tag, release.id)) : [];
+  const entry = catalogEntry(repo, release, manifest, sha, tools);
+  catalog.plugins.push(entry);
+  console.log(`✓ ${release.id} ${release.version}${entry.official ? " (officiel)" : ""} · ${tools.length} outil(s) MCP`);
 }
 
 const out = resolve(REPO_ROOT, values.out!);

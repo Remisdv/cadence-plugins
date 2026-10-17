@@ -11,6 +11,8 @@ authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
 # Groupe du rail de Cadence : projet, etudes, code, donnees ou outils.
 category = "outils"
+# Couleur de la tuile (facultative) : clay, blue, green, purple, amber ou red.
+color = "purple"
 min_cadence = "0.3.0"
 
 # Outil externe dont le plugin se sert. Optionnel ici : le plugin marche sans, l'écran montre

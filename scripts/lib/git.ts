@@ -15,6 +15,12 @@ export function showFile(ref: string, path: string): string | null {
   return git(["show", `${ref}:${path}`]);
 }
 
+/** Fichiers suivis sous `path` à une révision (`git ls-tree -r`), ou `null` si la révision est inconnue. */
+export function listFiles(ref: string, path: string): string[] | null {
+  const out = git(["ls-tree", "-r", "--name-only", ref, "--", path]);
+  return out === null ? null : out.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
 /** Fichiers modifiés entre la base de fusion de `base` et HEAD. */
 export function changedFiles(base: string): string[] | null {
   const out = git(["diff", "--name-only", `${base}...HEAD`]);

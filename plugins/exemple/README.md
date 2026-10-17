@@ -41,6 +41,7 @@ assemblée par `pnpm package` (avec le binaire du serveur pour votre machine dan
 | --- | --- | --- |
 | `id`, `name`, `version`, `description`, `authors`, `min_cadence` | `exemple`, 0.1.0 | `id` = nom du dossier ; toute modification publiée monte `version` |
 | `category` | `outils` | groupe du rail : `projet`, `etudes`, `code`, `donnees`, `outils` |
+| `color` | `purple` | couleur de la tuile (facultative) : `clay`, `blue`, `green`, `purple`, `amber`, `red` |
 | `[[requires]]` | `git`, optionnel | outil externe que Cadence détecte, installe et connecte sur un clic ; `reason` est affichée |
 | `[server]` | `bin = "cadence-exemple"` | binaire construit par la CI pour 4 plateformes, rangé en `bin/<cible>/` |
 | `[ui]`, `[[ui.views]]` | vue `accueil` | `ui/index.html` dans un iframe isolé ; une vue = une entrée de la barre du plugin |

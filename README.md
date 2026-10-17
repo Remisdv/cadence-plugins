@@ -38,7 +38,7 @@ Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'
 plugins/<id>/            un dossier par plugin : plugin.toml, README.md, ui/, skills/, server/
 packages/sdk/            @cadence/plugin-sdk — SDK postMessage des écrans de plugin
 packages/ui/             @cadence/ui — tokens CSS et composants React du kit Cadence
-schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1, révision 1.2)
+schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1, révision 1.3)
 scripts/                 validate.ts, package.ts, catalog.ts, pending.ts
 .github/workflows/       ci.yml (pull requests) et release.yml (main)
 ```
@@ -89,6 +89,10 @@ Cadence, dans cet ordre :
 | `code` | Code |
 | `donnees` | Données |
 | `outils` | Outils |
+
+`color` (révision 1.3, facultative) fixe la couleur de la tuile du plugin dans le rail, parmi les
+couleurs du kit : `clay`, `blue`, `green`, `purple`, `amber`, `red`. Sans elle, Cadence tire une
+couleur stable de l'identifiant.
 
 ### Services fournis par Cadence
 
@@ -188,6 +192,14 @@ Sur `main`, la CI publie chaque plugin dont la version du manifeste n'a pas enco
 `<id>-v<version>` : build des serveurs sur les quatre plateformes, assemblage de
 `<id>-<version>.zip` + `.sha256`, release GitHub, puis régénération de `catalog.json` sur la
 release fixe `catalog`. Pour proposer un plugin, voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Chaque entrée de `catalog.json` décrit le plugin sans qu'il faille télécharger son archive :
+`category`, `color`, `icon` (icône du kit de la tuile), `services`, `requires`, `views`,
+`actions`, `tools` (outils MCP exposés aux IA, lus dans les sources du serveur au tag ; les outils
+`meta = ui_only()` en sont exclus), `targets`, `size`, et `official`. Ce dernier marque les
+plugins publiés par le mainteneur (liste `OFFICIAL_PLUGINS` de
+[`scripts/lib/catalog.ts`](scripts/lib/catalog.ts)) : badge « Officiel » dans Cadence et
+présélection à l'onboarding. Il n'est posé que pour le catalogue de ce dépôt, pas pour un fork.
 
 ## Licence
 

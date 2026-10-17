@@ -4,10 +4,18 @@ import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildZip, collectFiles, sha256 } from "./archive";
-import { catalogEntry, latestReleases, parseSha256, type GithubRelease } from "./catalog";
+import {
+  catalogEntry,
+  isOfficial,
+  latestReleases,
+  OFFICIAL_PLUGINS,
+  parseSha256,
+  type GithubRelease,
+} from "./catalog";
 import { effectiveRequires, listPlugins, parseReleaseTag, readManifest, type Manifest } from "./manifest";
 import { compareLooseVersion, compareSemver } from "./semver";
 import { checkSkill } from "./skill";
+import { exposedTools, scanTools } from "./tools";
 import { validatePlugin } from "./validate";
 
 const temps: string[] = [];
@@ -183,6 +191,10 @@ min_cadence = "0.3.0"
     expect(validatePlugin(fixture({ "plugin.toml": services(`["repos", "repos"]`) })).errors).toEqual([
       "services : valeur en double",
     ]);
+    // Couleur de la tuile (révision 1.3) : facultative, prise dans les couleurs du kit.
+    const color = (c: string) => `${base}category = "outils"\ncolor = "${c}"\n`;
+    expect(validatePlugin(fixture({ "plugin.toml": color("purple") })).errors).toEqual([]);
+    expect(validatePlugin(fixture({ "plugin.toml": color("rose") })).errors[0]).toContain("color : valeur parmi");
   });
 
   it("signale l'usage du service repos sans le déclarer", () => {
@@ -432,7 +444,7 @@ describe("catalogue", () => {
       tag_name: "documents-v0.2.0",
       draft: false,
       prerelease: false,
-      assets: [asset("documents-0.2.0.zip"), asset("documents-0.2.0.zip.sha256")],
+      assets: [{ ...asset("documents-0.2.0.zip"), size: 4096 }, asset("documents-0.2.0.zip.sha256")],
     },
     { tag_name: "documents-v0.3.0", draft: true, prerelease: false, assets: [] },
     { tag_name: "retire-v1.0.0", draft: false, prerelease: false, assets: [asset("retire-1.0.0.zip")] },
@@ -446,6 +458,7 @@ describe("catalogue", () => {
         version: "0.2.0",
         tag: "documents-v0.2.0",
         zipUrl: "https://dl/documents-0.2.0.zip",
+        zipSize: 4096,
         shaUrl: "https://dl/documents-0.2.0.zip.sha256",
       },
     ]);
@@ -462,23 +475,92 @@ describe("catalogue", () => {
       authors: ["Rémi Lhuillier"],
       icon: "icon.svg",
       category: "etudes",
+      color: "green",
       min_cadence: "0.3.0",
+      server: { bin: "cadence-documents" },
+      ui: {
+        entry: "ui/index.html",
+        views: [
+          { id: "bibliotheque", title: "Bibliothèque", icon: "book", section: "Cours" },
+          { id: "entrainement", title: "Entraînement" },
+        ],
+      },
+      actions: [{ id: "generer-qcm", label: "Générer un QCM", skill: "generer-qcm", mode: "background", context: "chapitre" }],
     } satisfies Manifest;
     const hash = "a".repeat(64);
-    expect(catalogEntry("RemiSDV/cadence-plugins", release!, manifest, parseSha256(`${hash}  documents-0.2.0.zip\n`))).toEqual({
+    const tools = ["list_documents", "read_pages"];
+    expect(
+      catalogEntry("RemiSDV/cadence-plugins", release!, manifest, parseSha256(`${hash}  documents-0.2.0.zip\n`), tools),
+    ).toEqual({
       id: "documents",
       name: "Documents",
       version: "0.2.0",
       description: "Cours.",
       authors: ["Rémi Lhuillier"],
+      official: true,
       category: "etudes",
+      color: "green",
+      icon: "book",
+      services: [],
       requires: [],
+      views: [
+        { id: "bibliotheque", title: "Bibliothèque", icon: "book" },
+        { id: "entrainement", title: "Entraînement", icon: "layers" },
+      ],
+      actions: [{ id: "generer-qcm", label: "Générer un QCM", mode: "background" }],
+      tools,
+      targets: ["windows-x86_64", "macos-aarch64", "macos-x86_64", "linux-x86_64"],
       icon_url: "https://raw.githubusercontent.com/RemiSDV/cadence-plugins/documents-v0.2.0/plugins/documents/icon.svg",
       url: "https://dl/documents-0.2.0.zip",
+      size: 4096,
       sha256: hash,
       min_cadence: "0.3.0",
     });
     expect(() => catalogEntry("r", release!, { ...manifest, version: "0.1.0" }, hash)).toThrow();
+
+    // Sans serveur ni vue : pas d'outils, pas de cible, couleur et icône laissées à Cadence.
+    const { server: _server, ui: _ui, color: _color, ...bare } = manifest;
+    const entry = catalogEntry("RemiSDV/cadence-plugins", release!, bare, hash, tools);
+    expect([entry.tools, entry.targets, entry.color, entry.icon, entry.views]).toEqual([[], null, null, null, []]);
+  });
+
+  it("marque officiels les plugins du mainteneur, sur le dépôt officiel seulement", () => {
+    expect(OFFICIAL_PLUGINS).toEqual(expect.arrayContaining(["documents", "gestion-projet", "exemple"]));
+    expect(isOfficial("RemiSDV/cadence-plugins", "gestion-projet")).toBe(true);
+    // GITHUB_REPOSITORY peut changer de casse.
+    expect(isOfficial("remisdv/Cadence-Plugins", "documents")).toBe(true);
+    expect(isOfficial("RemiSDV/cadence-plugins", "plugin-communaute")).toBe(false);
+    expect(isOfficial("quelquun/cadence-plugins", "documents")).toBe(false);
+
+    const [release] = latestReleases(releases, ["documents"]);
+    const manifest = {
+      api: 1,
+      id: "documents",
+      name: "Documents",
+      version: "0.2.0",
+      description: "Cours.",
+      authors: ["Test"],
+      category: "etudes",
+      min_cadence: "0.3.0",
+    } satisfies Manifest;
+    expect(catalogEntry("quelquun/fork", release!, manifest, "a".repeat(64)).official).toBe(false);
+    // Les plugins officiels existent bien dans le dépôt.
+    const ids = listPlugins().map((p) => p.id);
+    for (const id of OFFICIAL_PLUGINS) expect(ids, id).toContain(id);
+  });
+
+  it("lit les outils MCP d'un serveur rmcp, hors outils réservés à l'interface", () => {
+    const sources = [
+      `#[tool(description = "Incrémente.")]\n    async fn incrementer(&self) {}\n` +
+        `#[tool(description = "État pour l'écran.", meta = ui_only())]\n    async fn etat(&self) {}\n`,
+      `#[tool(name = "lire", description = "x")]\npub fn read_impl() {}\n`,
+    ];
+    expect(scanTools(sources)).toEqual([
+      { name: "incrementer", ui: false },
+      { name: "etat", ui: true },
+      { name: "lire", ui: false },
+    ]);
+    expect(exposedTools(sources)).toEqual(["incrementer", "lire"]);
   });
 
   it("liste les dépendances externes, services compris", () => {

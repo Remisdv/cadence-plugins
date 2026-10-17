@@ -18,6 +18,7 @@ import {
   type ToolId,
 } from "./manifest";
 import { checkSkill } from "./skill";
+import { scanTools } from "./tools";
 
 export interface Report {
   id: string;
@@ -122,15 +123,10 @@ function citedTools(pluginId: string, markdown: string): string[] {
 function serverTools(serverDir: string): Set<string> | null {
   const src = join(serverDir, "src");
   if (!existsSync(src)) return null;
-  const names = new Set<string>();
-  for (const file of walk(src).filter((f) => f.endsWith(".rs"))) {
-    const text = readFileSync(file, "utf8");
-    for (const m of text.matchAll(/#\[tool\(([^\]]*)\)\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([a-z0-9_]+)/g)) {
-      const explicit = /name\s*=\s*"([^"]+)"/.exec(m[1]!);
-      names.add(explicit ? explicit[1]! : m[2]!);
-    }
-  }
-  return names;
+  const sources = walk(src)
+    .filter((f) => f.endsWith(".rs"))
+    .map((f) => readFileSync(f, "utf8"));
+  return new Set(scanTools(sources).map((t) => t.name));
 }
 
 /** Fichiers texte d'un sous-dossier du plugin, avec leur chemin relatif. */

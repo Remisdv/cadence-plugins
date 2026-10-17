@@ -81,7 +81,9 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
 @RemiSDV relit le manifeste, les skills (ce qu'ils demandent à l'IA de faire), le serveur et les
 dépendances ajoutées. Il peut demander des changements ou refuser un plugin qui ne respecte pas
 ces règles. Une fois la PR fusionnée, la CI publie la release et met à jour le catalogue ; le
-plugin apparaît dans Cadence au prochain rafraîchissement du catalogue.
+plugin apparaît dans Cadence au prochain rafraîchissement du catalogue. Les plugins publiés par
+le mainteneur sont marqués « Officiel » (liste `OFFICIAL_PLUGINS` de `scripts/lib/catalog.ts`) ;
+les autres apparaissent dans « Communauté ».
 
 ## Paquets partagés
 
