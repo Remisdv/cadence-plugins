@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { buildZip, collectFiles, sha256 } from "./archive";
 import {
   catalogEntry,
@@ -12,9 +13,10 @@ import {
   parseSha256,
   type GithubRelease,
 } from "./catalog";
-import { effectiveRequires, listPlugins, parseReleaseTag, readManifest, type Manifest } from "./manifest";
+import { effectiveRequires, listPlugins, parseReleaseTag, readManifest, REPO_ROOT, type Manifest } from "./manifest";
 import { compareLooseVersion, compareSemver } from "./semver";
 import { checkSkill } from "./skill";
+import { TARGETS } from "./targets";
 import { exposedTools, scanTools } from "./tools";
 import { validatePlugin } from "./validate";
 
@@ -596,5 +598,39 @@ describe("catalogue", () => {
       },
       { tool: "node", min_version: "20", optional: true, auth: false, reason: "Convertir les diapositives", service: null },
     ]);
+  });
+});
+
+describe("workflows", () => {
+  const workflow = (name: string) => {
+    const text = readFileSync(join(REPO_ROOT, ".github", "workflows", name), "utf8");
+    return { text, yaml: parseYaml(text) as { jobs: Record<string, any> } };
+  };
+  const matrixTargets = (job: any) =>
+    (job.strategy.matrix.include as { target: string; rust: string }[]).map((t) => ({ id: t.target, rust: t.rust }));
+  const expected = TARGETS.map((t) => ({ id: t.id, rust: t.rust }));
+
+  it("construisent les serveurs sur les quatre cibles de l'archive", () => {
+    expect(matrixTargets(workflow("release.yml").yaml.jobs.build)).toEqual(expected);
+    expect(matrixTargets(workflow("ci.yml").yaml.jobs.rust)).toEqual(expected);
+    // Suffixe de l'exécutable copié dans bins/<cible>/ : celui que cherche l'assemblage.
+    const exe = (workflow("release.yml").yaml.jobs.build.strategy.matrix.include as { target: string; exe: string }[]).map(
+      (t) => [t.target, t.exe],
+    );
+    expect(exe).toEqual(TARGETS.map((t) => [t.id, t.exe]));
+  });
+
+  it("lisent les sorties de pnpm pending et assemblent chaque plugin", () => {
+    const release = workflow("release.yml");
+    for (const key of ["plugins", "count", "servers"]) {
+      expect(release.yaml.jobs.plan.outputs[key]).toBe(`\${{ steps.pending.outputs.${key} }}`);
+    }
+    expect(release.text).toContain("pnpm --silent pending --github-output");
+    expect(release.text).toContain("pnpm package \"$id\" --bins bins --out out");
+    // La release exige un binaire par cible : jamais --allow-missing-targets à l'assemblage.
+    expect(release.text.split("\n").filter((l) => /^\s*pnpm package /.test(l))).toEqual([
+      '            pnpm package "$id" --bins bins --out out',
+    ]);
+    expect(workflow("ci.yml").text).toContain("for manifest in plugins/*/plugin.toml");
   });
 });

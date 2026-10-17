@@ -33,7 +33,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # main ne passe pas par ci.yml : mêmes vérifications avant de publier.
       - run: pnpm validate
+      - run: pnpm typecheck
+      - run: pnpm test
       - id: pending
         run: pnpm --silent pending --github-output
 
@@ -44,23 +47,28 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
+        # Cibles de scripts/lib/targets.ts (vérifié par scripts/lib/scripts.test.ts).
         include:
           - target: windows-x86_64
             rust: x86_64-pc-windows-msvc
             runner: windows-latest
             exe: .exe
+            test: true
           - target: macos-aarch64
             rust: aarch64-apple-darwin
             runner: macos-latest
             exe: ""
+            test: true
           - target: macos-x86_64
             rust: x86_64-apple-darwin
-            runner: macos-latest # compilation croisée depuis un Mac Apple Silicon
+            runner: macos-latest # compilation croisée depuis un Mac Apple Silicon : pas de tests
             exe: ""
+            test: false
           - target: linux-x86_64
             rust: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-22.04 # glibc 2.35 : le binaire tourne aussi sur des distributions plus anciennes
             exe: ""
+            test: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - name: Construire les serveurs
+      - name: Tester et construire les serveurs
         shell: bash
         env:
           SERVERS: ${{ needs.plan.outputs.servers }}
@@ -80,6 +88,9 @@ jobs:
           while IFS= read -r row; do
             crate=$(echo "$row" | jq -r .crate)
             bin=$(echo "$row" | jq -r .bin)
+            if [ "${{ matrix.test }}" = "true" ]; then
+              cargo test --locked -p "$crate" --target ${{ matrix.rust }}
+            fi
             cargo build --release --locked -p "$crate" --bin "$bin" --target ${{ matrix.rust }}
             cp "target/${{ matrix.rust }}/release/${bin}${{ matrix.exe }}" "bins/${{ matrix.target }}/"
           done < <(echo "$SERVERS" | jq -c '.[]')
@@ -114,6 +125,8 @@ jobs:
           pattern: bins-*
           path: bins
           merge-multiple: true
+      # Sans --allow-missing-targets : un plugin à serveur sans binaire pour l'une des quatre
+      # cibles fait échouer la publication.
       - name: Assembler et créer les releases
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,25 +138,32 @@ jobs:
             version=$(echo "$row" | jq -r .version)
             name=$(echo "$row" | jq -r .name)
             tag=$(echo "$row" | jq -r .tag)
+            server=$(echo "$row" | jq -r '.server != null')
             pnpm package "$id" --bins bins --out out
             zip="out/${id}-${version}.zip"
+            notes="Plugin **$name** $version pour Cadence. Installation depuis le catalogue de l'app (Réglages › Plugins)."
+            if [ "$server" = "true" ]; then
+              notes="$notes L'archive contient le serveur pour windows-x86_64, macos-aarch64, macos-x86_64 et linux-x86_64."
+            fi
             gh release create "$tag" "$zip" "$zip.sha256" \
               --target "$GITHUB_SHA" \
               --title "$name $version" \
-              --notes "Plugin **$name** $version pour Cadence. Installation depuis le catalogue de l'app (Réglages › Plugins) ; l'archive contient les binaires windows-x86_64, macos-aarch64, macos-x86_64 et linux-x86_64."
+              --notes "$notes"
           done < <(echo "$PLUGINS" | jq -c '.[]')
 
   catalog:
     name: Catalogue
     needs: [plan, publish]
+    # À chaque push sur main (format du catalogue modifié, plugin retiré…) et après chaque
+    # publication ; jamais après une publication en échec.
     if: >-
       always() && needs.plan.result == 'success' &&
-      (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # tags : le manifeste est relu à chaque tag
+          fetch-depth: 0 # tags : le manifeste et les sources du serveur sont relus à chaque tag
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -165,6 +185,6 @@ jobs:
           if ! gh release view catalog >/dev/null 2>&1; then
             gh release create catalog --target "$GITHUB_SHA" --latest=false \
               --title "Catalogue des plugins" \
-              --notes "Index lu par Cadence : https://github.com/${GITHUB_REPOSITORY}/releases/download/catalog/catalog.json — régénéré par la CI à chaque release de plugin."
+              --notes "Index lu par Cadence : https://github.com/${GITHUB_REPOSITORY}/releases/download/catalog/catalog.json — régénéré par la CI à chaque push sur main."
           fi
           gh release upload catalog catalog.json --clobber

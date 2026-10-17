@@ -188,10 +188,17 @@ pnpm package documents --allow-missing-targets   # archive locale dans out/
 
 ## Publication
 
-Sur `main`, la CI publie chaque plugin dont la version du manifeste n'a pas encore de tag
-`<id>-v<version>` : build des serveurs sur les quatre plateformes, assemblage de
-`<id>-<version>.zip` + `.sha256`, release GitHub, puis régénération de `catalog.json` sur la
-release fixe `catalog`. Pour proposer un plugin, voir [CONTRIBUTING.md](CONTRIBUTING.md).
+Sur une pull request, la CI (`ci.yml`) valide les manifestes (version incrémentée comprise),
+vérifie les types et lance les tests, construit les UI, assemble l'archive de chaque plugin (sans
+binaires) et teste puis construit les serveurs sur les quatre cibles (`macos-x86_64` en
+compilation croisée, sans tests).
+
+Sur `main`, la release (`release.yml`) refait ces vérifications puis publie chaque plugin dont la
+version du manifeste n'a pas encore de tag `<id>-v<version>` : tests et build des serveurs sur les
+quatre plateformes (Linux sur Ubuntu 22.04, pour la glibc), assemblage de `<id>-<version>.zip` +
+`.sha256` avec un binaire par cible, release GitHub. `catalog.json` est ensuite régénéré à chaque
+push sur `main` et téléversé sur la release fixe `catalog` ; `workflow_dispatch` relance le tout à
+la main. Pour proposer un plugin, voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Chaque entrée de `catalog.json` décrit le plugin sans qu'il faille télécharger son archive :
 `category`, `color`, `icon` (icône du kit de la tuile), `services`, `requires`, `views`,
