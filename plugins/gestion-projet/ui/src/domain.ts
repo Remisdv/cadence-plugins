@@ -21,6 +21,7 @@ export interface Issue {
   comments: number;
   url: string;
   updated_at: string | null;
+  closed_at?: string | null;
   body?: string;
 }
 
@@ -58,7 +59,10 @@ export function issueKey(issue: Pick<Issue, "repo" | "number">): string {
 }
 
 /** Contexte des actions liées à une issue : le dépôt de l'issue et son numéro. */
-export function issueContext(issue: Pick<Issue, "repo" | "number">): { repo: string; issue: number } {
+export function issueContext(issue: Pick<Issue, "repo" | "number">): {
+  repo: string;
+  issue: number;
+} {
   return { repo: issue.repo, issue: issue.number };
 }
 
@@ -109,4 +113,136 @@ export type ViewId = keyof typeof views;
 
 export function isViewId(value: string): value is ViewId {
   return value in views;
+}
+
+/* ---------- Versions, sprint, pull requests, releases (réponses du serveur) ---------- */
+
+/** Version (milestone) telle que rendue par `list_milestones`, `create_milestone`, `sprint_summary`. */
+export interface Version {
+  title: string;
+  number: number;
+  /** `sprint` : milestone daté ; `palier` : sans date. */
+  kind: "sprint" | "palier";
+  state: "open" | "closed";
+  due_on: string | null;
+  /** Premier titre `# Nom` de la description. */
+  name: string | null;
+  /** Éléments de liste de la description (thèmes d'un palier). */
+  themes: string[];
+  description: string | null;
+  open_issues: number;
+  closed_issues: number;
+  closed_at?: string | null;
+  url: string;
+}
+
+export interface VersionList {
+  repo: string;
+  versions: Version[];
+}
+
+export interface BurndownPoint {
+  date: string;
+  remaining: number;
+}
+
+/** Rythme d'une version (`sprint_summary.pace`). */
+export interface Pace {
+  start_on: string | null;
+  due_on: string | null;
+  days_left: number | null;
+  length_days: number | null;
+  total: number;
+  closed: number;
+  /** 0 → 100 */
+  progress: number;
+  counts: Record<IssueStatus, number>;
+  velocity: number;
+  /** Retard (positif) ou avance (négatif) sur la droite idéale, en jours. */
+  delay_days: number;
+  burndown: BurndownPoint[];
+}
+
+/** Réponse de `sprint_summary` : `sprint` absent quand aucun milestone daté n'est ouvert. */
+export interface SprintSummary {
+  repo: string;
+  today: string;
+  sprint_length_days: number;
+  sprint: Version | null;
+  pace?: Pace;
+  issues?: Issue[];
+  message?: string;
+}
+
+export type PrState = "draft" | "open" | "merged" | "closed";
+export type CiState = "none" | "pending" | "success" | "failure";
+export type ReviewState = "approved" | "changes_requested" | "pending";
+
+/** Pull request telle que rendue par `list_pull_requests` / `get_pull_request`. */
+export interface PullRequest {
+  repo: string;
+  number: number;
+  title: string;
+  state: PrState;
+  head: string;
+  base: string;
+  author: string | null;
+  url: string;
+  milestone: string | null;
+  labels: string[];
+  closes: number[];
+  ci: { state: CiState; passed: number; total: number };
+  review: ReviewState | null;
+  approvals: number;
+  changes_requested: number;
+  reviewers: string[];
+  review_requested_at: string | null;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  comments: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PullRequestList {
+  repo: string | null;
+  repos: string[];
+  pull_requests: PullRequest[];
+  errors?: { repo: string; message: string }[];
+}
+
+export interface PullRequestDetail extends PullRequest {
+  body: string;
+  mergeable: "mergeable" | "conflicting" | "unknown" | null;
+  reviews: {
+    author: string | null;
+    state: string;
+    submitted_at: string | null;
+    body: string | null;
+  }[];
+  checks: {
+    name: string;
+    state: "success" | "failure" | "pending" | "skipped";
+    url: string | null;
+  }[];
+  files: { path: string; status: string; additions: number; deletions: number }[];
+}
+
+export interface Release {
+  tag: string;
+  version: string;
+  name: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  url: string;
+  created_at: string | null;
+  published_at: string | null;
+  author: string | null;
+}
+
+export interface ReleaseList {
+  repo: string;
+  tag_prefix: string;
+  releases: Release[];
 }

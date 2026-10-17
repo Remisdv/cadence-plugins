@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { cadence, isCadenceError, type Route } from "@cadence/plugin-sdk";
 import { Callout, Spinner } from "@cadence/ui";
-import { isViewId, views } from "./domain";
+import { isViewId } from "./domain";
 import { IssuesView } from "./views/IssuesView";
-import { PlaceholderView } from "./views/PlaceholderView";
+import { PullRequestsView } from "./views/PullRequestsView";
+import { RoadmapView } from "./views/RoadmapView";
 import { SetupReposView } from "./views/SetupReposView";
+import { SprintView } from "./views/SprintView";
+import { VersionsView } from "./views/VersionsView";
 
 /** Route affichée : fournie par Cadence à la poignée de main, puis suivie (barre du plugin). */
 export function App() {
@@ -35,10 +38,19 @@ export function App() {
   }
 
   const id = route.view;
-  if (id === "issues") return <IssuesView />;
-  if (id === "setup-depots") return <SetupReposView />;
-  if (id === "sprint" || id === "roadmap" || id === "versions" || id === "pull-requests") {
-    return <PlaceholderView id={id} meta={views[id]} />;
+  switch (id) {
+    case "sprint":
+      return <SprintView />;
+    case "issues":
+      return <IssuesView />;
+    case "roadmap":
+      return <RoadmapView />;
+    case "versions":
+      return <VersionsView params={route.params ?? {}} />;
+    case "pull-requests":
+      return <PullRequestsView />;
+    case "setup-depots":
+      return <SetupReposView />;
   }
   return (
     <div className="p-6">

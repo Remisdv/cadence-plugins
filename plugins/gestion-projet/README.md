@@ -18,10 +18,10 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
 - **Réglages globaux** (`settings.schema.json`, reçus en `CADENCE_SETTINGS` puis
   `notifications/cadence/settings`) :
 
-  | Clé | Défaut | Rôle |
-  | --- | --- | --- |
-  | `tag_prefix` | `v` | préfixe des tags de version (`v0.1.2`) |
-  | `sprint_length_days` | `14` | durée d'un nouveau sprint |
+  | Clé                  | Défaut | Rôle                                   |
+  | -------------------- | ------ | -------------------------------------- |
+  | `tag_prefix`         | `v`    | préfixe des tags de version (`v0.1.2`) |
+  | `sprint_length_days` | `14`   | durée d'un nouveau sprint              |
 
 - **Dépendances externes** : celles du service `repos`, que le plugin ne redéclare pas — `git`
   (requis, pour cloner et préparer les worktrees) et `gh` (optionnel, connecté, pour réutiliser
@@ -39,18 +39,22 @@ un milestone semver, **daté = sprint**, **sans date = palier** de roadmap dont 
 Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChange`) : un dépôt, ou
 « Tous les dépôts » pour une vue agrégée avec une colonne dépôt.
 
-| Vue | Section | État |
-| --- | --- | --- |
-| Sprint en cours (`sprint`) | Pilotage | à venir (TODO) |
-| Issues (`issues`) | Pilotage | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter » |
-| Roadmap (`roadmap`) | Planification | à venir (TODO) |
-| Versions (`versions`) | Planification | à venir (TODO) |
-| Pull requests (`pull-requests`) | Code | à venir (TODO) |
-| Dépôts suivis (`setup-depots`) | étape de setup | dépôts suivis, dépôts du compte à suivre |
+| Vue                             | Section        | État                                                                                                                                                                                                   |
+| ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Sprint en cours (`sprint`)      | Pilotage       | KPI (portée, avancement, restantes, rythme, retard), kanban par état, burndown, progression (`sprint_summary`) ; un sprint par dépôt en mode « Tous les dépôts »                                       |
+| Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
+| Roadmap (`roadmap`)             | Planification  | versions livrées et en cours, sprints planifiés puis paliers (nom, thèmes, avancement), bouton « Proposer des issues » sur un palier                                                                   |
+| Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
+| Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
+| Dépôts suivis (`setup-depots`)  | étape de setup | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
+
+Paramètres de route de `versions` : `{ "repo", "version" }` ouvre le détail d'une version (liens
+depuis la Roadmap et le Sprint en cours).
 
 ```sh
 pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données d'exemple
-# ?view=setup-depots : étape de setup ; ?repo=all : « Tous les dépôts »
+# ?view=sprint|roadmap|versions|pull-requests|setup-depots ; &version=0.1.2 : détail d'une version
+# ?repo=all : « Tous les dépôts »
 ```
 
 ## Actions et skills
@@ -58,13 +62,13 @@ pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données 
 Le contexte d'une action porte toujours le dépôt concerné (`repo`, celui de l'issue ou de la
 version).
 
-| Action | Skill | Mode | Contexte | Ex-agent |
-| --- | --- | --- | --- | --- |
-| Compléter l'issue | `completer-issue` | chat | `{ "repo": "me/app", "issue": 42 }` | CTO |
-| Découper l'issue | `decouper-issue` | chat | `{ "repo": "me/app", "issue": 42 }` | — |
-| Implémenter | `implementer-issue` | fond | `{ "repo": "me/app", "issue": 42 }` | développeur |
-| Proposer des issues | `proposer-issues` | chat | `{ "repo": "me/app", "version": "0.2.0" }` | CEO |
-| Préparer la release | `preparer-release` | fond | `{ "repo": "me/app", "version": "0.1.2" }` | déploiement |
+| Action              | Skill               | Mode | Contexte                                   | Ex-agent    |
+| ------------------- | ------------------- | ---- | ------------------------------------------ | ----------- |
+| Compléter l'issue   | `completer-issue`   | chat | `{ "repo": "me/app", "issue": 42 }`        | CTO         |
+| Découper l'issue    | `decouper-issue`    | chat | `{ "repo": "me/app", "issue": 42 }`        | —           |
+| Implémenter         | `implementer-issue` | fond | `{ "repo": "me/app", "issue": 42 }`        | développeur |
+| Proposer des issues | `proposer-issues`   | chat | `{ "repo": "me/app", "version": "0.2.0" }` | CEO         |
+| Préparer la release | `preparer-release`  | fond | `{ "repo": "me/app", "version": "0.1.2" }` | déploiement |
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
 ou modifient le code demandent d'abord un worktree avec l'outil du cœur `cadence__repo_checkout`
@@ -77,23 +81,29 @@ en brouillon.
 
 Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dépôt suivi.
 
-| Outil | État |
-| --- | --- |
-| `get_account`, `list_account_repos` (réservés à l'UI) | ✓ compte connecté, dépôts du compte à suivre |
-| `get_repository` | ✓ branche par défaut, préfixe de tag |
-| `list_issues` | ✓ `repo` absent : tous les dépôts suivis (chaque issue porte `repo`, erreurs par dépôt dans `errors`) |
-| `get_issue`, `create_issue`, `update_issue` | ✓ API REST GitHub |
-| `add_comment` | ✓ |
-| `list_milestones` | ✓ versions (sprint / palier) |
-| `create_milestone`, `update_milestone` | TODO |
-| `list_pull_requests` (`repo` optionnel), `get_pull_request`, `create_pull_request`, `mark_pull_request_ready` | TODO |
-| `list_releases`, `create_release` | TODO |
-| `sprint_summary` (réservé à l'UI) | TODO |
+| Outil                                                 | État                                                                                                                                                         |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `get_account`, `list_account_repos` (réservés à l'UI) | ✓ compte connecté, dépôts du compte à suivre                                                                                                                 |
+| `get_repository`                                      | ✓ branche par défaut, préfixe de tag                                                                                                                         |
+| `list_issues`                                         | ✓ `repo` absent : tous les dépôts suivis (chaque issue porte `repo`, erreurs par dépôt dans `errors`)                                                        |
+| `get_issue`, `create_issue`, `update_issue`           | ✓ API REST GitHub                                                                                                                                            |
+| `add_comment`                                         | ✓                                                                                                                                                            |
+| `list_milestones`                                     | ✓ versions (sprint / palier), nom (`# Nom`) et thèmes (éléments de liste) lus dans la description                                                            |
+| `create_milestone`                                    | ✓ échéance `AAAA-MM-JJ` (sprint) ou aucune (palier) ; refuse un titre existant                                                                               |
+| `update_milestone`                                    | ✓ titre, description, échéance (`""` la retire), `state: closed` pour clore                                                                                  |
+| `list_pull_requests` (`repo` optionnel)               | ✓ GraphQL : ouvertes (50) et/ou 30 dernières fermées, CI du dernier commit, revues, issues fermées ; erreurs par dépôt dans `errors`                         |
+| `get_pull_request`                                    | ✓ description, checks détaillés, revues, fichiers (sans patchs)                                                                                              |
+| `create_pull_request`                                 | ✓ brouillon par défaut, `base` = branche par défaut ; refuse la branche par défaut comme `head`                                                              |
+| `mark_pull_request_ready`                             | ✓ mutation GraphQL `markPullRequestReadyForReview`                                                                                                           |
+| `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
+| `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
+| `sprint_summary` (réservé à l'UI)                     | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; début du sprint = échéance − `sprint_length_days` |
 
-Les outils TODO répondent par une erreur d'outil explicite ; les skills prévoient un repli
-(`gh`, URL de comparaison).
+Les échéances sont envoyées à midi UTC pour que GitHub garde le même jour. Le burndown compte la
+portée actuelle du milestone dès le premier jour (GitHub ne date pas l'entrée d'une issue).
 
-Réseau : `api.github.com` uniquement (ou `GITHUB_API_URL`).
+Réseau : `api.github.com` uniquement (REST et `/graphql` ; ou `GITHUB_API_URL`, GraphQL sur
+`…/api/graphql` pour GitHub Enterprise).
 
 ## Développement
 

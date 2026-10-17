@@ -26,6 +26,7 @@ import {
   type Issue,
   type IssueList,
 } from "../domain";
+import { NoRepos, ToolError } from "../components";
 import { useRepos } from "../useRepos";
 import { useTool } from "../useTool";
 
@@ -60,9 +61,9 @@ export function IssuesView() {
     }
   };
   const complete = (issue: Issue) =>
-    cadence.runAction("completer-issue", issueContext(issue)).catch((e: unknown) =>
-      cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
-    );
+    cadence
+      .runAction("completer-issue", issueContext(issue))
+      .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
 
   // Une réponse d'une autre sélection (le temps du rechargement) n'est pas affichée.
   const current = data && (repo ? data.repo === repo : data.repo === null) ? data : null;
@@ -77,7 +78,9 @@ export function IssuesView() {
         <Icon name="issue" size={17} className="text-clay" />
         <h1 className="font-display text-title">Issues</h1>
         {repo && <span className="mono text-caption text-tx3">{repo}</span>}
-        {all && repos && <span className="text-caption text-tx3">Tous les dépôts · {repos.length}</span>}
+        {all && repos && (
+          <span className="text-caption text-tx3">Tous les dépôts · {repos.length}</span>
+        )}
         <div className="grow" />
         <div role="tablist" aria-label="État" className="flex gap-1 rounded-control bg-p2 p-0.5">
           {filters.map((f) => (
@@ -125,7 +128,9 @@ export function IssuesView() {
           </Callout>
         ) : null}
         {current && issues.length === 0 && !error && (
-          <Card className="p-6 text-center text-body-sm text-tx3">Aucune issue dans ce filtre.</Card>
+          <Card className="p-6 text-center text-body-sm text-tx3">
+            Aucune issue dans ce filtre.
+          </Card>
         )}
         <div className="flex flex-col gap-5">
           {byStatus.map((group) => (
@@ -214,40 +219,17 @@ function IssueRow({
           <Button size="xs" variant="ghost" icon="sparkle" onClick={onComplete}>
             Compléter
           </Button>
-          <Button size="xs" variant="secondary" icon="play" onClick={onImplement} disabled={running}>
+          <Button
+            size="xs"
+            variant="secondary"
+            icon="play"
+            onClick={onImplement}
+            disabled={running}
+          >
             Implémenter
           </Button>
         </div>
       )}
     </div>
-  );
-}
-
-function NoRepos() {
-  return (
-    <Card className="flex flex-col items-center gap-3 p-6 text-center">
-      <span className="text-body-sm text-tx2">Aucun dépôt suivi par Gestion de projet.</span>
-      <Button size="sm" variant="secondary" icon="github" onClick={() => void cadence.navigate("setup-depots")}>
-        Choisir des dépôts
-      </Button>
-    </Card>
-  );
-}
-
-function ToolError({ message }: { message: string }) {
-  const needsRepos = /non suivi|Aucun dépôt suivi/.test(message);
-  return (
-    <Callout tone="danger" className="mb-4">
-      <div className="flex flex-col gap-2">
-        <span>{message}</span>
-        {needsRepos && (
-          <span>
-            <Button size="xs" variant="secondary" icon="github" onClick={() => void cadence.navigate("setup-depots")}>
-              Dépôts suivis
-            </Button>
-          </span>
-        )}
-      </div>
-    </Callout>
   );
 }
