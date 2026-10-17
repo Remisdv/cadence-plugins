@@ -1,11 +1,12 @@
 api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
-version = "0.2.0"
+version = "0.3.0"
 description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
 category = "projet"
+color = "blue"
 # Connexion GitHub, dépôts suivis, sélecteur de dépôt, clone et worktree à la demande : fournis par Cadence.
 # Le service déclare lui-même ses outils externes (git requis, gh optionnel et connecté) : pas de [[requires]].
 services = ["repos"]
