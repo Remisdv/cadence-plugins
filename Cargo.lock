@@ -148,6 +148,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadence-exemple"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cadence-gestion-projet"
 version = "0.2.0"
 dependencies = [

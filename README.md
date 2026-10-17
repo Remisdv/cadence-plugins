@@ -2,8 +2,8 @@
 
 Dépôt public des plugins de [Cadence](https://github.com/RemiSDV), l'hôte de bureau qui relie les IA
 de code (Claude Code, Codex CLI, OpenCode) à des **plugins** : écrans, skills et outils MCP. On y
-trouve les deux plugins officiels, le SDK des écrans de plugin, le kit UI de Cadence et l'outillage
-qui publie chaque plugin et le catalogue lu par l'app.
+trouve les plugins officiels (dont un plugin d'exemple pour les auteurs), le SDK des écrans de
+plugin, le kit UI de Cadence et l'outillage qui publie chaque plugin et le catalogue lu par l'app.
 
 Les plugins officiels vivent ici comme n'importe quel plugin tiers et utilisent la même API ;
 ils ne sont pas livrés dans l'app.
@@ -30,6 +30,7 @@ Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'
 | --- | --- | --- |
 | **Gestion de projet** | [`plugins/gestion-projet`](plugins/gestion-projet) | issues GitHub, kanban, roadmap, sprints, versions, pull requests ; skills « Compléter l'issue », « Implémenter », « Proposer des issues », « Préparer la release » |
 | **Documents** | [`plugins/documents`](plugins/documents) | cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre ; réponses citées (document + page), QCM, questions ouvertes corrigées, flashcards |
+| **Exemple** | [`plugins/exemple`](plugins/exemple) | plugin de référence pour les auteurs : un compteur qui utilise chaque brique de l'API (manifeste complet, serveur MCP, écran React, réglages, étape de configuration, action et skill, dépendance externe) |
 
 ## Contenu du dépôt
 

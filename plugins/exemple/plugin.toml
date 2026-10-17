@@ -1,0 +1,52 @@
+# Plugin de référence pour les auteurs de plugins Cadence : chaque section du manifeste y est
+# utilisée une fois. Décrit par schema/plugin.schema.json (API 1) ; vérifié par `pnpm validate`.
+
+api = 1
+# Identifiant unique dans le catalogue, égal au nom du dossier plugins/<id>/.
+id = "exemple"
+name = "Exemple"
+version = "0.1.0"
+description = "Plugin de référence pour les auteurs : un compteur avec un outil MCP, un écran React, des réglages, une étape de configuration et un skill."
+authors = ["Rémi Lhuillier"]
+icon = "icon.svg"
+# Groupe du rail de Cadence : projet, etudes, code, donnees ou outils.
+category = "outils"
+min_cadence = "0.3.0"
+
+# Outil externe dont le plugin se sert. Optionnel ici : le plugin marche sans, l'écran montre
+# alors comment proposer l'installation (cadence.tools.ensure). Le serveur lit son chemin dans
+# CADENCE_TOOLS, il ne le lance jamais par son nom.
+[[requires]]
+tool = "git"
+optional = true
+reason = "Montrer comment un plugin trouve un outil externe détecté par Cadence"
+
+# Serveur MCP natif, construit par la CI depuis server/ (crate Rust, binaire du même nom).
+[server]
+bin = "cadence-exemple"
+
+# Écrans web, servis dans un iframe isolé. Chaque vue est une entrée de la barre du plugin.
+[ui]
+entry = "ui/index.html"
+
+[[ui.views]]
+id = "accueil"
+title = "Accueil"
+icon = "sparkle"
+
+# Étape de configuration montrée à l'onboarding (et à l'installation) : une route de l'écran.
+[[setup]]
+id = "prenom"
+title = "Votre prénom"
+view = "setup-prenom"
+
+# Réglages globaux, rendus par Cadence (Réglages › Plugins) et transmis au serveur.
+[settings]
+schema = "settings.schema.json"
+
+# Bouton lié à un skill (skills/saluer/SKILL.md). chat : ouvre le chat ; background : en fond.
+[[actions]]
+id = "saluer"
+label = "Saluer"
+skill = "saluer"
+mode = "chat"

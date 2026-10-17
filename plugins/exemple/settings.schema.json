@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Réglages d'Exemple (globaux)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prenom": {
+      "type": "string",
+      "title": "Prénom",
+      "description": "Saisi à l'étape « Votre prénom » ; le skill « Saluer » s'en sert.",
+      "default": ""
+    },
+    "pas": {
+      "type": "integer",
+      "title": "Pas du compteur",
+      "description": "Valeur ajoutée au compteur à chaque incrément.",
+      "default": 1,
+      "minimum": 1,
+      "maximum": 10
+    }
+  }
+}
