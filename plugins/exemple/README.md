@@ -45,6 +45,7 @@ assemblée par `pnpm package` (avec le binaire du serveur pour votre machine dan
 | `[[requires]]` | `git`, optionnel | outil externe que Cadence détecte, installe et connecte sur un clic ; `reason` est affichée |
 | `[server]` | `bin = "cadence-exemple"` | binaire construit par la CI pour 4 plateformes, rangé en `bin/<cible>/` |
 | `[ui]`, `[[ui.views]]` | vue `accueil` | `ui/index.html` dans un iframe isolé ; une vue = une entrée de la barre du plugin |
+| `ui.dev_url` | `http://localhost:5181` | plugin installé en mode développement : Cadence charge ce serveur de dev (rechargement à chaud) ; il doit accepter toutes les origines (`server.cors: true`) |
 | `[[setup]]` | `setup-prenom` | étape montrée à l'onboarding : une route de l'écran, pas forcément une vue de la barre |
 | `[settings]` | `settings.schema.json` | sous-ensemble de JSON Schema (string, number, integer, boolean, enum ; `title` obligatoire) |
 | `[[actions]]` | `saluer`, mode `chat` | bouton qui lance un skill ; `background` le fait tourner en fond |

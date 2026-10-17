@@ -119,6 +119,11 @@
           "$ref": "#/$defs/relativePath",
           "pattern": "^ui/.+\\.html$"
         },
+        "dev_url": {
+          "description": "Serveur de dev local de l'interface (Vite…), chargé à la place de `ui/` quand le plugin est installé en mode développement dans Cadence ≥ 0.3.0. Ignoré pour une archive ou le catalogue.",
+          "type": "string",
+          "pattern": "^http://(localhost|127\\.0\\.0\\.1):[0-9]{1,5}(/.*)?$"
+        },
         "views": {
           "description": "Entrées de la barre du plugin.",
           "type": "array",

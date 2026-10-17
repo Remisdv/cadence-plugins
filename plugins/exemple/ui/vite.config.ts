@@ -7,6 +7,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss()],
+  // `ui.dev_url` du manifeste : l'iframe de Cadence est isolée (origine opaque « null »),
+  // le serveur de dev doit donc accepter toutes les origines.
+  server: { port: 5181, strictPort: true, cors: true },
   build: { outDir: "dist", emptyOutDir: true },
   test: { environment: "node", include: ["src/**/*.test.ts"], passWithNoTests: true },
 });

@@ -30,6 +30,9 @@ bin = "cadence-exemple"
 # Écrans web, servis dans un iframe isolé. Chaque vue est une entrée de la barre du plugin.
 [ui]
 entry = "ui/index.html"
+# Plugin installé en mode développement dans Cadence (Réglages › Plugins › dossier local) :
+# l'iframe charge ce serveur de dev (`pnpm --dir plugins/exemple/ui dev`), rechargé à chaud.
+dev_url = "http://localhost:5181"
 
 [[ui.views]]
 id = "accueil"
