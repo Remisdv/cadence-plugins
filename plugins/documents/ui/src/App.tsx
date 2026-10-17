@@ -35,7 +35,7 @@ export function App() {
     case "bibliotheque":
       return <LibraryView />;
     case "entrainement":
-      return <TrainingView />;
+      return <TrainingView params={route.params} />;
     case "setup-dossier":
       return <SetupFolderView />;
     default:

@@ -22,7 +22,12 @@ il gère lui-même son contexte (matières et chapitres).
 | Vue | État |
 | --- | --- |
 | Bibliothèque (`bibliotheque`) | matières, chapitres, documents ; import de fichiers ; « Poser une question » par chapitre |
-| Entraînement (`entrainement`) | liste des entraînements enregistrés (exercices interactifs : TODO) |
+| Entraînement (`entrainement`) | entraînements enregistrés, filtrés par type ; **QCM** à passer (une question à la fois, touches 1 à 9, correction par le serveur avec explication et source) ; **flashcards** à retourner (espace, puis 1 « À revoir » / 2 « Je savais »), tour de rattrapage des cartes manquées ; **questions ouvertes** lancées dans le chat ; **historique des scores**. Paramètre de route `quiz` : ouvre un entraînement |
+
+Depuis la bibliothèque, le menu « S'entraîner » d'un chapitre lance « Générer un QCM »,
+« Flashcards » ou « Questions ouvertes ». L'écran se met à jour sur les événements du serveur
+(`notifications/cadence/event`) : `quiz-saved` (`{ id, kind }`) quand un entraînement est
+enregistré, `result-saved` (`{ quiz, score, total }`) quand un score l'est.
 
 ## Actions et skills
 
@@ -41,8 +46,10 @@ il gère lui-même son contexte (matières et chapitres).
 | `import_document` | extraire le texte d'un fichier et le ranger (matière et chapitre créés au besoin) |
 | `read_pages` | texte d'une plage de pages depuis le cache (20 par appel) |
 | `search` | recherche plein texte sans accents ni casse : quelles pages lire |
-| `save_quiz`, `list_quizzes`, `get_quiz` | entraînements générés |
-| `save_result` | réponses corrigées et score |
+| `save_quiz`, `list_quizzes`, `get_quiz` | entraînements générés ; `save_quiz` vérifie le format des éléments (QCM : `question`, `choices`, `answer` ; flashcards : `front`, `back` ; questions ouvertes : `question`) |
+| `submit_qcm` | corrige un QCM à partir des indices choisis (1 point par bonne réponse), enregistre le score et renvoie la correction |
+| `save_result` | réponses corrigées et score (questions ouvertes, tour de flashcards) |
+| `list_results` | historique des scores, les plus récents d'abord |
 
 Pages : une page de PDF ; une **diapositive** de PowerPoint ; pour Word, Markdown et texte, un
 **bloc d'environ 3000 caractères** coupé entre deux paragraphes.
@@ -50,7 +57,8 @@ Pages : une page de PDF ; une **diapositive** de PowerPoint ; pour Word, Markdow
 ## Données
 
 Dans `CADENCE_DATA_DIR` (`<données de l'app>/plugins-data/documents/`) : `library.json`,
-`cache/<document>.json` (texte par page), `quizzes/`, `results/`. Les fichiers d'origine ne sont
+`cache/<document>.json` (texte par page), `quizzes/<quiz>.json`, `results/<résultat>.json` (score,
+total, réponses ou correction, bilan, rang d'enregistrement `seq`). Les fichiers d'origine ne sont
 pas copiés : chaque document garde leur chemin absolu. Aucun accès réseau. L'IA tourne dans un
 dossier neutre de Cadence et lit les cours par les outils ci-dessus.
 

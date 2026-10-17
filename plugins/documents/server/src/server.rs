@@ -11,10 +11,11 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, Peer, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, ContentBlock, CustomNotification, Implementation, ServerCapabilities, ServerConfig,
+        ServerNotification,
     },
     service::NotificationContext,
     tool, tool_handler, tool_router,
@@ -33,6 +34,19 @@ type ToolResult = Result<CallToolResult, McpError>;
 
 /// Notification de Cadence : réglages globaux modifiés.
 pub const SETTINGS_NOTIFICATION: &str = "notifications/cadence/settings";
+/// Notification vers Cadence, relayée aux écrans du plugin (`cadence.on(event, …)`).
+pub const EVENT_NOTIFICATION: &str = "notifications/cadence/event";
+
+/// Événement pour l'écran Entraînement : `quiz-saved` (`{ id, kind }`) ou `result-saved`
+/// (`{ quiz, score, total }`). Sans écran ouvert, Cadence l'ignore ; un échec n'est que journalisé.
+async fn emit(peer: &Peer<RoleServer>, event: &str, data: Value) {
+    let params = json!({ "event": event, "data": data });
+    let notification =
+        ServerNotification::CustomNotification(CustomNotification::new(EVENT_NOTIFICATION, Some(params)));
+    if let Err(err) = peer.send_notification(notification).await {
+        tracing::warn!(event, "événement non envoyé : {err}");
+    }
+}
 
 /// Dossier des cours d'après les réglages (`dossier_cours`) : `{ "settings": {…} }` ou l'objet
 /// seul. Vide ou relatif (ancien réglage « relatif à l'espace ») : aucun dossier.
@@ -132,6 +146,23 @@ pub struct ListQuizzesParams {
     pub subject: Option<String>,
     pub chapter: Option<String>,
     pub kind: Option<QuizKind>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitQcmParams {
+    /// Identifiant du QCM (voir list_quizzes).
+    pub quiz: String,
+    /// Réponse à chaque question, dans l'ordre : indice du choix (à partir de 0), ou null pour une
+    /// question passée. Les questions au-delà de la liste comptent comme passées.
+    pub answers: Vec<Option<u32>>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ListResultsParams {
+    /// Identifiant d'un entraînement ; tous si absent.
+    pub quiz: Option<String>,
+    /// 50 résultats par défaut, 200 au plus.
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -312,9 +343,13 @@ impl Documents {
     #[tool(
         description = "Enregistre un entraînement généré (QCM, questions ouvertes ou flashcards) pour l'écran Entraînement. Chaque élément de `items` porte sa source (document + page)."
     )]
-    async fn save_quiz(&self, Parameters(p): Parameters<SaveQuizParams>) -> ToolResult {
-        respond(
-            self.with(move |lib| {
+    async fn save_quiz(
+        &self,
+        Parameters(p): Parameters<SaveQuizParams>,
+        peer: Peer<RoleServer>,
+    ) -> ToolResult {
+        let saved = self
+            .with(move |lib| {
                 let quiz = lib.save_quiz(
                     p.kind,
                     &p.title,
@@ -325,8 +360,16 @@ impl Documents {
                 )?;
                 Ok(json!({ "quiz": quiz }))
             })
-            .await,
-        )
+            .await;
+        if let Ok(v) = &saved {
+            emit(
+                &peer,
+                "quiz-saved",
+                json!({ "id": v["quiz"]["id"], "kind": v["quiz"]["kind"] }),
+            )
+            .await;
+        }
+        respond(saved)
     }
 
     #[tool(
@@ -365,9 +408,13 @@ impl Documents {
     }
 
     #[tool(description = "Enregistre le résultat d'un entraînement : score, réponses corrigées et bilan.")]
-    async fn save_result(&self, Parameters(p): Parameters<SaveResultParams>) -> ToolResult {
-        respond(
-            self.with(move |lib| {
+    async fn save_result(
+        &self,
+        Parameters(p): Parameters<SaveResultParams>,
+        peer: Peer<RoleServer>,
+    ) -> ToolResult {
+        let saved = self
+            .with(move |lib| {
                 let r = lib.save_result(
                     &p.quiz,
                     p.score,
@@ -377,9 +424,50 @@ impl Documents {
                 )?;
                 Ok(json!({ "result": r }))
             })
+            .await;
+        if let Ok(v) = &saved {
+            emit(&peer, "result-saved", result_event(&v["result"])).await;
+        }
+        respond(saved)
+    }
+
+    #[tool(
+        description = "Corrige un QCM enregistré à partir des réponses de l'étudiant (indice du choix, à partir de 0 ; null pour une question passée) : 1 point par bonne réponse. Enregistre le score et renvoie la correction question par question (bonne réponse, explication, source)."
+    )]
+    async fn submit_qcm(
+        &self,
+        Parameters(p): Parameters<SubmitQcmParams>,
+        peer: Peer<RoleServer>,
+    ) -> ToolResult {
+        let graded = self
+            .with(move |lib| {
+                let (result, corrections) = lib.grade_qcm(&p.quiz, &p.answers)?;
+                Ok(json!({ "result": result, "corrections": corrections }))
+            })
+            .await;
+        if let Ok(v) = &graded {
+            emit(&peer, "result-saved", result_event(&v["result"])).await;
+        }
+        respond(graded)
+    }
+
+    #[tool(
+        description = "Historique des scores, les plus récents d'abord : entraînement (titre, type, matière, chapitre), score, total, pourcentage et date. Sert à repérer les notions à revoir."
+    )]
+    async fn list_results(&self, Parameters(p): Parameters<ListResultsParams>) -> ToolResult {
+        respond(
+            self.with(move |lib| {
+                let limit = p.limit.unwrap_or(50).clamp(1, 200) as usize;
+                Ok(json!({ "results": lib.history(p.quiz.as_deref(), limit)? }))
+            })
             .await,
         )
     }
+}
+
+/// Charge de l'événement `result-saved`.
+fn result_event(result: &Value) -> Value {
+    json!({ "quiz": result["quiz"], "score": result["score"], "total": result["total"] })
 }
 
 #[tool_handler]
@@ -390,7 +478,7 @@ impl ServerHandler for Documents {
             .with_instructions(
                 "Bibliothèque de cours du plugin Cadence « Documents » : Matière → Chapitre → Documents. \
                  Lisez les documents à la demande (search puis read_pages) et citez toujours document et page. \
-                 Les entraînements générés s'enregistrent avec save_quiz, les résultats avec save_result.",
+                 Les entraînements générés s'enregistrent avec save_quiz, les résultats avec save_result                  (submit_qcm corrige un QCM) ; list_results donne l'historique des scores.",
             )
     }
 
@@ -412,8 +500,138 @@ impl ServerHandler for Documents {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use rmcp::ServiceExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
     use super::*;
     use crate::extract::tests::pptx;
+
+    /// Session MCP en mémoire, côté Cadence : envoie `messages` (JSON-RPC, une ligne chacun) l'un
+    /// après l'autre, en attendant la réponse de chaque requête (rmcp traite les requêtes en
+    /// parallèle), et renvoie tout ce que le serveur a écrit.
+    async fn session(server: Documents, messages: &[Value]) -> Vec<Value> {
+        let (client, transport) = tokio::io::duplex(256 * 1024);
+        tokio::spawn(async move {
+            if let Ok(service) = server.serve(tokio::io::split(transport)).await {
+                let _ = service.waiting().await;
+            }
+        });
+        let (read, mut write) = tokio::io::split(client);
+        let mut lines = BufReader::new(read).lines();
+        let init = json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": {},
+                        "clientInfo": { "name": "cadence-test", "version": "0.0.0" } }
+        });
+        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let mut received = Vec::new();
+        for message in [init, initialized].iter().chain(messages) {
+            write
+                .write_all(
+                    format!(
+                        "{message}
+"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let Some(id) = message.get("id") else { continue };
+            loop {
+                let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+                    .await
+                    .expect("pas de réponse du serveur")
+                    .unwrap()
+                    .expect("flux fermé");
+                let reply: Value = serde_json::from_str(&line).unwrap();
+                let done = &reply["id"] == id;
+                received.push(reply);
+                if done {
+                    break;
+                }
+            }
+        }
+        received
+    }
+
+    fn call(id: u64, tool: &str, args: Value) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": tool, "arguments": args } })
+    }
+
+    #[tokio::test]
+    async fn grades_a_qcm_over_mcp_and_notifies_the_screen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let items = json!([
+            { "question": "Charge du proton ?", "choices": ["+e", "-e"], "answer": 0, "source": { "document": "atomes", "page": 1 } },
+            { "question": "Charge du neutron ?", "choices": ["+e", "0"], "answer": 1 }
+        ]);
+        let out = session(
+            Documents::new(tmp.path().to_path_buf(), None),
+            &[
+                call(
+                    1,
+                    "save_quiz",
+                    json!({ "kind": "qcm", "title": "Atomes", "items": items }),
+                ),
+                call(
+                    2,
+                    "submit_qcm",
+                    json!({ "quiz": "qcm-atomes", "answers": [0, null] }),
+                ),
+                call(3, "list_results", json!({})),
+                call(
+                    4,
+                    "save_quiz",
+                    json!({ "kind": "qcm", "title": "Mal formé", "items": [{ "question": "?" }] }),
+                ),
+            ],
+        )
+        .await;
+        let event = |name: &str| {
+            out.iter()
+                .find(|m| m["method"] == EVENT_NOTIFICATION && m["params"]["event"] == name)
+                .map(|m| m["params"]["data"].clone())
+        };
+        let response = |id: u64| out.iter().find(|m| m["id"] == json!(id)).unwrap()["result"].clone();
+
+        assert_eq!(
+            event("quiz-saved"),
+            Some(json!({ "id": "qcm-atomes", "kind": "qcm" }))
+        );
+        assert_eq!(
+            event("result-saved"),
+            Some(json!({ "quiz": "qcm-atomes", "score": 1.0, "total": 2.0 }))
+        );
+
+        let graded = &response(2)["structuredContent"];
+        assert_eq!(graded["result"]["feedback"], "1/2. À revoir : question(s) 2.");
+        assert_eq!(graded["corrections"][0]["correct"], true);
+        assert_eq!(graded["corrections"][1]["chosen"], Value::Null);
+
+        let history = &response(3)["structuredContent"]["results"];
+        assert_eq!(
+            (history[0]["title"].clone(), history[0]["percent"].clone()),
+            (json!("Atomes"), json!(50))
+        );
+
+        // Format refusé : erreur d'outil lisible par l'IA, pas d'événement de plus.
+        let refused = response(4);
+        assert_eq!(refused["isError"], true);
+        assert!(
+            refused["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Question 1")
+        );
+        assert_eq!(
+            out.iter()
+                .filter(|m| m["params"]["event"] == "quiz-saved")
+                .count(),
+            1
+        );
+    }
 
     #[tokio::test]
     async fn imports_then_reads_through_tools() {
@@ -531,6 +749,8 @@ mod tests {
             "search",
             "list_quizzes",
             "get_quiz",
+            "submit_qcm",
+            "list_results",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }

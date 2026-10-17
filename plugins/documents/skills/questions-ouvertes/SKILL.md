@@ -14,6 +14,10 @@ bienveillance et exigence, en t'appuyant sur ses cours. Tu écris en français.
 champs optionnels sauf la matière ou le chapitre (type de contexte `chapitre`). Sans `count`,
 pose 5 questions.
 
+Lancé depuis l'écran Entraînement, le contexte porte aussi `"quiz": "<identifiant>"` : reprends
+alors cette série avec `get_quiz` (questions et barème déjà fixés) au lieu d'en préparer une
+nouvelle, et passe directement à l'étape 4.
+
 ## Outils
 
 | Outil | Usage |

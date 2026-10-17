@@ -1,6 +1,6 @@
 [package]
 name = "cadence-documents"
-version = "0.2.0"
+version = "0.3.0"
 description = "Serveur MCP du plugin Cadence « Documents » (cours PDF, Word, PowerPoint, Markdown ; entraînement)."
 edition.workspace = true
 license.workspace = true
@@ -23,3 +23,5 @@ quick-xml = "0.42.0"
 
 [dev-dependencies]
 tempfile = "3"
+# Délais du test de bout en bout (session MCP en mémoire).
+tokio = { workspace = true, features = ["time", "io-util"] }

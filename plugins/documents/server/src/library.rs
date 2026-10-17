@@ -109,6 +109,92 @@ pub struct QuizResult {
     pub answers: Value,
     pub feedback: Option<String>,
     pub created_at: String,
+    /// Rang d'enregistrement (1, 2, 3…) : ordonne les résultats d'une même seconde. 0 pour les
+    /// résultats antérieurs à la 0.3.0.
+    #[serde(default)]
+    pub seq: u32,
+}
+
+/// Correction d'une question de QCM (`grade_qcm`), gardée dans `answers` du résultat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QcmCorrection {
+    pub question: String,
+    pub choices: Vec<String>,
+    /// Indice choisi, à partir de 0 ; `None` : question passée.
+    pub chosen: Option<u32>,
+    /// Indice de la bonne réponse.
+    pub answer: u32,
+    pub correct: bool,
+    pub explanation: Option<String>,
+    /// Document et page de la réponse (`{ "document", "page" }`), tels que le skill les a donnés.
+    pub source: Value,
+}
+
+/// Résultat dans l'historique des scores, avec son entraînement (sans le détail des réponses).
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryEntry {
+    pub id: String,
+    pub quiz: String,
+    /// Titre et type de l'entraînement ; `None` s'il a été supprimé depuis.
+    pub title: Option<String>,
+    pub kind: Option<QuizKind>,
+    pub subject: Option<String>,
+    pub chapter: Option<String>,
+    pub score: Option<f64>,
+    pub total: Option<f64>,
+    /// Score en pourcentage (0 à 100), quand le total est connu.
+    pub percent: Option<u32>,
+    pub created_at: String,
+}
+
+/// Vérifie le format des éléments d'un entraînement (celui décrit par les skills), pour que
+/// l'écran Entraînement puisse le faire passer : message lisible par l'IA sinon.
+pub fn check_items(kind: QuizKind, items: &Value) -> Result<()> {
+    let Some(list) = items.as_array().filter(|l| !l.is_empty()) else {
+        bail!("Le quiz ne contient aucune question ni carte (`items` doit être une liste non vide).");
+    };
+    let text = |item: &Value, key: &str| {
+        item.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+    for (i, item) in list.iter().enumerate() {
+        let n = i + 1;
+        if !item.is_object() {
+            bail!("Élément {n} : objet attendu.");
+        }
+        match kind {
+            QuizKind::Qcm => {
+                if !text(item, "question") {
+                    bail!("Question {n} : champ `question` absent ou vide.");
+                }
+                let choices = item.get("choices").and_then(Value::as_array);
+                let Some(choices) = choices.filter(|c| {
+                    c.len() >= 2 && c.iter().all(|c| c.as_str().is_some_and(|s| !s.trim().is_empty()))
+                }) else {
+                    bail!("Question {n} : `choices` doit lister au moins 2 réponses (texte).");
+                };
+                let answer = item.get("answer").and_then(Value::as_u64);
+                if answer.is_none_or(|a| a as usize >= choices.len()) {
+                    bail!(
+                        "Question {n} : `answer` doit être l'indice (à partir de 0) de la bonne réponse parmi les {} choix.",
+                        choices.len()
+                    );
+                }
+            }
+            QuizKind::Flashcards => {
+                if !text(item, "front") || !text(item, "back") {
+                    bail!("Carte {n} : champs `front` (recto) et `back` (verso) attendus.");
+                }
+            }
+            QuizKind::QuestionsOuvertes => {
+                if !text(item, "question") {
+                    bail!("Question {n} : champ `question` absent ou vide.");
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub struct Library {
@@ -498,9 +584,9 @@ impl Library {
         sources: Value,
         items: Value,
     ) -> Result<Quiz> {
-        let count = items.as_array().map(Vec::len).unwrap_or(0);
-        if count == 0 {
-            bail!("Le quiz ne contient aucune question ni carte (`items` doit être une liste non vide).");
+        check_items(kind, &items)?;
+        if title.trim().is_empty() {
+            bail!("Donnez un titre à l'entraînement.");
         }
         let created_at = now_iso();
         let prefix = match kind {
@@ -542,7 +628,7 @@ impl Library {
 
     pub fn results(&self) -> Result<Vec<QuizResult>> {
         let mut out: Vec<QuizResult> = read_dir_json(&self.data_dir.join("results"))?;
-        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.seq.cmp(&a.seq)));
         Ok(out)
     }
 
@@ -571,9 +657,110 @@ impl Library {
             answers,
             feedback,
             created_at,
+            seq: self.results()?.iter().map(|r| r.seq).max().unwrap_or(0) + 1,
         };
         write_json(&dir.join(format!("{id}.json")), &result)?;
         Ok(result)
+    }
+
+    /// Corrige un QCM enregistré : `answers[i]` est l'indice choisi pour la question `i`
+    /// (`None`, ou absent, pour une question passée). Le score (1 point par bonne réponse), la
+    /// correction et un bilan sont enregistrés comme un résultat.
+    pub fn grade_qcm(&self, quiz: &str, answers: &[Option<u32>]) -> Result<(QuizResult, Vec<QcmCorrection>)> {
+        let quiz = self.quiz(quiz)?;
+        if quiz.kind != QuizKind::Qcm {
+            bail!(
+                "« {} » n'est pas un QCM : enregistrez son résultat avec save_result.",
+                quiz.title
+            );
+        }
+        check_items(quiz.kind, &quiz.items)?;
+        let items = quiz.items.as_array().map(Vec::as_slice).unwrap_or_default();
+        if answers.len() > items.len() {
+            bail!("{} réponses pour {} questions.", answers.len(), items.len());
+        }
+        let corrections: Vec<QcmCorrection> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let choices: Vec<String> = item["choices"]
+                    .as_array()
+                    .map(|c| c.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
+                let answer = item["answer"].as_u64().unwrap_or(0) as u32;
+                let chosen = answers
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .filter(|c| (*c as usize) < choices.len());
+                QcmCorrection {
+                    question: item["question"].as_str().unwrap_or_default().to_string(),
+                    choices,
+                    chosen,
+                    answer,
+                    correct: chosen == Some(answer),
+                    explanation: item
+                        .get("explanation")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    source: item.get("source").cloned().unwrap_or(Value::Null),
+                }
+            })
+            .collect();
+        let score = corrections.iter().filter(|c| c.correct).count();
+        let total = corrections.len();
+        let missed: Vec<String> = corrections
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !c.correct)
+            .map(|(i, _)| (i + 1).to_string())
+            .collect();
+        let feedback = if missed.is_empty() {
+            format!("{score}/{total} : sans faute.")
+        } else {
+            format!("{score}/{total}. À revoir : question(s) {}.", missed.join(", "))
+        };
+        let result = self.save_result(
+            &quiz.id,
+            Some(score as f64),
+            Some(total as f64),
+            serde_json::to_value(&corrections)?,
+            Some(feedback),
+        )?;
+        Ok((result, corrections))
+    }
+
+    /// Historique des scores, les plus récents d'abord, éventuellement d'un seul entraînement.
+    pub fn history(&self, quiz: Option<&str>, limit: usize) -> Result<Vec<HistoryEntry>> {
+        let quizzes = self.quizzes()?;
+        let wanted = quiz.map(slugify);
+        Ok(self
+            .results()?
+            .into_iter()
+            .filter(|r| wanted.as_ref().is_none_or(|w| &r.quiz == w))
+            .take(limit)
+            .map(|r| {
+                let q = quizzes.iter().find(|q| q.id == r.quiz);
+                let percent = match (r.score, r.total) {
+                    (Some(score), Some(total)) if total > 0.0 => {
+                        Some((score / total * 100.0).round().clamp(0.0, 100.0) as u32)
+                    }
+                    _ => None,
+                };
+                HistoryEntry {
+                    id: r.id,
+                    quiz: r.quiz,
+                    title: q.map(|q| q.title.clone()),
+                    kind: q.map(|q| q.kind),
+                    subject: q.and_then(|q| q.subject.clone()),
+                    chapter: q.and_then(|q| q.chapter.clone()),
+                    score: r.score,
+                    total: r.total,
+                    percent,
+                    created_at: r.created_at,
+                }
+            })
+            .collect())
     }
 }
 
@@ -748,7 +935,7 @@ mod tests {
                 None,
                 None,
                 json!([]),
-                json!([1]),
+                json!([{ "question": "Charge de l'électron ?", "choices": ["+e", "-e"], "answer": 1 }]),
             )
             .unwrap();
         assert_eq!(again.id, "qcm-atomistique-bases-2");
@@ -764,6 +951,177 @@ mod tests {
         assert_eq!(lib.quizzes().unwrap().len(), 2);
         assert_eq!(lib.results().unwrap().len(), 1);
         assert!(lib.save_result("inconnu", None, None, json!(null), None).is_err());
+    }
+
+    #[test]
+    fn checks_the_items_of_each_kind() {
+        let ok_qcm = json!([{ "question": "Q ?", "choices": ["a", "b", "c"], "answer": 2 }]);
+        assert!(check_items(QuizKind::Qcm, &ok_qcm).is_ok());
+        let err = |kind, items: Value| check_items(kind, &items).unwrap_err().to_string();
+        assert!(err(QuizKind::Qcm, json!([])).contains("non vide"));
+        assert!(err(QuizKind::Qcm, json!([1])).contains("objet attendu"));
+        assert!(err(QuizKind::Qcm, json!([{ "choices": ["a", "b"], "answer": 0 }])).contains("`question`"));
+        assert!(
+            err(
+                QuizKind::Qcm,
+                json!([{ "question": "Q", "choices": ["a"], "answer": 0 }])
+            )
+            .contains("au moins 2")
+        );
+        let out_of_range = err(
+            QuizKind::Qcm,
+            json!([ok_qcm[0], { "question": "Q", "choices": ["a", "b"], "answer": 2 }]),
+        );
+        assert!(
+            out_of_range.starts_with("Question 2 :") && out_of_range.contains("2 choix"),
+            "{out_of_range}"
+        );
+        assert!(
+            err(
+                QuizKind::Qcm,
+                json!([{ "question": "Q", "choices": ["a", "b"], "answer": "a" }])
+            )
+            .contains("indice")
+        );
+
+        assert!(
+            check_items(
+                QuizKind::Flashcards,
+                &json!([{ "front": "Z", "back": "Protons" }])
+            )
+            .is_ok()
+        );
+        assert!(err(QuizKind::Flashcards, json!([{ "front": "Z" }])).contains("Carte 1"));
+        assert!(
+            check_items(
+                QuizKind::QuestionsOuvertes,
+                &json!([{ "question": "Pourquoi ?", "points": 4 }])
+            )
+            .is_ok()
+        );
+        assert!(err(QuizKind::QuestionsOuvertes, json!([{ "points": 4 }])).contains("`question`"));
+    }
+
+    fn qcm(lib: &Library) -> Quiz {
+        let items = json!([
+            { "question": "Charge du proton ?", "choices": ["+e", "-e", "0"], "answer": 0,
+              "explanation": "Charge élémentaire positive.", "source": { "document": "atomes", "page": 1 } },
+            { "question": "Charge du neutron ?", "choices": ["+e", "0"], "answer": 1 },
+            { "question": "Numéro atomique ?", "choices": ["Protons", "Nucléons"], "answer": 0 }
+        ]);
+        lib.save_quiz(
+            QuizKind::Qcm,
+            "Atomes",
+            Some("chimie".into()),
+            Some("atomistique".into()),
+            json!([]),
+            items,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn grades_a_qcm_and_saves_the_result() {
+        let (_tmp, lib) = setup();
+        let quiz = qcm(&lib);
+
+        // Question 2 fausse, question 3 passée (réponse absente).
+        let (result, corrections) = lib.grade_qcm(&quiz.id, &[Some(0), Some(0)]).unwrap();
+        assert_eq!((result.score, result.total), (Some(1.0), Some(3.0)));
+        assert_eq!(
+            result.feedback.as_deref(),
+            Some("1/3. À revoir : question(s) 2, 3.")
+        );
+        assert_eq!(
+            corrections
+                .iter()
+                .map(|c| (c.chosen, c.correct))
+                .collect::<Vec<_>>(),
+            [(Some(0), true), (Some(0), false), (None, false)]
+        );
+        assert_eq!(
+            corrections[0].explanation.as_deref(),
+            Some("Charge élémentaire positive.")
+        );
+        assert_eq!(corrections[0].source, json!({ "document": "atomes", "page": 1 }));
+        assert_eq!(corrections[1].source, Value::Null);
+        // La correction est gardée avec le résultat.
+        let saved = &lib.results().unwrap()[0];
+        assert_eq!(saved.answers[1]["chosen"], json!(0));
+        assert_eq!(saved.answers[1]["answer"], json!(1));
+
+        let (perfect, _) = lib.grade_qcm(&quiz.id, &[Some(0), Some(1), Some(0)]).unwrap();
+        assert_eq!(perfect.feedback.as_deref(), Some("3/3 : sans faute."));
+        // Un indice hors des choix compte comme une question passée.
+        let (_, odd) = lib.grade_qcm(&quiz.id, &[Some(7)]).unwrap();
+        assert_eq!(odd[0].chosen, None);
+
+        assert!(lib.grade_qcm(&quiz.id, &[None, None, None, None]).is_err());
+        assert!(lib.grade_qcm("inconnu", &[]).is_err());
+        let cards = lib
+            .save_quiz(
+                QuizKind::Flashcards,
+                "Cartes",
+                None,
+                None,
+                json!([]),
+                json!([{ "front": "Z", "back": "Protons" }]),
+            )
+            .unwrap();
+        assert!(
+            lib.grade_qcm(&cards.id, &[])
+                .unwrap_err()
+                .to_string()
+                .contains("n'est pas un QCM")
+        );
+    }
+
+    #[test]
+    fn keeps_the_score_history() {
+        let (_tmp, lib) = setup();
+        let quiz = qcm(&lib);
+        let cards = lib
+            .save_quiz(
+                QuizKind::Flashcards,
+                "Cartes",
+                None,
+                None,
+                json!([]),
+                json!([{ "front": "Z", "back": "Protons" }]),
+            )
+            .unwrap();
+        lib.grade_qcm(&quiz.id, &[Some(0)]).unwrap();
+        lib.grade_qcm(&quiz.id, &[Some(0), Some(1), Some(0)]).unwrap();
+        lib.save_result(
+            &cards.id,
+            Some(1.0),
+            Some(1.0),
+            json!([{ "card": 0, "known": true }]),
+            None,
+        )
+        .unwrap();
+        lib.save_result(&cards.id, None, None, json!(null), None).unwrap();
+
+        let all = lib.history(None, 50).unwrap();
+        assert_eq!(all.len(), 4);
+        // Les plus récents d'abord (même seconde : ordre d'enregistrement).
+        assert_eq!(all[0].quiz, cards.id);
+        assert_eq!(all[0].percent, None);
+        assert_eq!(
+            (all[1].kind, all[1].percent),
+            (Some(QuizKind::Flashcards), Some(100))
+        );
+        assert_eq!((all[2].score, all[2].percent), (Some(3.0), Some(100)));
+        assert_eq!(
+            (all[3].title.as_deref(), all[3].percent),
+            (Some("Atomes"), Some(33))
+        );
+        assert_eq!(all[3].subject.as_deref(), Some("chimie"));
+
+        let only = lib.history(Some(&quiz.id), 1).unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].score, Some(3.0));
+        assert!(lib.history(Some("inconnu"), 10).unwrap().is_empty());
     }
 
     #[test]

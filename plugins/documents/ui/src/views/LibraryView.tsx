@@ -1,8 +1,23 @@
 /** Vue « Bibliothèque » : Matière → Chapitre → Documents, import de fichiers. */
 import { useState } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
-import { Badge, Button, Callout, Card, Field, Icon, Input, SectionLabel, Spinner } from "@cadence/ui";
-import { ACCEPTED_EXTENSIONS, groupDocuments, kindMeta, type DocumentInfo } from "../domain";
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  Field,
+  Icon,
+  Input,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuTrigger,
+  SectionLabel,
+  Spinner,
+} from "@cadence/ui";
+import { ACCEPTED_EXTENSIONS, groupDocuments, kindMeta, quizMeta, type DocumentInfo, type QuizKind } from "../domain";
 import { useTool } from "../useTool";
 
 export function LibraryView() {
@@ -69,6 +84,7 @@ export function LibraryView() {
                     >
                       Poser une question
                     </Button>
+                    <TrainMenu subject={subjectId} chapter={chapterId} />
                   </div>
                   <Card className="divide-y divide-line">
                     {chapter.docs.map((d) => (
@@ -92,6 +108,35 @@ export function LibraryView() {
         </div>
       </main>
     </div>
+  );
+}
+
+/** Générer un entraînement pour le chapitre : QCM et flashcards en fond, questions ouvertes dans le chat. */
+function TrainMenu({ subject, chapter }: { subject: string; chapter: string }) {
+  const run = async (kind: QuizKind) => {
+    try {
+      await cadence.runAction(quizMeta[kind].action, { subject, chapter });
+      if (kind !== "questions_ouvertes") {
+        await cadence.notify(`${quizMeta[kind].label} en préparation : il apparaîtra dans Entraînement.`, "info");
+      }
+    } catch (e) {
+      await cadence.notify(isCadenceError(e) ? e.message : String(e), "error");
+    }
+  };
+  return (
+    <Menu>
+      <MenuTrigger asChild>
+        <Button size="xs" variant="ghost" iconRight="chevronDown">
+          S'entraîner
+        </Button>
+      </MenuTrigger>
+      <MenuContent align="end">
+        <MenuLabel>Générer pour ce chapitre</MenuLabel>
+        <MenuItem onSelect={() => void run("qcm")}>Générer un QCM</MenuItem>
+        <MenuItem onSelect={() => void run("flashcards")}>Flashcards</MenuItem>
+        <MenuItem onSelect={() => void run("questions_ouvertes")}>Questions ouvertes</MenuItem>
+      </MenuContent>
+    </Menu>
   );
 }
 
