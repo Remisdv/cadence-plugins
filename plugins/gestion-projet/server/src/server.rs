@@ -4,11 +4,15 @@
 //! des dépôts suivis (service `repos` de Cadence). `list_issues` sans `repo` agrège tous les
 //! dépôts suivis ; chaque issue porte alors son champ `repo`.
 //!
-//! Implémentés : `get_account` et `list_account_repos` (réservés à l'UI), `get_repository`,
-//! `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_comment`, `list_milestones`.
-//! À faire (TODO, répondent « pas encore implémenté ») : `create_milestone`, `update_milestone`,
-//! `list_pull_requests`, `get_pull_request`, `create_pull_request`, `mark_pull_request_ready`,
-//! `list_releases`, `create_release`, `sprint_summary`.
+//! - Compte (réservés à l'UI) : `get_account`, `list_account_repos`.
+//! - Issues : `get_repository`, `list_issues`, `get_issue`, `create_issue`, `update_issue`,
+//!   `add_comment`.
+//! - Versions : `list_milestones`, `create_milestone`, `update_milestone` (clôture comprise),
+//!   `sprint_summary` (réservé à l'UI : sprint en cours ou version donnée, burndown, retard).
+//! - Pull requests : `list_pull_requests` (sans `repo` : tous les dépôts suivis),
+//!   `get_pull_request`, `create_pull_request` (brouillon par défaut, jamais depuis la branche par
+//!   défaut), `mark_pull_request_ready` (GraphQL `markPullRequestReadyForReview`).
+//! - Releases : `list_releases`, `create_release` (brouillon par défaut, tag = préfixe + version).
 
 use std::sync::{Arc, RwLock};
 
@@ -31,6 +35,7 @@ use crate::{
     config::{self, Env, Settings},
     github::GitHub,
     model::{self, IssueType, Status},
+    pulls, sprint,
 };
 
 type ToolResult = Result<CallToolResult, McpError>;
@@ -54,14 +59,6 @@ fn respond(result: Result<Value>) -> ToolResult {
         Ok(other) => CallToolResult::structured(json!({ "result": other })),
         Err(err) => CallToolResult::error(vec![ContentBlock::text(format!("{err:#}"))]),
     })
-}
-
-/// Réponse des outils pas encore écrits.
-fn todo(tool: &str) -> ToolResult {
-    Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-        "L'outil {tool} n'est pas encore implémenté dans cette version du plugin (TODO). \
-         Faites l'opération avec git ou l'interface GitHub, puis continuez."
-    ))]))
 }
 
 /* ---------- Paramètres ---------- */
@@ -213,12 +210,13 @@ pub struct ListAccountReposParams {
 pub struct Empty {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)] // TODO : lu quand l'outil sera implémenté
 pub struct MilestoneParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
     /// Version semver, ex. « 0.1.3 ».
     pub title: String,
+    /// Description markdown : un titre `# Nom` donne le nom de la version, les éléments de liste
+    /// sont les thèmes d'un palier.
     pub description: Option<String>,
     /// Échéance (AAAA-MM-JJ) : un milestone daté est un sprint, sans date un palier.
     pub due_on: Option<String>,
@@ -226,15 +224,38 @@ pub struct MilestoneParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)] // TODO : lu quand l'outil sera implémenté
+pub struct UpdateMilestoneParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Version à modifier : titre actuel du milestone (avec ou sans préfixe de tag).
+    pub title: String,
+    /// Nouveau titre (renommer la version).
+    pub new_title: Option<String>,
+    /// Nouvelle description complète (markdown).
+    pub description: Option<String>,
+    /// Nouvelle échéance (AAAA-MM-JJ) ; chaîne vide pour la retirer (la version devient un palier).
+    pub due_on: Option<String>,
+    /// `closed` pour clore la version, `open` pour la rouvrir.
+    pub state: Option<IssueState>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct NumberParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
+    /// Numéro de la pull request.
     pub number: u32,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)] // TODO : lu quand l'outil sera implémenté
+pub struct SprintSummaryParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Version à résumer (titre du milestone) ; absente : le milestone daté ouvert le plus proche.
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ListPullRequestsParams {
     /// Dépôt `owner/name` parmi les dépôts suivis ; absent : tous les dépôts suivis.
     pub repo: Option<String>,
@@ -244,7 +265,6 @@ pub struct ListPullRequestsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)] // TODO : lu quand l'outil sera implémenté
 pub struct CreatePullRequestParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
@@ -259,7 +279,6 @@ pub struct CreatePullRequestParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[allow(dead_code)] // TODO : lu quand l'outil sera implémenté
 pub struct CreateReleaseParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
@@ -632,6 +651,371 @@ impl GestionProjet {
             .await?;
         Ok(serde_json::to_value(model::issue_in(&repo, &raw, true))?)
     }
+
+    /* ---------- Versions ---------- */
+
+    async fn do_create_milestone(&self, p: MilestoneParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let title = p.title.trim();
+        if title.is_empty() {
+            bail!("Titre de version vide (ex. 0.1.3).");
+        }
+        let due_on = p
+            .due_on
+            .as_deref()
+            .map(model::due_on_param)
+            .transpose()?
+            .flatten();
+        let all = self.milestones(&repo, "all").await?;
+        if let Some(m) = model::find_milestone(&all, title, &self.settings().tag_prefix) {
+            bail!(
+                "La version « {} » existe déjà dans {repo} (milestone #{}, {}). Modifiez-la avec update_milestone.",
+                m["title"].as_str().unwrap_or(title),
+                m["number"],
+                m["state"].as_str().unwrap_or("open")
+            );
+        }
+        let mut body = json!({ "title": title, "state": state_str(p.state.unwrap_or(IssueState::Open)) });
+        if let Some(d) = p.description {
+            body["description"] = json!(d);
+        }
+        if let Some(d) = due_on {
+            body["due_on"] = json!(d);
+        }
+        let raw = self.gh.post(&format!("/repos/{repo}/milestones"), &body).await?;
+        Ok(json!({ "repo": repo, "version": model::version_from(&raw) }))
+    }
+
+    async fn do_update_milestone(&self, p: UpdateMilestoneParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let mut body = json!({});
+        if let Some(t) = p.new_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            body["title"] = json!(t);
+        }
+        if let Some(d) = p.description {
+            body["description"] = json!(d);
+        }
+        if let Some(d) = p.due_on.as_deref() {
+            body["due_on"] = json!(model::due_on_param(d)?);
+        }
+        if let Some(s) = p.state {
+            body["state"] = json!(state_str(s));
+        }
+        if body.as_object().is_some_and(|o| o.is_empty()) {
+            bail!("Rien à modifier : précisez new_title, description, due_on ou state.");
+        }
+        let number = self.milestone_number(&repo, &p.title).await?;
+        let raw = self
+            .gh
+            .patch(&format!("/repos/{repo}/milestones/{number}"), &body)
+            .await?;
+        Ok(json!({ "repo": repo, "version": model::version_from(&raw) }))
+    }
+
+    /// Toutes les issues d'un milestone (ouvertes et fermées), sans les pull requests.
+    async fn milestone_issues(&self, repo: &str, number: u32) -> Result<Vec<model::Issue>> {
+        let mut out = Vec::new();
+        for page in 1..=5u32 {
+            let p = self
+                .gh
+                .get_page(
+                    &format!("/repos/{repo}/issues"),
+                    &[
+                        ("milestone", number.to_string()),
+                        ("state", "all".into()),
+                        ("per_page", "100".into()),
+                        ("page", page.to_string()),
+                    ],
+                )
+                .await?;
+            out.extend(
+                p.body
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|raw| !model::is_pull_request(raw))
+                    .map(|raw| model::issue_in(repo, raw, false)),
+            );
+            if !p.has_next {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    async fn do_sprint_summary(&self, p: SprintSummaryParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let settings = self.settings();
+        let today = sprint::today();
+        let wanted = p.version.as_deref().map(str::trim).filter(|v| !v.is_empty());
+        let milestones = self
+            .milestones(&repo, if wanted.is_some() { "all" } else { "open" })
+            .await?;
+        let chosen = match wanted {
+            Some(title) => Some(
+                model::find_milestone(&milestones, title, &settings.tag_prefix).ok_or_else(|| {
+                    anyhow!("Version « {title} » introuvable : aucun milestone de ce nom dans {repo}.")
+                })?,
+            ),
+            None => sprint::current_sprint(&milestones, &today),
+        };
+        let Some(raw) = chosen else {
+            return Ok(json!({
+                "repo": repo,
+                "today": today,
+                "sprint_length_days": settings.sprint_length_days,
+                "sprint": Value::Null,
+                "message": "Aucun sprint en cours : aucun milestone ouvert n'a d'échéance. Datez une version pour en faire un sprint.",
+            }));
+        };
+        let version = model::version_from(raw);
+        let mut issues = self.milestone_issues(&repo, version.number).await?;
+        issues.sort_by_key(|i| i.number);
+        let pace = sprint::pace(
+            &issues,
+            version.due_on.as_deref(),
+            settings.sprint_length_days,
+            &today,
+        );
+        Ok(json!({
+            "repo": repo,
+            "today": today,
+            "sprint_length_days": settings.sprint_length_days,
+            "sprint": version,
+            "pace": pace,
+            "issues": issues,
+        }))
+    }
+
+    /* ---------- Pull requests ---------- */
+
+    async fn pulls_in(&self, repo: &str, state: StateFilter) -> Result<Vec<pulls::PullRequest>> {
+        let (owner, name) = repo.split_once('/').context("dépôt owner/name attendu")?;
+        let data = self
+            .gh
+            .graphql(
+                &pulls::list_query(),
+                json!({
+                    "owner": owner,
+                    "name": name,
+                    "open": !matches!(state, StateFilter::Closed),
+                    "done": !matches!(state, StateFilter::Open),
+                }),
+            )
+            .await?;
+        if data["repository"].is_null() {
+            bail!("Dépôt {repo} introuvable sur GitHub (ou inaccessible au compte connecté).");
+        }
+        Ok(pulls::parse_list(repo, &data))
+    }
+
+    async fn do_list_pull_requests(&self, p: ListPullRequestsParams) -> Result<Value> {
+        if let Some(wanted) = p.repo.as_deref().filter(|r| !r.trim().is_empty()) {
+            let repo = self.repo(wanted)?;
+            let pulls = self.pulls_in(&repo, p.state).await?;
+            return Ok(json!({ "repo": repo, "repos": [repo], "pull_requests": pulls }));
+        }
+        let repos = self.followed();
+        if repos.is_empty() {
+            bail!(no_repos_message());
+        }
+        let mut set = tokio::task::JoinSet::new();
+        for (i, repo) in repos.iter().cloned().enumerate() {
+            let me = self.clone();
+            set.spawn(async move { (i, me.pulls_in(&repo, p.state).await) });
+        }
+        let mut results = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            results.push(joined.context("lecture des pull requests interrompue")?);
+        }
+        results.sort_by_key(|(i, _)| *i);
+        let mut all: Vec<pulls::PullRequest> = Vec::new();
+        let mut errors: Vec<Value> = Vec::new();
+        for (i, result) in results {
+            match result {
+                Ok(list) => all.extend(list),
+                Err(err) => errors.push(json!({ "repo": repos[i], "message": format!("{err:#}") })),
+            }
+        }
+        if errors.len() == repos.len() {
+            bail!(
+                "{}",
+                errors
+                    .iter()
+                    .filter_map(|e| e["message"].as_str())
+                    .next()
+                    .unwrap_or("lecture des pull requests impossible")
+            );
+        }
+        // Ouvertes d'abord, puis par activité (dates ISO 8601 : l'ordre lexical suffit).
+        let is_open = |p: &pulls::PullRequest| matches!(p.state, "open" | "draft");
+        all.sort_by(|a, b| {
+            is_open(b)
+                .cmp(&is_open(a))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
+        let mut out = json!({ "repo": Value::Null, "repos": repos, "pull_requests": all });
+        if !errors.is_empty() {
+            out["errors"] = Value::Array(errors);
+        }
+        Ok(out)
+    }
+
+    async fn do_get_pull_request(&self, p: NumberParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let (owner, name) = repo.split_once('/').context("dépôt owner/name attendu")?;
+        let data = self
+            .gh
+            .graphql(
+                &pulls::detail_query(),
+                json!({ "owner": owner, "name": name, "number": p.number }),
+            )
+            .await?;
+        let raw = &data["repository"]["pullRequest"];
+        if raw.is_null() {
+            bail!("Pull request #{} introuvable dans {repo}.", p.number);
+        }
+        let mut out = serde_json::to_value(pulls::from_graphql(&repo, raw))?;
+        out["body"] = json!(raw["body"].as_str().unwrap_or(""));
+        out["mergeable"] = raw["mergeable"].as_str().map(str::to_lowercase).into();
+        out["reviews"] = Value::Array(pulls::reviews_of(raw));
+        out["checks"] = Value::Array(pulls::checks_of(raw));
+        let files = self
+            .gh
+            .get(
+                &format!("/repos/{repo}/pulls/{}/files", p.number),
+                &[("per_page", "100".into())],
+            )
+            .await?;
+        out["files"] = Value::Array(
+            files
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|f| {
+                    json!({
+                        "path": f["filename"],
+                        "status": f["status"],
+                        "additions": f["additions"],
+                        "deletions": f["deletions"],
+                    })
+                })
+                .collect(),
+        );
+        Ok(out)
+    }
+
+    async fn do_create_pull_request(&self, p: CreatePullRequestParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        if p.title.trim().is_empty() {
+            bail!("Titre de pull request vide.");
+        }
+        let info = self.gh.get(&format!("/repos/{repo}"), &[]).await?;
+        let default_branch = info["default_branch"].as_str().unwrap_or("main").to_string();
+        let base = p
+            .base
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .unwrap_or(&default_branch)
+            .to_string();
+        pulls::check_head(&p.head, &base, &default_branch)?;
+        let body = json!({
+            "title": p.title.trim(),
+            "head": p.head.trim(),
+            "base": base,
+            "body": p.body.unwrap_or_default(),
+            "draft": p.draft.unwrap_or(true),
+        });
+        let raw = self.gh.post(&format!("/repos/{repo}/pulls"), &body).await?;
+        Ok(serde_json::to_value(pulls::from_rest(&repo, &raw))?)
+    }
+
+    async fn do_mark_ready(&self, p: NumberParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let (owner, name) = repo.split_once('/').context("dépôt owner/name attendu")?;
+        let data = self
+            .gh
+            .graphql(
+                pulls::NODE_QUERY,
+                json!({ "owner": owner, "name": name, "number": p.number }),
+            )
+            .await?;
+        let pr = &data["repository"]["pullRequest"];
+        if pr.is_null() {
+            bail!("Pull request #{} introuvable dans {repo}.", p.number);
+        }
+        let url = pr["url"].clone();
+        if pr["state"].as_str() != Some("OPEN") {
+            bail!(
+                "La pull request #{} n'est plus ouverte ({}) : rien à sortir du brouillon.",
+                p.number,
+                pr["state"].as_str().unwrap_or("?").to_lowercase()
+            );
+        }
+        if pr["isDraft"].as_bool() != Some(true) {
+            return Ok(json!({
+                "repo": repo, "number": p.number, "draft": false, "url": url,
+                "message": "La pull request était déjà prête pour la revue.",
+            }));
+        }
+        let id = pr["id"].as_str().context("identifiant GraphQL de la PR absent")?;
+        self.gh
+            .graphql(pulls::READY_MUTATION, json!({ "id": id }))
+            .await?;
+        Ok(json!({ "repo": repo, "number": p.number, "draft": false, "url": url }))
+    }
+
+    /* ---------- Releases ---------- */
+
+    async fn releases(&self, repo: &str) -> Result<Vec<Value>> {
+        let raw = self
+            .gh
+            .get(&format!("/repos/{repo}/releases"), &[("per_page", "100".into())])
+            .await?;
+        Ok(raw.as_array().cloned().unwrap_or_default())
+    }
+
+    async fn do_create_release(&self, p: CreateReleaseParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let prefix = self.settings().tag_prefix;
+        let tag = model::tag_name(&prefix, &p.version)?;
+        if p.notes.trim().is_empty() {
+            bail!("Notes de version vides : rédigez-les en markdown (nouveautés, corrections…).");
+        }
+        // Les brouillons ne sont pas trouvables par tag : on lit la liste.
+        if let Some(existing) = self
+            .releases(&repo)
+            .await?
+            .iter()
+            .find(|r| r["tag_name"].as_str() == Some(tag.as_str()))
+        {
+            let r = model::release_from(existing, &prefix, false);
+            bail!(
+                "Une release existe déjà pour {tag} ({}) : {}. Modifiez-la sur GitHub.",
+                if r.draft { "brouillon" } else { "publiée" },
+                r.url
+            );
+        }
+        let mut body = json!({
+            "tag_name": tag,
+            "name": tag,
+            "body": p.notes,
+            "draft": p.draft.unwrap_or(true),
+        });
+        if let Some(t) = p.target.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            body["target_commitish"] = json!(t);
+        }
+        let raw = self.gh.post(&format!("/repos/{repo}/releases"), &body).await?;
+        Ok(json!({ "repo": repo, "release": model::release_from(&raw, &prefix, false) }))
+    }
+}
+
+fn state_str(s: IssueState) -> &'static str {
+    match s {
+        IssueState::Open => "open",
+        IssueState::Closed => "closed",
+    }
 }
 
 fn no_repos_message() -> String {
@@ -796,70 +1180,79 @@ impl GestionProjet {
         )
     }
 
-    /* ---------- TODO : outils déclarés, pas encore implémentés ---------- */
-
-    #[tool(description = "TODO — Crée une version (milestone). Pas encore implémenté.")]
-    async fn create_milestone(&self, Parameters(_): Parameters<MilestoneParams>) -> ToolResult {
-        // TODO: POST /repos/{repo}/milestones (title, description, due_on).
-        todo("create_milestone")
-    }
-
-    #[tool(description = "TODO — Modifie ou clôt une version (milestone). Pas encore implémenté.")]
-    async fn update_milestone(&self, Parameters(_): Parameters<MilestoneParams>) -> ToolResult {
-        // TODO: PATCH /repos/{repo}/milestones/{number} après résolution du titre.
-        todo("update_milestone")
+    #[tool(
+        description = "Crée une version (milestone) dans un dépôt suivi. Avec une échéance (AAAA-MM-JJ), c'est un sprint ; sans date, un palier de roadmap. La description peut commencer par « # Nom » et lister les thèmes (« - Thème »)."
+    )]
+    async fn create_milestone(&self, Parameters(p): Parameters<MilestoneParams>) -> ToolResult {
+        respond(self.do_create_milestone(p).await)
     }
 
     #[tool(
-        description = "TODO — Liste les pull requests d'un dépôt suivi, ou de tous sans `repo`. Pas encore implémenté."
+        description = "Modifie une version (milestone) désignée par son titre : nouveau titre, description, échéance (chaîne vide pour la retirer), ou state « closed » pour la clore (« open » pour la rouvrir)."
     )]
-    async fn list_pull_requests(&self, Parameters(_): Parameters<ListPullRequestsParams>) -> ToolResult {
-        // TODO: GET /repos/{repo}/pulls (par dépôt suivi) + état des checks et des revues.
-        todo("list_pull_requests")
+    async fn update_milestone(&self, Parameters(p): Parameters<UpdateMilestoneParams>) -> ToolResult {
+        respond(self.do_update_milestone(p).await)
     }
 
     #[tool(
-        description = "TODO — Lit une pull request (description, fichiers, checks, revues). Pas encore implémenté."
+        description = "Liste les pull requests (ouvertes par défaut ; closed = 30 dernières fusionnées ou fermées) avec l'état des checks (CI), des revues, la branche, la version et les issues fermées. Avec `repo` : ce dépôt ; sans `repo` : tous les dépôts suivis, chaque PR portant son champ `repo`."
     )]
-    async fn get_pull_request(&self, Parameters(_): Parameters<NumberParams>) -> ToolResult {
-        // TODO: GET /repos/{repo}/pulls/{number} + /files + /reviews.
-        todo("get_pull_request")
+    async fn list_pull_requests(&self, Parameters(p): Parameters<ListPullRequestsParams>) -> ToolResult {
+        respond(self.do_list_pull_requests(p).await)
     }
 
     #[tool(
-        description = "TODO — Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée. Refuse la branche par défaut comme source. Pas encore implémenté."
+        description = "Lit une pull request d'un dépôt suivi : description, branches, checks du dernier commit, revues, fichiers modifiés (sans les patchs : lire le code dans un worktree)."
     )]
-    async fn create_pull_request(&self, Parameters(_): Parameters<CreatePullRequestParams>) -> ToolResult {
-        // TODO: POST /repos/{repo}/pulls ; refuser head == branche par défaut.
-        todo("create_pull_request")
+    async fn get_pull_request(&self, Parameters(p): Parameters<NumberParams>) -> ToolResult {
+        respond(self.do_get_pull_request(p).await)
     }
 
     #[tool(
-        description = "TODO — Sort une pull request du brouillon (prête pour la revue). Pas encore implémenté."
+        description = "Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée vers la branche par défaut (ou `base`). Refuse la branche par défaut comme source."
     )]
-    async fn mark_pull_request_ready(&self, Parameters(_): Parameters<NumberParams>) -> ToolResult {
-        // TODO: mutation GraphQL markPullRequestReadyForReview (node_id de la PR).
-        todo("mark_pull_request_ready")
+    async fn create_pull_request(&self, Parameters(p): Parameters<CreatePullRequestParams>) -> ToolResult {
+        respond(self.do_create_pull_request(p).await)
     }
 
-    #[tool(description = "TODO — Liste les releases publiées et les brouillons. Pas encore implémenté.")]
-    async fn list_releases(&self, Parameters(_): Parameters<RepoParams>) -> ToolResult {
-        // TODO: GET /repos/{repo}/releases.
-        todo("list_releases")
+    #[tool(description = "Sort une pull request du brouillon : elle devient prête pour la revue.")]
+    async fn mark_pull_request_ready(&self, Parameters(p): Parameters<NumberParams>) -> ToolResult {
+        respond(self.do_mark_ready(p).await)
     }
 
     #[tool(
-        description = "TODO — Crée la release d'une version (brouillon par défaut) avec ses notes ; crée le tag s'il manque. Pas encore implémenté."
+        description = "Liste les releases d'un dépôt suivi (publiées et brouillons) : tag, version, état, date, lien."
     )]
-    async fn create_release(&self, Parameters(_): Parameters<CreateReleaseParams>) -> ToolResult {
-        // TODO: POST /repos/{repo}/releases (tag_name = préfixe + version, target_commitish, draft).
-        todo("create_release")
+    async fn list_releases(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let prefix = self.settings().tag_prefix;
+                let releases: Vec<model::Release> = self
+                    .releases(&repo)
+                    .await?
+                    .iter()
+                    .map(|r| model::release_from(r, &prefix, false))
+                    .collect();
+                Ok(json!({ "repo": repo, "tag_prefix": prefix, "releases": releases }))
+            }
+            .await,
+        )
     }
 
-    #[tool(description = "TODO — Résumé du sprint en cours : issues par état, burndown, retard. Pas encore implémenté.", meta = ui_only())]
-    async fn sprint_summary(&self, Parameters(_): Parameters<RepoParams>) -> ToolResult {
-        // TODO: milestone daté ouvert le plus proche + issues + durée de sprint réglée.
-        todo("sprint_summary")
+    #[tool(
+        description = "Crée la release d'une version avec ses notes markdown, en brouillon par défaut (jamais publiée sans accord). Le tag est le préfixe réglé suivi de la version (v0.1.2) ; GitHub le crée sur `target` (ou la branche par défaut) s'il n'existe pas."
+    )]
+    async fn create_release(&self, Parameters(p): Parameters<CreateReleaseParams>) -> ToolResult {
+        respond(self.do_create_release(p).await)
+    }
+
+    #[tool(
+        description = "Résumé du sprint en cours (milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale, durée de sprint réglée.",
+        meta = ui_only()
+    )]
+    async fn sprint_summary(&self, Parameters(p): Parameters<SprintSummaryParams>) -> ToolResult {
+        respond(self.do_sprint_summary(p).await)
     }
 }
 
@@ -1045,14 +1438,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_tools_say_so() {
-        let r = server(&["me/app"])
-            .list_releases(Parameters(RepoParams {
+    async fn validates_inputs_before_calling_github() {
+        let s = server(&["me/app"]);
+        let r = s
+            .create_milestone(Parameters(MilestoneParams {
                 repo: "me/app".into(),
+                title: "0.1.3".into(),
+                description: None,
+                due_on: Some("20/10/2026".into()),
+                state: None,
             }))
             .await
             .unwrap();
+        assert!(text(&r).contains("AAAA-MM-JJ"), "{}", text(&r));
+
+        let r = s
+            .update_milestone(Parameters(UpdateMilestoneParams {
+                repo: "me/app".into(),
+                title: "0.1.3".into(),
+                new_title: None,
+                description: None,
+                due_on: None,
+                state: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Rien à modifier"), "{}", text(&r));
+
+        let r = s
+            .create_release(Parameters(CreateReleaseParams {
+                repo: "me/app".into(),
+                version: "0.1 beta".into(),
+                notes: "## Notes".into(),
+                target: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Version invalide"), "{}", text(&r));
+
+        let r = s
+            .create_pull_request(Parameters(CreatePullRequestParams {
+                repo: "me/app".into(),
+                title: " ".into(),
+                head: "feat/1-x".into(),
+                base: None,
+                body: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Titre de pull request vide"), "{}", text(&r));
+
+        let r = s
+            .sprint_summary(Parameters(SprintSummaryParams {
+                repo: "other/lib".into(),
+                version: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("non suivi"), "{}", text(&r));
+    }
+
+    #[tokio::test]
+    async fn lists_pull_requests_of_every_followed_repo() {
+        let r = server(&[])
+            .list_pull_requests(Parameters(ListPullRequestsParams::default()))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Aucun dépôt suivi"));
+        // Chaque dépôt échoue (pas de jeton) : l'erreur est remontée.
+        let r = server(&["me/app", "me/site"])
+            .list_pull_requests(Parameters(ListPullRequestsParams::default()))
+            .await
+            .unwrap();
         assert_eq!(r.is_error, Some(true));
-        assert!(text(&r).contains("pas encore implémenté"));
+        assert!(text(&r).contains("GitHub n'est pas connecté"), "{}", text(&r));
     }
 }

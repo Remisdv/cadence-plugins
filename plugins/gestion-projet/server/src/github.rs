@@ -1,4 +1,5 @@
-//! Client REST GitHub minimal : jeton porteur, erreurs lisibles, pagination par en-tête `Link`.
+//! Client GitHub minimal : REST (jeton porteur, erreurs lisibles, pagination par en-tête `Link`)
+//! et GraphQL (état des checks et des revues des pull requests, sortie du brouillon).
 
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::{Method, StatusCode, header::HeaderMap};
@@ -7,6 +8,7 @@ use serde_json::Value;
 pub struct GitHub {
     http: reqwest::Client,
     base: String,
+    graphql: String,
     token: Option<String>,
 }
 
@@ -22,9 +24,11 @@ impl GitHub {
             .user_agent(concat!("cadence-gestion-projet/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("client HTTP")?;
+        let base = base.trim_end_matches('/').to_string();
         Ok(GitHub {
             http,
-            base: base.trim_end_matches('/').to_string(),
+            graphql: graphql_url(&base),
+            base,
             token,
         })
     }
@@ -45,9 +49,30 @@ impl GitHub {
         Ok(self.send(Method::PATCH, path, &[], Some(body)).await?.body)
     }
 
+    /// Requête GraphQL ; les erreurs GraphQL (réponse 200 avec `errors`) deviennent une erreur.
+    pub async fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
+        let body = serde_json::json!({ "query": query, "variables": variables });
+        let res = self
+            .send_to(Method::POST, &self.graphql, "/graphql", &[], Some(&body))
+            .await?;
+        graphql_data(res.body)
+    }
+
     async fn send(
         &self,
         method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+    ) -> Result<Page> {
+        let url = format!("{}{path}", self.base);
+        self.send_to(method, &url, path, query, body).await
+    }
+
+    async fn send_to(
+        &self,
+        method: Method,
+        url: &str,
         path: &str,
         query: &[(&str, String)],
         body: Option<&Value>,
@@ -60,7 +85,7 @@ impl GitHub {
         })?;
         let mut req = self
             .http
-            .request(method.clone(), format!("{}{path}", self.base))
+            .request(method.clone(), url)
             .bearer_auth(token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28");
@@ -89,6 +114,39 @@ impl GitHub {
             body,
             has_next: has_next(&headers),
         })
+    }
+}
+
+/// Point d'entrée GraphQL de l'API : `https://api.github.com/graphql`, ou
+/// `https://<hôte>/api/graphql` pour GitHub Enterprise (`…/api/v3`).
+pub fn graphql_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    match base.strip_suffix("/v3") {
+        Some(api) if api.ends_with("/api") => format!("{api}/graphql"),
+        _ => format!("{base}/graphql"),
+    }
+}
+
+/// `data` d'une réponse GraphQL, ou ses erreurs en français.
+pub fn graphql_data(body: Value) -> Result<Value> {
+    if let Some(errors) = body
+        .get("errors")
+        .and_then(Value::as_array)
+        .filter(|e| !e.is_empty())
+    {
+        let messages: Vec<&str> = errors.iter().filter_map(|e| e["message"].as_str()).collect();
+        bail!(
+            "GitHub (GraphQL) a refusé la requête : {}",
+            if messages.is_empty() {
+                "erreur inconnue".to_string()
+            } else {
+                messages.join(" ; ")
+            }
+        );
+    }
+    match body.get("data") {
+        Some(data) if !data.is_null() => Ok(data.clone()),
+        _ => bail!("Réponse GraphQL de GitHub sans données."),
     }
 }
 
@@ -161,6 +219,31 @@ mod tests {
         );
         h.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
         assert!(describe_error(StatusCode::FORBIDDEN, &h, "{}", "/x").starts_with("Quota"));
+    }
+
+    #[test]
+    fn finds_the_graphql_endpoint() {
+        assert_eq!(
+            graphql_url("https://api.github.com"),
+            "https://api.github.com/graphql"
+        );
+        assert_eq!(
+            graphql_url("https://ghe.corp/api/v3/"),
+            "https://ghe.corp/api/graphql"
+        );
+        assert_eq!(graphql_url("http://127.0.0.1:9"), "http://127.0.0.1:9/graphql");
+    }
+
+    #[test]
+    fn reads_graphql_data_and_errors() {
+        let ok = serde_json::json!({ "data": { "repository": { "id": "R_1" } } });
+        assert_eq!(graphql_data(ok).unwrap()["repository"]["id"], "R_1");
+        let err = serde_json::json!({ "data": null, "errors": [{ "message": "Could not resolve" }] });
+        assert_eq!(
+            graphql_data(err).unwrap_err().to_string(),
+            "GitHub (GraphQL) a refusé la requête : Could not resolve"
+        );
+        assert!(graphql_data(serde_json::json!({})).is_err());
     }
 
     #[test]

@@ -6,7 +6,9 @@
 mod config;
 mod github;
 mod model;
+mod pulls;
 mod server;
+mod sprint;
 
 use anyhow::Result;
 use rmcp::{ServiceExt, transport::stdio};

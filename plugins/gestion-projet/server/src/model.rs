@@ -3,8 +3,12 @@
 //! - Type d'issue : label `type/feat|fix|chore|perf|docs`.
 //! - État : `status/todo|doing|review` ; une issue fermée est « done ».
 //! - Estimation : `estimate/S|M|L|XL`.
-//! - Version : milestone semver (`0.1.2`) ; daté = sprint, sans date = palier de roadmap.
+//! - Version : milestone semver (`0.1.2`) ; daté = sprint, sans date = palier de roadmap. La
+//!   description du milestone donne son nom (premier titre `# Nom`) et ses thèmes (éléments de
+//!   liste).
+//! - Release : tag `<préfixe><version>` (`v0.1.2`), brouillon par défaut.
 
+use anyhow::{Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -192,24 +196,131 @@ pub struct Version {
     pub kind: &'static str,
     pub state: String,
     pub due_on: Option<String>,
+    /// Nom de la version : premier titre markdown de la description (`# Cockpit Tauri`).
+    pub name: Option<String>,
+    /// Thèmes : éléments de liste de la description (paliers de roadmap).
+    pub themes: Vec<String>,
     pub description: Option<String>,
     pub open_issues: u32,
     pub closed_issues: u32,
+    pub closed_at: Option<String>,
     pub url: String,
 }
 
 pub fn version_from(raw: &Value) -> Version {
     let due_on = str_of(&raw["due_on"]);
+    let description = str_of(&raw["description"]).filter(|d| !d.trim().is_empty());
+    let text = description.as_deref().unwrap_or("");
     Version {
         title: str_of(&raw["title"]).unwrap_or_default(),
         number: u32_of(&raw["number"]),
         kind: if due_on.is_some() { "sprint" } else { "palier" },
         state: str_of(&raw["state"]).unwrap_or_else(|| "open".into()),
         due_on,
-        description: str_of(&raw["description"]).filter(|d| !d.trim().is_empty()),
+        name: name_of(text),
+        themes: themes_of(text),
+        description,
         open_issues: u32_of(&raw["open_issues"]),
         closed_issues: u32_of(&raw["closed_issues"]),
+        closed_at: str_of(&raw["closed_at"]),
         url: str_of(&raw["html_url"]).unwrap_or_default(),
+    }
+}
+
+/// Nom d'une version : le premier titre markdown de la description.
+pub fn name_of(description: &str) -> Option<String> {
+    description
+        .lines()
+        .map(str::trim)
+        .find_map(|l| {
+            l.strip_prefix('#')
+                .map(|t| t.trim_start_matches('#').trim().to_string())
+        })
+        .filter(|t| !t.is_empty())
+}
+
+/// Thèmes d'un palier : les éléments de liste de la description (cases à cocher comprises).
+pub fn themes_of(description: &str) -> Vec<String> {
+    description
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim_start();
+            let rest = l
+                .strip_prefix("- ")
+                .or_else(|| l.strip_prefix("* "))
+                .or_else(|| l.strip_prefix("+ "))?;
+            let rest = rest
+                .trim_start_matches("[ ] ")
+                .trim_start_matches("[x] ")
+                .trim_start_matches("[X] ")
+                .trim();
+            (!rest.is_empty()).then(|| rest.to_string())
+        })
+        .collect()
+}
+
+/// Échéance d'un milestone pour l'API : `AAAA-MM-JJ` (ou un instant ISO) → midi UTC ce jour-là,
+/// pour que GitHub (qui stocke un jour en heure du Pacifique) garde la même date. Chaîne vide :
+/// `None` (retirer l'échéance, la version devient un palier).
+pub fn due_on_param(value: &str) -> Result<Option<String>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if !crate::sprint::is_date(value) {
+        bail!("Échéance invalide : « {value} ». Format attendu : AAAA-MM-JJ (ex. 2026-10-20).");
+    }
+    Ok(Some(format!("{}T12:00:00Z", &value[..10])))
+}
+
+/// Tag d'une version : `<préfixe><version>` ; la version peut déjà porter le préfixe.
+pub fn tag_name(prefix: &str, version: &str) -> Result<String> {
+    let v = version.trim();
+    let v = if prefix.is_empty() {
+        v
+    } else {
+        v.strip_prefix(prefix).unwrap_or(v)
+    };
+    if v.is_empty() || v.chars().any(|c| c.is_whitespace() || "~^:?*[\\".contains(c)) {
+        bail!("Version invalide pour un tag : « {version} » (ex. 0.1.2).");
+    }
+    Ok(format!("{prefix}{v}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Release {
+    pub tag: String,
+    /// Version sans le préfixe de tag (`v0.1.2` → `0.1.2`).
+    pub version: String,
+    pub name: Option<String>,
+    pub draft: bool,
+    pub prerelease: bool,
+    pub url: String,
+    pub created_at: Option<String>,
+    pub published_at: Option<String>,
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+pub fn release_from(raw: &Value, tag_prefix: &str, with_body: bool) -> Release {
+    let tag = str_of(&raw["tag_name"]).unwrap_or_default();
+    let version = if tag_prefix.is_empty() {
+        tag.clone()
+    } else {
+        tag.strip_prefix(tag_prefix).unwrap_or(&tag).to_string()
+    };
+    Release {
+        version,
+        name: str_of(&raw["name"]).filter(|n| !n.trim().is_empty()),
+        draft: raw["draft"].as_bool().unwrap_or(false),
+        prerelease: raw["prerelease"].as_bool().unwrap_or(false),
+        url: str_of(&raw["html_url"]).unwrap_or_default(),
+        created_at: str_of(&raw["created_at"]),
+        published_at: str_of(&raw["published_at"]),
+        author: str_of(&raw["author"]["login"]),
+        body: with_body.then(|| str_of(&raw["body"]).unwrap_or_default()),
+        tag,
     }
 }
 
@@ -294,5 +405,60 @@ mod tests {
             Some(json!(4))
         );
         assert!(find_milestone(&ms, "0.3.0", "v").is_none());
+        let palier = version_from(&ms[1]);
+        assert_eq!((palier.name, palier.themes), (None, vec!["Rôles".to_string()]));
+    }
+
+    #[test]
+    fn reads_names_and_themes_of_versions() {
+        let d = "# Travail à plusieurs\n- Rôles et permissions\n  * Revue assistée\n+ Multi-dépôts\ntexte\n- [ ] Coché";
+        assert_eq!(name_of(d).as_deref(), Some("Travail à plusieurs"));
+        assert_eq!(
+            themes_of(d),
+            ["Rôles et permissions", "Revue assistée", "Multi-dépôts", "Coché"]
+        );
+        assert_eq!(name_of("- seulement des thèmes"), None);
+        assert_eq!(name_of("#   "), None);
+    }
+
+    #[test]
+    fn normalizes_due_dates_and_tags() {
+        assert_eq!(
+            due_on_param("2026-10-20").unwrap().as_deref(),
+            Some("2026-10-20T12:00:00Z")
+        );
+        assert_eq!(
+            due_on_param("2026-10-20T07:00:00Z").unwrap().as_deref(),
+            Some("2026-10-20T12:00:00Z")
+        );
+        assert_eq!(due_on_param("  ").unwrap(), None);
+        assert!(
+            due_on_param("20/10/2026")
+                .unwrap_err()
+                .to_string()
+                .contains("AAAA-MM-JJ")
+        );
+
+        assert_eq!(tag_name("v", "0.1.2").unwrap(), "v0.1.2");
+        assert_eq!(tag_name("v", "v0.1.2").unwrap(), "v0.1.2");
+        assert_eq!(tag_name("", " 1.0.0 ").unwrap(), "1.0.0");
+        assert_eq!(tag_name("release-", "2.0.0").unwrap(), "release-2.0.0");
+        assert!(tag_name("v", "v").is_err());
+        assert!(tag_name("v", "0.1 beta").is_err());
+    }
+
+    #[test]
+    fn maps_releases() {
+        let raw = json!({"tag_name": "v0.1.2", "name": "", "draft": true, "prerelease": false,
+            "html_url": "https://github.com/me/app/releases/tag/v0.1.2", "author": {"login": "RemiSDV"},
+            "body": "## Notes"});
+        let r = release_from(&raw, "v", false);
+        assert_eq!(
+            (r.tag.as_str(), r.version.as_str(), r.draft, r.name),
+            ("v0.1.2", "0.1.2", true, None)
+        );
+        assert_eq!(r.body, None);
+        assert_eq!(release_from(&raw, "", true).version, "v0.1.2");
+        assert_eq!(release_from(&raw, "v", true).body.as_deref(), Some("## Notes"));
     }
 }
