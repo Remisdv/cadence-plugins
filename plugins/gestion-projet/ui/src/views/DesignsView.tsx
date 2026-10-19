@@ -20,6 +20,7 @@ import {
   Field,
   Icon,
   Input,
+  Select,
   Textarea,
   cn,
 } from "@cadence/ui";
@@ -28,6 +29,9 @@ import { EmptyCard, Loading, NoRepos, PageHeader, ToolError } from "../component
 import { formatDay } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
+
+/** Nom lisible d'une page : `project/V2-Chat.dc.html` → `V2-Chat`. */
+const pageLabel = (path: string) => (path.split("/").pop() ?? path).replace(/(\.dc)?\.html?$/i, "");
 
 const notifyError = (e: unknown) =>
   cadence.notify(isCadenceError(e) ? e.message : String(e), "error");
@@ -242,7 +246,25 @@ function Viewer({
         </Button>
       </Card>
       {design.description && <p className="text-body-sm text-tx2">{design.description}</p>}
-      {pages.length > 1 && (
+      {pages.length > 6 && (
+        <label className="flex items-center gap-2 text-caption text-tx3">
+          Écran
+          <Select
+            size="sm"
+            value={current ?? ""}
+            onChange={(e) => setFile(e.target.value)}
+            aria-label="Écran du design"
+          >
+            {pages.map((p) => (
+              <option key={p.path} value={p.path}>
+                {pageLabel(p.path)}
+              </option>
+            ))}
+          </Select>
+          <span>· {pages.length} écrans</span>
+        </label>
+      )}
+      {pages.length > 1 && pages.length <= 6 && (
         <div role="tablist" aria-label="Pages du design" className="flex flex-wrap gap-1">
           {pages.map((p) => (
             <button
@@ -255,7 +277,7 @@ function Viewer({
                 current === p.path ? "bg-p4 text-tx" : "hover:bg-p2",
               )}
             >
-              {p.path}
+              {pageLabel(p.path)}
             </button>
           ))}
         </div>
