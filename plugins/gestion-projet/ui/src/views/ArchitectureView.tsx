@@ -437,13 +437,17 @@ function SystemPanel({
                   </marker>
                 </defs>
                 <g transform={`translate(${pad},${pad})`}>
-                  {architecture.links.map((l) => {
+                  {architecture.links.map((l, i) => {
                     const a = at.get(l.from);
                     const b = at.get(l.to);
                     if (!a || !b) return null;
                     const p = linkPath(a, b);
+                    // Liens parallèles (REST et WebSocket entre les mêmes services) : étiquettes empilées.
+                    const rank = architecture.links
+                      .slice(0, i)
+                      .filter((x) => x.from === l.from && x.to === l.to).length;
                     return (
-                      <g key={`${l.from}-${l.to}`}>
+                      <g key={i}>
                         <path
                           d={p.d}
                           fill="none"
@@ -454,7 +458,7 @@ function SystemPanel({
                         {l.label && (
                           <text
                             x={p.mx}
-                            y={p.my - 6}
+                            y={p.my - 6 - rank * 14}
                             textAnchor="middle"
                             className="fill-tx2 text-micro"
                           >
