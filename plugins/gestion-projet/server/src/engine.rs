@@ -5,7 +5,7 @@
 //! toutes les dix minutes en fond). Toutes les étapes sont idempotentes : plusieurs membres de
 //! l'équipe peuvent passer en même temps, une étape déjà faite est reconnue et sautée.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use crate::{
     model::{self, Issue},
     projet::{
-        self, ProjectState, ReleaseRecord, ReleaseStatus, RunStatus, STATE_LABEL, STATE_TITLE, SprintRecord,
+        self, Jalon, ProjectState, ReleaseRecord, ReleaseStatus, RunStatus, STATE_LABEL, STATE_TITLE,
+        SprintRecord,
     },
     server::GestionProjet,
     sprint,
@@ -754,7 +755,8 @@ impl GestionProjet {
             bail!("Capacité invalide : {capacity} story points (de 1 à 500).");
         }
         let _guard = self.engine_lock.lock().await;
-        if let Some(p) = self.load_project(repo).await? {
+        let existing = self.load_project(repo).await?;
+        if let Some(p) = existing.as_ref().filter(|p| !p.state.sprints.is_empty()) {
             bail!(
                 "Les sprints de {repo} sont déjà démarrés (issue d'état #{}).",
                 p.issue
@@ -804,28 +806,25 @@ impl GestionProjet {
                 ended_on: None,
                 release: None,
             }],
+            jalons: existing
+                .as_ref()
+                .map(|p| p.state.jalons.clone())
+                .unwrap_or_default(),
         };
-        let raw = self
-                .gh
-                .post(
-                    &format!("/repos/{repo}/issues"),
-                    &json!({ "title": STATE_TITLE, "body": projet::render_body(&state), "labels": [STATE_LABEL] }),
-                )
-                .await?;
-        let project = Project {
-            issue: raw["number"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .context("numéro de l'issue d'état illisible")?,
-            url: raw["html_url"].as_str().unwrap_or("").to_string(),
-            state,
+        let project = match existing {
+            Some(p) => {
+                let project = Project { state, ..p };
+                self.save_project(repo, &project).await?;
+                project
+            }
+            None => self.create_state_issue(repo, state).await?,
         };
         self.advance(repo, project).await
     }
 
     pub(crate) async fn pause_project(&self, repo: &str, pause: bool) -> Result<Project> {
         let _guard = self.engine_lock.lock().await;
-        let mut project = self.require_project(repo).await?;
+        let mut project = self.require_started(repo).await?;
         let today = sprint::today();
         match (pause, project.state.status) {
             (true, RunStatus::Running) => {
@@ -853,6 +852,10 @@ impl GestionProjet {
         let mut project = self.require_project(repo).await?;
         let today = sprint::today();
         project.state.duration_days = duration_days;
+        if project.state.sprints.is_empty() {
+            self.save_project(repo, &project).await?;
+            return Ok(project);
+        }
         let target = project.state.next_capacity();
         let index = project
             .state
@@ -883,6 +886,228 @@ impl GestionProjet {
         self.advance(repo, project).await
     }
 
+    async fn require_started(&self, repo: &str) -> Result<Project> {
+        let project = self.require_project(repo).await?;
+        if project.state.sprints.is_empty() {
+            bail!("Les sprints de {repo} ne sont pas démarrés : utilisez « Démarrer le projet ».");
+        }
+        Ok(project)
+    }
+
+    async fn create_state_issue(&self, repo: &str, state: ProjectState) -> Result<Project> {
+        let raw = self
+            .gh
+            .post(
+                &format!("/repos/{repo}/issues"),
+                &json!({ "title": STATE_TITLE, "body": projet::render_body(&state), "labels": [STATE_LABEL] }),
+            )
+            .await?;
+        Ok(Project {
+            issue: raw["number"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .context("numéro de l'issue d'état illisible")?,
+            url: raw["html_url"].as_str().unwrap_or("").to_string(),
+            state,
+        })
+    }
+
+    /* ---------- Jalons de la roadmap ---------- */
+
+    /// Modifie les jalons ; crée l'issue d'état (sprints pas démarrés) s'il n'y en a pas encore.
+    pub(crate) async fn edit_jalons(
+        &self,
+        repo: &str,
+        edit: impl FnOnce(&mut ProjectState) -> Result<()>,
+    ) -> Result<Project> {
+        let _guard = self.engine_lock.lock().await;
+        let mut project = match self.load_project(repo).await? {
+            Some(p) => p,
+            None => {
+                let state = ProjectState {
+                    status: RunStatus::Idle,
+                    duration_days: self
+                        .settings()
+                        .sprint_length_days
+                        .clamp(projet::MIN_DAYS, projet::MAX_DAYS),
+                    initial_points_per_day: 10.0 / 7.0,
+                    paused_since: None,
+                    sprints: vec![],
+                    jalons: vec![],
+                };
+                self.create_state_issue(repo, state).await?
+            }
+        };
+        edit(&mut project.state)?;
+        self.save_project(repo, &project).await?;
+        Ok(project)
+    }
+
+    /// Toutes les issues du dépôt (ouvertes et fermées, descriptions comprises), sans l'issue d'état.
+    async fn all_issues(&self, repo: &str) -> Result<Vec<Issue>> {
+        let mut out = Vec::new();
+        for page in 1..=10u32 {
+            let p = self
+                .gh
+                .get_page(
+                    &format!("/repos/{repo}/issues"),
+                    &[
+                        ("state", "all".into()),
+                        ("per_page", "100".into()),
+                        ("page", page.to_string()),
+                    ],
+                )
+                .await?;
+            out.extend(
+                p.body
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|raw| !model::is_pull_request(raw) && !model::is_state_issue(raw))
+                    .map(|raw| model::issue_in(repo, raw, true)),
+            );
+            if !p.has_next {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Roadmap : jalons, sprints passés, en cours et prévus, dates estimées avec fourchette.
+    pub(crate) async fn build_roadmap(&self, repo: &str) -> Result<Value> {
+        let today = sprint::today();
+        let Some(project) = self.load_project(repo).await? else {
+            return Ok(json!({
+                "repo": repo, "today": today, "started": false, "jalons": [], "sprints": [],
+                "unassigned": [], "end": Value::Null,
+            }));
+        };
+        let state = &project.state;
+        let prefix = self.settings().tag_prefix;
+        let issues = self.all_issues(repo).await?;
+        let by_number: HashMap<u32, &Issue> = issues.iter().map(|i| (i.number, i)).collect();
+        let open_set: HashSet<u32> = issues
+            .iter()
+            .filter(|i| i.state == "open")
+            .map(|i| i.number)
+            .collect();
+
+        // Prévisions au rythme moyen, haut (dates au plus tôt) et bas (au plus tard).
+        let plans: Option<[Vec<projet::PlannedSprint>; 3]> = state.current().map(|cur| {
+            let current_open: Vec<Issue> = issues
+                .iter()
+                .filter(|i| i.state == "open" && i.milestone.as_deref() == Some(cur.version.as_str()))
+                .cloned()
+                .collect();
+            let backlog: Vec<Issue> = issues
+                .iter()
+                .filter(|i| i.state == "open" && i.milestone.is_none())
+                .cloned()
+                .collect();
+            let taken: Vec<String> = state
+                .sprints
+                .iter()
+                .map(|s| s.version.clone())
+                .chain(issues.iter().filter_map(|i| i.milestone.clone()))
+                .filter(|v| v != &cur.version)
+                .collect();
+            let (low, avg, high) = state.rate_range();
+            [avg, high, low].map(|rate| {
+                projet::forecast(
+                    cur,
+                    &current_open,
+                    &backlog,
+                    &open_set,
+                    rate,
+                    state.duration_days,
+                    &taken,
+                    &prefix,
+                    52,
+                )
+            })
+        });
+        let maps = plans
+            .as_ref()
+            .map(|p| p.each_ref().map(|plan| projet::due_by_issue(plan)));
+
+        // Colonnes : sprints terminés, puis en cours et prévus (rythme moyen).
+        let mut sprints: Vec<Value> = state
+            .sprints
+            .iter()
+            .filter(|s| s.ended_on.is_some())
+            .map(|s| {
+                json!({
+                    "version": s.version, "start_on": s.start_on,
+                    "due_on": s.ended_on.clone().unwrap_or_else(|| s.due_on.clone()),
+                    "state": "done", "points": s.done_points.unwrap_or(0),
+                })
+            })
+            .collect();
+        if let Some(plans) = &plans {
+            for (i, p) in plans[0].iter().enumerate() {
+                sprints.push(json!({
+                    "version": p.version, "start_on": p.start_on, "due_on": p.due_on,
+                    "state": if i == 0 { "current" } else { "planned" }, "points": p.points,
+                }));
+            }
+        }
+        let start_of = |version: &str| {
+            sprints
+                .iter()
+                .find(|s| s["version"].as_str() == Some(version))
+                .and_then(|s| s["start_on"].as_str().map(str::to_string))
+        };
+        let sprint_index = |version: &str| {
+            sprints
+                .iter()
+                .position(|s| s["version"].as_str() == Some(version))
+        };
+
+        let jalons: Vec<Value> = state
+            .jalons
+            .iter()
+            .map(|j| {
+                let current = state.current().map(|c| c.version.as_str());
+                jalon_view(j, &by_number, maps.as_ref(), current, &sprint_index, &start_of)
+            })
+            .collect();
+
+        let in_jalon: HashSet<u32> = state
+            .jalons
+            .iter()
+            .flat_map(|j| j.issues.iter().copied())
+            .collect();
+        let unassigned: Vec<Value> = issues
+            .iter()
+            .filter(|i| i.state == "open" && !in_jalon.contains(&i.number))
+            .map(|i| json!({ "number": i.number, "title": i.title, "points": i.points, "priority": i.priority, "milestone": i.milestone }))
+            .collect();
+
+        // Fin de tout ce qui est ouvert, avec la même fourchette.
+        let end = plans.as_ref().map(|p| {
+            let last = |plan: &Vec<projet::PlannedSprint>| plan.last().map(|s| s.due_on.clone());
+            let planned: HashSet<u32> = p[0].iter().flat_map(|s| s.issues.iter().copied()).collect();
+            json!({
+                "on": last(&p[0]), "early": last(&p[1]), "late": last(&p[2]),
+                "unplanned": open_set.difference(&planned).count(),
+            })
+        });
+        let (low, avg, high) = state.rate_range();
+        Ok(json!({
+            "repo": repo,
+            "today": today,
+            "started": state.current().is_some(),
+            "issue": project.issue,
+            "url": project.url,
+            "duration_days": state.duration_days,
+            "rates": { "low": round1(low), "avg": round1(avg), "high": round1(high) },
+            "sprints": sprints,
+            "jalons": jalons,
+            "unassigned": unassigned,
+            "end": end,
+        }))
+    }
+
     async fn require_project(&self, repo: &str) -> Result<Project> {
         self.load_project(repo).await?.ok_or_else(|| {
             anyhow!("Les sprints de {repo} ne sont pas démarrés : utilisez « Démarrer le projet ».")
@@ -909,4 +1134,84 @@ enum Ci {
     Pending,
     Success,
     Failure,
+}
+
+fn round1(x: f32) -> f32 {
+    (x * 10.0).round() / 10.0
+}
+
+/// Jalon tel que la roadmap l'affiche : avancement, sprints concernés, dates estimées.
+fn jalon_view(
+    jalon: &Jalon,
+    by_number: &HashMap<u32, &Issue>,
+    maps: Option<&[HashMap<u32, (String, String)>; 3]>,
+    current: Option<&str>,
+    sprint_index: &dyn Fn(&str) -> Option<usize>,
+    start_of: &dyn Fn(&str) -> Option<String>,
+) -> Value {
+    let issues: Vec<&Issue> = jalon
+        .issues
+        .iter()
+        .filter_map(|n| by_number.get(n).copied())
+        .collect();
+    let open: Vec<&Issue> = issues.iter().copied().filter(|i| i.state == "open").collect();
+    let version_of = |i: &Issue| -> Option<String> {
+        if i.state == "open"
+            && let Some(m) = maps
+        {
+            return m[0].get(&i.number).map(|(v, _)| v.clone());
+        }
+        i.milestone.clone()
+    };
+    // Fin du jalon dans une prévision : échéance du sprint de sa dernière issue ouverte.
+    let end_in = |k: usize| -> Option<String> {
+        let map = &maps?[k];
+        open.iter()
+            .map(|i| map.get(&i.number).map(|(_, due)| due.clone()))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .max()
+    };
+    let mut versions: Vec<String> = issues.iter().filter_map(|i| version_of(i)).collect();
+    versions.sort_by_key(|v| sprint_index(v).unwrap_or(usize::MAX));
+    versions.dedup();
+    let done = !issues.is_empty() && open.is_empty();
+    let unplanned = match maps {
+        Some(m) => open.iter().filter(|i| !m[0].contains_key(&i.number)).count(),
+        None => open.len(),
+    };
+    let status = if issues.is_empty() {
+        "empty"
+    } else if done {
+        "done"
+    } else if issues.iter().any(|i| {
+        i.state == "closed"
+            || i.status != "todo"
+            || (current.is_some() && version_of(i).as_deref() == current)
+    }) {
+        "in_progress"
+    } else {
+        "planned"
+    };
+    json!({
+        "id": jalon.id,
+        "name": jalon.name,
+        "description": jalon.description,
+        "status": status,
+        "issues": issues.iter().map(|i| json!({
+            "number": i.number, "title": i.title, "state": i.state, "status": i.status,
+            "points": i.points, "priority": i.priority, "sprint": version_of(i),
+        })).collect::<Vec<_>>(),
+        "total": issues.len(),
+        "closed": issues.len() - open.len(),
+        "points_total": issues.iter().map(|i| projet::weight(i)).sum::<u32>(),
+        "points_done": issues.iter().filter(|i| i.state == "closed").map(|i| projet::weight(i)).sum::<u32>(),
+        "unestimated": open.iter().filter(|i| i.points.is_none()).count(),
+        "unplanned": unplanned,
+        "sprints": versions,
+        "start_on": versions.first().and_then(|v| start_of(v)),
+        "end_on": if done { issues.iter().filter_map(|i| i.closed_at.as_deref().map(|d| d[..10.min(d.len())].to_string())).max() } else { end_in(0) },
+        "end_early": if done { None } else { end_in(1) },
+        "end_late": if done { None } else { end_in(2) },
+    })
 }

@@ -236,6 +236,81 @@ export interface ProjectView {
   sprints: SprintRecord[];
 }
 
+/* ---------- Roadmap par jalons (`roadmap`) ---------- */
+
+/** Colonne de la roadmap : sprint terminé, en cours ou prévu au rythme moyen. */
+export interface RoadmapSprint {
+  version: string;
+  start_on: string;
+  due_on: string;
+  state: "done" | "current" | "planned";
+  /** Story points livrés (terminé) ou prévus. */
+  points: number;
+}
+
+export interface JalonIssue {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  status: IssueStatus;
+  points: number | null;
+  priority: number | null;
+  /** Sprint qui l'a livrée, la porte ou devrait la prendre. */
+  sprint: string | null;
+}
+
+export type JalonStatus = "empty" | "planned" | "in_progress" | "done";
+
+/** Jalon : objectif nommé, réalisé en un ou plusieurs sprints (affichage seulement). */
+export interface JalonView {
+  id: string;
+  name: string;
+  description: string;
+  status: JalonStatus;
+  issues: JalonIssue[];
+  total: number;
+  closed: number;
+  points_total: number;
+  points_done: number;
+  /** Issues ouvertes sans story points (comptées 3 SP). */
+  unestimated: number;
+  /** Issues ouvertes qu'aucun sprint prévu ne prend (dépendance hors plan, sprints pas démarrés). */
+  unplanned: number;
+  /** Versions des sprints concernés, dans l'ordre. */
+  sprints: string[];
+  start_on: string | null;
+  /** Fin estimée au rythme moyen (ou date de fin réelle d'un jalon terminé). */
+  end_on: string | null;
+  /** Au plus tôt (meilleur rythme récent) et au plus tard (moins bon). */
+  end_early: string | null;
+  end_late: string | null;
+}
+
+/** Réponse de `roadmap`. */
+export interface RoadmapPlan {
+  repo: string;
+  today: string;
+  /** Sprints automatiques démarrés (sinon : pas de dates). */
+  started: boolean;
+  issue?: number;
+  url?: string;
+  duration_days?: number;
+  /** Rythmes en SP par jour : bas, moyen, haut. */
+  rates?: { low: number; avg: number; high: number };
+  sprints: RoadmapSprint[];
+  jalons: JalonView[];
+  /** Issues ouvertes sans jalon. */
+  unassigned: {
+    number: number;
+    title: string;
+    points: number | null;
+    priority: number | null;
+    milestone: string | null;
+  }[];
+  /** Fin de tout le travail ouvert. */
+  end: { on: string | null; early: string | null; late: string | null; unplanned: number } | null;
+}
+
 /** Valeurs proposées par « Démarrer le projet ». */
 export interface StartDefaults {
   duration_days: number;

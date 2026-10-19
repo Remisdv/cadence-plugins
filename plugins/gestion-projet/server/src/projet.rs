@@ -14,6 +14,11 @@
 //!   démarrage) × durée ; un sprint fini en avance tire les issues suivantes ;
 //! - à l'échéance, les issues ouvertes passent en tête du sprint suivant (leur poids réduit la
 //!   place des nouvelles), la branche de release est fusionnée dans la branche par défaut.
+//!
+//! Roadmap : des **jalons** (nom clair, description, issues) rangés dans l'état, pour l'affichage
+//! seulement (ni branche ni milestone ; les sprints restent remplis par priorité). La prévision
+//! simule les sprints à venir au rythme moyen, puis aux rythmes haut et bas pour la fourchette :
+//! un jalon finit avec le sprint qui prend sa dernière issue ouverte.
 
 use std::collections::HashSet;
 
@@ -39,6 +44,8 @@ const MARKER: &str = "<!-- cadence:sprints -->";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
+    /// Pas encore démarrés : l'état ne porte que les jalons de la roadmap.
+    Idle,
     Running,
     Paused,
 }
@@ -117,6 +124,19 @@ impl SprintRecord {
     }
 }
 
+/// Jalon de la roadmap : un objectif nommé, atteint en un ou plusieurs sprints.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Jalon {
+    /// Identifiant stable (`mvp`, `beta-publique`), tiré du nom à la création.
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Issues du jalon (une issue appartient à un seul jalon).
+    #[serde(default)]
+    pub issues: Vec<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectState {
     pub status: RunStatus,
@@ -126,7 +146,11 @@ pub struct ProjectState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_since: Option<String>,
     /// Sprints, du plus ancien au sprint en cours (le dernier).
+    #[serde(default)]
     pub sprints: Vec<SprintRecord>,
+    /// Jalons de la roadmap, dans l'ordre d'affichage.
+    #[serde(default)]
+    pub jalons: Vec<Jalon>,
 }
 
 impl ProjectState {
@@ -159,6 +183,91 @@ impl ProjectState {
     pub fn next_capacity(&self) -> u32 {
         capacity_for(self.points_per_day(), self.duration_days)
     }
+
+    /// Rythmes (bas, moyen, haut) de la fourchette des dates : le moins bon et le meilleur des
+    /// trois derniers sprints ; sans historique, ±40 % puis ±25 % après un premier sprint.
+    pub fn rate_range(&self) -> (f32, f32, f32) {
+        let avg = self.points_per_day();
+        let rates: Vec<f32> = self
+            .sprints
+            .iter()
+            .filter_map(|s| s.done_points.map(|d| d as f32 / s.working_days() as f32))
+            .rev()
+            .take(RATE_WINDOW)
+            .collect();
+        match rates.len() {
+            0 => (avg * 0.6, avg, avg * 1.4),
+            1 => (avg * 0.75, avg, avg * 1.25),
+            _ => {
+                let low = rates.iter().copied().fold(f32::INFINITY, f32::min);
+                let high = rates.iter().copied().fold(0.0, f32::max);
+                (low.min(avg), avg, high.max(avg))
+            }
+        }
+    }
+
+    pub fn jalon(&self, id: &str) -> Option<&Jalon> {
+        self.jalons.iter().find(|j| j.id == id)
+    }
+
+    /// Identifiant libre tiré d'un nom (`MVP privé` → `mvp-prive`, puis `mvp-prive-2`…).
+    pub fn new_jalon_id(&self, name: &str) -> String {
+        let base = slug(name);
+        let base = if base.is_empty() {
+            "jalon".to_string()
+        } else {
+            base
+        };
+        let mut id = base.clone();
+        let mut n = 2;
+        while self.jalon(&id).is_some() {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        id
+    }
+
+    /// Range des issues dans un jalon (et les retire de tout autre jalon), en retire d'autres.
+    pub fn assign(&mut self, id: &str, add: &[u32], remove: &[u32]) -> Result<()> {
+        if self.jalon(id).is_none() {
+            bail!("Jalon « {id} » introuvable.");
+        }
+        for j in &mut self.jalons {
+            if j.id == id {
+                j.issues.retain(|n| !remove.contains(n));
+                for n in add {
+                    if !j.issues.contains(n) {
+                        j.issues.push(*n);
+                    }
+                }
+            } else {
+                j.issues.retain(|n| !add.contains(n));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `MVP privé : l'essentiel` → `mvp-prive-l-essentiel`.
+pub fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.to_lowercase().chars() {
+        let c = match c {
+            'à' | 'â' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' => 'i',
+            'ô' | 'ö' => 'o',
+            'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            c => c,
+        };
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').chars().take(40).collect()
 }
 
 pub fn capacity_for(points_per_day: f32, days: u32) -> u32 {
@@ -194,6 +303,17 @@ pub fn render_body(state: &ProjectState) -> String {
         (RunStatus::Paused, Some(since)) => format!("en pause depuis le {since}"),
         (RunStatus::Paused, None) => "en pause".into(),
         (RunStatus::Running, _) => "en cours".into(),
+        (RunStatus::Idle, _) => "pas encore démarrés".into(),
+    };
+    let jalons = if state.jalons.is_empty() {
+        "aucun".to_string()
+    } else {
+        state
+            .jalons
+            .iter()
+            .map(|j| format!("{} ({} issues)", j.name, j.issues.len()))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let current = state
         .current()
@@ -213,10 +333,12 @@ pub fn render_body(state: &ProjectState) -> String {
          Cette issue est gérée par le plugin **Gestion de projet** de Cadence : elle garde, pour toute \
          l'équipe, l'état des sprints automatiques de ce dépôt. Elle est masquée dans l'écran Issues. \
          Ne la fermez pas et ne modifiez pas le bloc JSON à la main : utilisez l'écran « Sprint en \
-         cours » de Cadence (démarrer, mettre en pause, changer la durée).\n\n\
+         cours » de Cadence (démarrer, mettre en pause, changer la durée) et l'écran « Roadmap » \
+         (jalons).\n\n\
          - Sprints : {status}\n\
          - Durée d'un sprint : {} jours\n\
-         - Sprint en cours : {current}\n\n\
+         - Sprint en cours : {current}\n\
+         - Jalons : {jalons}\n\n\
          ```json\n{json}\n```\n",
         state.duration_days
     )
@@ -359,6 +481,86 @@ pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
     out
 }
 
+/* ---------- Prévision ---------- */
+
+/// Sprint de la prévision : le sprint en cours (ses issues ouvertes finissent à son échéance)
+/// puis les sprints simulés.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PlannedSprint {
+    pub version: String,
+    pub start_on: String,
+    pub due_on: String,
+    pub issues: Vec<u32>,
+    pub points: u32,
+}
+
+/// Sprints à venir au rythme `rate` (SP par jour) : après le sprint `current` (issues ouvertes
+/// `current_open`), des sprints de `duration` jours prennent `backlog` par priorité, comme le
+/// moteur. Une issue dont une dépendance n'est planifiée nulle part reste hors prévision.
+#[allow(clippy::too_many_arguments)]
+pub fn forecast(
+    current: &SprintRecord,
+    current_open: &[Issue],
+    backlog: &[Issue],
+    open: &HashSet<u32>,
+    rate: f32,
+    duration: u32,
+    taken: &[String],
+    prefix: &str,
+    max_sprints: usize,
+) -> Vec<PlannedSprint> {
+    let mut out = vec![PlannedSprint {
+        version: current.version.clone(),
+        start_on: current.start_on.clone(),
+        due_on: current.due_on.clone(),
+        issues: current_open.iter().map(|i| i.number).collect(),
+        points: current_open.iter().map(weight).sum(),
+    }];
+    let mut scheduled: HashSet<u32> = current_open.iter().map(|i| i.number).collect();
+    let mut remaining: Vec<Issue> = backlog
+        .iter()
+        .filter(|i| !scheduled.contains(&i.number))
+        .cloned()
+        .collect();
+    let capacity = capacity_for(rate, duration);
+    while !remaining.is_empty() && out.len() < max_sprints {
+        let last = out.last().cloned().unwrap_or_else(|| out[0].clone());
+        // Les issues planifiées plus tôt sont faites quand ce sprint commence.
+        let open_now: HashSet<u32> = open.difference(&scheduled).copied().collect();
+        let picks = select(&remaining, capacity, &open_now, &HashSet::new(), true);
+        if picks.is_empty() {
+            break;
+        }
+        let points = remaining
+            .iter()
+            .filter(|i| picks.contains(&i.number))
+            .map(weight)
+            .sum();
+        scheduled.extend(picks.iter().copied());
+        remaining.retain(|i| !picks.contains(&i.number));
+        let start_on = last.due_on.clone();
+        out.push(PlannedSprint {
+            version: version_after(&last.version, taken, prefix),
+            due_on: add_days(&start_on, i64::from(duration)).unwrap_or_else(|| start_on.clone()),
+            start_on,
+            issues: picks,
+            points,
+        });
+    }
+    out
+}
+
+/// Échéance du sprint qui prend chaque issue, dans une prévision.
+pub fn due_by_issue(plan: &[PlannedSprint]) -> std::collections::HashMap<u32, (String, String)> {
+    plan.iter()
+        .flat_map(|s| {
+            s.issues
+                .iter()
+                .map(move |n| (*n, (s.version.clone(), s.due_on.clone())))
+        })
+        .collect()
+}
+
 /* ---------- Versions ---------- */
 
 fn semver(title: &str, prefix: &str) -> Option<(u64, u64, u64)> {
@@ -438,6 +640,7 @@ mod tests {
                 ended_on: None,
                 release: None,
             }],
+            jalons: vec![],
         }
     }
 
@@ -516,6 +719,87 @@ mod tests {
         assert_eq!(s.next_capacity(), 20);
         s.duration_days = 21;
         assert_eq!(s.next_capacity(), 29);
+    }
+
+    #[test]
+    fn manages_jalons() {
+        let mut s = state();
+        assert_eq!(slug("MVP privé : l'essentiel"), "mvp-prive-l-essentiel");
+        assert_eq!(s.new_jalon_id("MVP"), "mvp");
+        s.jalons.push(Jalon {
+            id: "mvp".into(),
+            name: "MVP".into(),
+            description: String::new(),
+            issues: vec![1, 2],
+        });
+        s.jalons.push(Jalon {
+            id: "beta".into(),
+            name: "Bêta".into(),
+            description: String::new(),
+            issues: vec![3],
+        });
+        assert_eq!(s.new_jalon_id("MVP"), "mvp-2");
+        // Une issue n'appartient qu'à un jalon.
+        s.assign("beta", &[2, 4], &[3]).unwrap();
+        assert_eq!(
+            (s.jalons[0].issues.clone(), s.jalons[1].issues.clone()),
+            (vec![1], vec![2, 4])
+        );
+        assert!(s.assign("inconnu", &[1], &[]).is_err());
+        // Anciens états sans jalons : lus quand même.
+        let old = r#"{"status":"running","duration_days":14,"initial_points_per_day":1.5,"sprints":[]}"#;
+        let parsed: ProjectState = serde_json::from_str(old).unwrap();
+        assert!(parsed.jalons.is_empty());
+        assert!(render_body(&s).contains("- Jalons : MVP (1 issues), Bêta (2 issues)"));
+    }
+
+    #[test]
+    fn widens_then_narrows_the_rate_range() {
+        let mut s = state();
+        assert_eq!(s.rate_range(), (1.5 * 0.6, 1.5, 1.5 * 1.4));
+        s.sprints[0].done_points = Some(14);
+        s.sprints[0].ended_on = Some("2026-11-02".into());
+        let (low, avg, high) = s.rate_range();
+        assert_eq!((low, avg, high), (0.75, 1.0, 1.25));
+        let mut next = s.sprints[0].clone();
+        next.version = "0.2.0".into();
+        next.done_points = Some(28);
+        s.sprints.push(next);
+        // 1 SP/j puis 2 SP/j : fourchette = les deux sprints.
+        assert_eq!(s.rate_range(), (1.0, 1.5, 2.0));
+    }
+
+    #[test]
+    fn forecasts_the_next_sprints() {
+        let current = state().sprints[0].clone();
+        let in_sprint = vec![issue(1, Some(0), Some(5), "")];
+        let backlog = vec![
+            issue(2, Some(1), Some(8), "## Dépendances\nDépend de #1"),
+            issue(3, Some(1), Some(8), ""),
+            issue(4, Some(2), Some(5), "## Dépendances\nDépend de #2"),
+            issue(5, Some(3), Some(3), "## Dépendances\nDépend de #99"),
+        ];
+        let open: HashSet<u32> = [1, 2, 3, 4, 5, 99].into();
+        // 1 SP/j × 14 j = 14 SP par sprint.
+        let plan = forecast(&current, &in_sprint, &backlog, &open, 1.0, 14, &[], "v", 20);
+        let sprints: Vec<(&str, &str, Vec<u32>)> = plan
+            .iter()
+            .map(|s| (s.version.as_str(), s.due_on.as_str(), s.issues.clone()))
+            .collect();
+        assert_eq!(
+            sprints,
+            [
+                ("0.1.0", "2026-11-02", vec![1]),
+                ("0.2.0", "2026-11-16", vec![2, 4]),
+                ("0.3.0", "2026-11-30", vec![3]),
+            ]
+        );
+        // #5 attend #99, planifiée nulle part : hors prévision.
+        assert!(!due_by_issue(&plan).contains_key(&5));
+        assert_eq!(
+            due_by_issue(&plan)[&4],
+            ("0.2.0".to_string(), "2026-11-16".to_string())
+        );
     }
 
     #[test]

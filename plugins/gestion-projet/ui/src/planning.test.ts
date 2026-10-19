@@ -10,6 +10,9 @@ import {
   delayLabel,
   durationLabel,
   durationOptions,
+  estimateRange,
+  formatDate,
+  jalonSpan,
   formatRange,
   gainedToday,
   releaseInfo,
@@ -244,5 +247,28 @@ describe("sprints automatiques", () => {
     });
     expect(releaseInfo({ status: "pending" }).tone).toBe("amber");
     expect(releaseInfo(null).label).toBe("En cours");
+  });
+});
+
+describe("roadmap par jalons", () => {
+  it("date les jalons avec l'année quand elle change", () => {
+    expect(formatDate("2026-11-16", "2026-10-19")).toBe("16 nov.");
+    expect(formatDate("2027-01-25", "2026-10-19")).toBe("25 janv. 2027");
+  });
+
+  it("donne la fourchette seulement si elle n'est pas réduite à un jour", () => {
+    expect(estimateRange("2026-11-16", "2026-11-02", "2026-11-30", "2026-10-19")).toEqual({
+      date: "16 nov.",
+      range: "entre le 2 nov. et le 30 nov.",
+    });
+    expect(estimateRange("2026-11-16", "2026-11-16", "2026-11-16", "2026-10-19").range).toBeNull();
+    expect(estimateRange(null, null, null, "2026-10-19")).toEqual({ date: null, range: null });
+  });
+
+  it("place un jalon sur les colonnes de ses sprints", () => {
+    const sprints = [{ version: "0.1.0" }, { version: "0.2.0" }, { version: "0.3.0" }];
+    expect(jalonSpan({ sprints: ["0.3.0", "0.2.0"] }, sprints)).toEqual({ from: 1, to: 2 });
+    expect(jalonSpan({ sprints: ["9.9.9"] }, sprints)).toBeNull();
+    expect(jalonSpan({ sprints: [] }, sprints)).toBeNull();
   });
 });

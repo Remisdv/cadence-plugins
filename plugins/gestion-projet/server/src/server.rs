@@ -16,6 +16,8 @@
 //! - Sprints automatiques (réservés à l'UI, voir `projet` et `engine`) : `project_start`,
 //!   `project_pause`, `project_resume`, `project_set_duration`. L'issue d'état `cadence/sprints`
 //!   est masquée de `list_issues`.
+//! - Roadmap : `roadmap` (jalons, sprints passés et prévus, dates estimées avec fourchette),
+//!   `jalon_save`, `jalon_delete`, `jalon_issues` (jalons rangés dans l'issue d'état).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -281,6 +283,42 @@ pub struct ProjectDurationParams {
     pub repo: String,
     /// Nouvelle durée d'un sprint en jours (1 à 90) : s'applique au sprint en cours.
     pub duration_days: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JalonSaveParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Jalon à modifier ; absent : nouveau jalon (identifiant tiré du nom).
+    pub id: Option<String>,
+    /// Nom clair (ex. « MVP privé », « Bêta publique »).
+    pub name: String,
+    /// Objectif du jalon en une ou deux phrases (markdown).
+    pub description: Option<String>,
+    /// Rang dans la roadmap, à partir de 0 ; absent : à la fin (nouveau) ou inchangé.
+    pub position: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JalonParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant du jalon (voir `roadmap`).
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JalonIssuesParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant du jalon (voir `roadmap`).
+    pub id: String,
+    /// Issues à ranger dans ce jalon (retirées de leur jalon précédent).
+    #[serde(default)]
+    pub add: Vec<u32>,
+    /// Issues à retirer de ce jalon.
+    #[serde(default)]
+    pub remove: Vec<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -841,7 +879,7 @@ impl GestionProjet {
         if let Some(err) = project_error {
             out["project_error"] = json!(err);
         }
-        if project.is_none() {
+        if project.as_ref().is_none_or(|p| p.state.sprints.is_empty()) {
             let titles: Vec<String> = milestones
                 .iter()
                 .filter_map(|m| m["title"].as_str().map(str::to_string))
@@ -858,7 +896,7 @@ impl GestionProjet {
         }
         let Some(raw) = chosen else {
             out["sprint"] = Value::Null;
-            out["message"] = json!(if project.is_some() {
+            out["message"] = json!(if project.as_ref().is_some_and(|p| !p.state.sprints.is_empty()) {
                 "Le sprint en cours n'a pas encore de milestone : il sera créé à la prochaine passe."
             } else {
                 "Aucun sprint en cours : démarrez le projet pour que Cadence crée les sprints, ou datez une version."
@@ -1455,6 +1493,111 @@ impl GestionProjet {
             .await,
         )
     }
+
+    #[tool(
+        description = "Roadmap d'un dépôt : jalons (nom, objectif, issues, avancement, sprints concernés, date de fin estimée au rythme moyen avec une fourchette au plus tôt / au plus tard), sprints terminés, en cours et prévus, issues ouvertes sans jalon, fin estimée de tout le travail ouvert. Les dates se précisent à chaque sprint."
+    )]
+    async fn roadmap(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                self.build_roadmap(&repo).await
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Crée ou modifie un jalon de la roadmap (nom clair, objectif, rang). Un jalon regroupe des issues réalisées en un ou plusieurs sprints ; il sert à l'affichage de la roadmap (ni branche ni milestone)."
+    )]
+    async fn jalon_save(&self, Parameters(p): Parameters<JalonSaveParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let name = p.name.trim().to_string();
+                if name.is_empty() || name.chars().count() > 80 {
+                    bail!("Nom de jalon vide ou trop long (80 caractères au plus).");
+                }
+                let mut saved = String::new();
+                let project = self
+                    .edit_jalons(&repo, |state| {
+                        let index = match p.id.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
+                            Some(id) => state
+                                .jalons
+                                .iter()
+                                .position(|j| j.id == id)
+                                .ok_or_else(|| anyhow!("Jalon « {id} » introuvable."))?,
+                            None => {
+                                let id = state.new_jalon_id(&name);
+                                state.jalons.push(projet::Jalon {
+                                    id,
+                                    name: name.clone(),
+                                    description: String::new(),
+                                    issues: vec![],
+                                });
+                                state.jalons.len() - 1
+                            }
+                        };
+                        let mut jalon = state.jalons.remove(index);
+                        jalon.name = name.clone();
+                        if let Some(d) = &p.description {
+                            jalon.description = d.trim().to_string();
+                        }
+                        saved = jalon.id.clone();
+                        let at = p
+                            .position
+                            .map(|n| n as usize)
+                            .unwrap_or(index)
+                            .min(state.jalons.len());
+                        state.jalons.insert(at, jalon);
+                        Ok(())
+                    })
+                    .await?;
+                Ok(json!({ "repo": repo, "id": saved, "jalons": project.state.jalons }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(description = "Supprime un jalon de la roadmap (ses issues restent, sans jalon).")]
+    async fn jalon_delete(&self, Parameters(p): Parameters<JalonParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self
+                    .edit_jalons(&repo, |state| {
+                        let before = state.jalons.len();
+                        state.jalons.retain(|j| j.id != p.id);
+                        if state.jalons.len() == before {
+                            bail!("Jalon « {} » introuvable.", p.id);
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                Ok(json!({ "repo": repo, "jalons": project.state.jalons }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Range des issues dans un jalon (une issue n'appartient qu'à un jalon : elle quitte le précédent) ou les en retire."
+    )]
+    async fn jalon_issues(&self, Parameters(p): Parameters<JalonIssuesParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                if p.add.is_empty() && p.remove.is_empty() {
+                    bail!("Rien à modifier : précisez `add` ou `remove`.");
+                }
+                let project = self
+                    .edit_jalons(&repo, |state| state.assign(&p.id, &p.add, &p.remove))
+                    .await?;
+                Ok(json!({ "repo": repo, "jalons": project.state.jalons }))
+            }
+            .await,
+        )
+    }
 }
 
 #[tool_handler]
@@ -1471,7 +1614,8 @@ impl ServerHandler for GestionProjet {
                  (owner/name) ; `list_issues` sans `repo` couvre tous les dépôts suivis. Conventions : \
                  labels type/*, status/*, sp/* (story points), priority/* ; un milestone daté est un sprint, \
                  sans date un palier. Sprints automatiques : chaque sprint a sa branche release/<version>, \
-                 base des branches d'issue (voir get_repository). \
+                 base des branches d'issue (voir get_repository). Roadmap : jalons (roadmap, jalon_save, \
+                 jalon_issues), dates de fin estimées au rythme réel. \
                  Pour lire ou modifier le code, obtenir d'abord un worktree avec cadence__repo_checkout.",
             )
     }
@@ -1537,6 +1681,10 @@ mod tests {
             "project_pause",
             "project_resume",
             "project_set_duration",
+            "roadmap",
+            "jalon_save",
+            "jalon_delete",
+            "jalon_issues",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -1772,6 +1920,29 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&r).contains("de 1 à 90"), "{}", text(&r));
+
+        // Jalons : nom et modifications vérifiés avant GitHub.
+        let r = s
+            .jalon_save(Parameters(JalonSaveParams {
+                repo: "me/app".into(),
+                id: None,
+                name: "  ".into(),
+                description: None,
+                position: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Nom de jalon vide"), "{}", text(&r));
+        let r = s
+            .jalon_issues(Parameters(JalonIssuesParams {
+                repo: "me/app".into(),
+                id: "mvp".into(),
+                add: vec![],
+                remove: vec![],
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Rien à modifier"), "{}", text(&r));
 
         let r = s
             .sprint_summary(Parameters(SprintSummaryParams {

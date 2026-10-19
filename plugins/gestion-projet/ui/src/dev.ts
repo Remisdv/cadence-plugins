@@ -6,7 +6,16 @@
  * n'est pas utilisé.
  */
 import type { MockHostOptions } from "@cadence/plugin-sdk";
-import type { AccountRepo, Issue, ProjectView, PullRequest, Release, Version } from "./domain";
+import type {
+  AccountRepo,
+  Issue,
+  JalonView,
+  ProjectView,
+  PullRequest,
+  Release,
+  RoadmapPlan,
+  Version,
+} from "./domain";
 import { sprintStart } from "./planning";
 
 const params = new URLSearchParams(location.search);
@@ -228,6 +237,129 @@ const projects: Record<string, ProjectView | null> = {
   "RemiSDV/cadence-plugins": null,
 };
 
+/** Roadmap simulée : trois jalons sur RemiSDV/cadence, sprints terminés, en cours et prévus. */
+const jalonIssue = (
+  number: number,
+  title: string,
+  state: "open" | "closed",
+  points: number | null,
+  priority: number | null,
+  sprint: string | null,
+) => ({
+  number,
+  title,
+  state,
+  status: state === "closed" ? ("done" as const) : ("todo" as const),
+  points,
+  priority,
+  sprint,
+});
+
+const jalons: JalonView[] = [
+  {
+    id: "connexion-github",
+    name: "Connexion GitHub",
+    description:
+      "Se connecter à GitHub sans quitter Cadence : device flow, code d'appairage, jeton au trousseau.",
+    status: "in_progress",
+    issues: [
+      jalonIssue(141, "Écran de connexion GitHub", "closed", 3, 0, "0.1.0"),
+      jalonIssue(142, "Device flow GitHub", "closed", 5, 0, "0.1.1"),
+      jalonIssue(149, "Connexion GitHub par device flow", "open", 8, 0, "0.1.2"),
+      jalonIssue(156, "Message d'erreur quand le quota de l'API est épuisé", "open", 3, 1, "0.1.2"),
+    ],
+    total: 4,
+    closed: 2,
+    points_total: 19,
+    points_done: 8,
+    unestimated: 0,
+    unplanned: 0,
+    sprints: ["0.1.0", "0.1.1", "0.1.2"],
+    start_on: day(-34),
+    end_on: day(8),
+    end_early: day(8),
+    end_late: day(8),
+  },
+  {
+    id: "mvp-prive",
+    name: "MVP privé",
+    description: "Une première version utilisable par l'équipe : kanban, sprints et notifications.",
+    status: "planned",
+    issues: [
+      jalonIssue(158, "Déconnexion depuis les réglages", "open", 2, 2, "0.1.3"),
+      jalonIssue(160, "Notifications de fin de sprint", "open", 5, 2, "0.1.3"),
+      jalonIssue(161, "Kanban glisser-déposer", "open", 8, 3, "0.1.4"),
+      jalonIssue(162, "Recherche dans les issues", "open", null, 3, "0.1.4"),
+    ],
+    total: 4,
+    closed: 0,
+    points_total: 18,
+    points_done: 0,
+    unestimated: 1,
+    unplanned: 0,
+    sprints: ["0.1.3", "0.1.4"],
+    start_on: day(8),
+    end_on: day(36),
+    end_early: day(22),
+    end_late: day(50),
+  },
+  {
+    id: "beta-publique",
+    name: "Bêta publique",
+    description: "",
+    status: "empty",
+    issues: [],
+    total: 0,
+    closed: 0,
+    points_total: 0,
+    points_done: 0,
+    unestimated: 0,
+    unplanned: 0,
+    sprints: [],
+    start_on: null,
+    end_on: null,
+    end_early: null,
+    end_late: null,
+  },
+];
+
+function roadmap(repo: string): RoadmapPlan {
+  if (repo !== "RemiSDV/cadence") {
+    return {
+      repo,
+      today: day(0),
+      started: false,
+      sprints: [],
+      jalons: [],
+      unassigned: [],
+      end: null,
+    };
+  }
+  return {
+    repo,
+    today: day(0),
+    started: true,
+    issue: 160,
+    url: "https://github.com/RemiSDV/cadence/issues/160",
+    duration_days: 14,
+    rates: { low: 1.3, avg: 1.6, high: 1.9 },
+    sprints: [
+      { version: "0.1.0", start_on: day(-34), due_on: day(-20), state: "done", points: 26 },
+      { version: "0.1.1", start_on: day(-20), due_on: day(-6), state: "done", points: 18 },
+      { version: "0.1.2", start_on: day(-6), due_on: day(8), state: "current", points: 22 },
+      { version: "0.1.3", start_on: day(8), due_on: day(22), state: "planned", points: 21 },
+      { version: "0.1.4", start_on: day(22), due_on: day(36), state: "planned", points: 19 },
+      { version: "0.1.5", start_on: day(36), due_on: day(50), state: "planned", points: 12 },
+    ],
+    jalons,
+    unassigned: [
+      { number: 163, title: "Export CSV des sprints", points: 3, priority: 4, milestone: null },
+      { number: 164, title: "Thème clair", points: 5, priority: 5, milestone: null },
+    ],
+    end: { on: day(50), early: day(36), late: day(64), unplanned: 0 },
+  };
+}
+
 const startDefaults = { duration_days: 14, capacity: 20, first_version: "0.4.0" };
 
 function sprintSummary(repo: string, title?: string) {
@@ -381,6 +513,35 @@ const planningTools: MockHostOptions["tools"] = {
   }),
   sprint_summary: ({ repo, version }) =>
     sprintSummary(repo as string, version as string | undefined),
+  roadmap: ({ repo }) => roadmap(repo as string),
+  jalon_save: ({ repo, id, name, description, position }) => {
+    let j = jalons.find((x) => x.id === id);
+    if (!j) {
+      j = {
+        ...jalons[2]!,
+        id: String(name)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-"),
+        issues: [],
+        status: "empty",
+      };
+      jalons.push(j);
+    }
+    Object.assign(j, { name, ...(description !== undefined ? { description } : {}) });
+    if (position !== undefined) {
+      jalons.splice(jalons.indexOf(j), 1);
+      jalons.splice(Number(position), 0, j);
+    }
+    return { repo, id: j.id, jalons };
+  },
+  jalon_delete: ({ repo, id }) => {
+    jalons.splice(
+      jalons.findIndex((x) => x.id === id),
+      1,
+    );
+    return { repo, jalons };
+  },
+  jalon_issues: ({ repo }) => ({ repo, jalons }),
   project_start: ({ repo, duration_days, capacity, first_version }) => {
     const version = String(first_version);
     const project: ProjectView = {

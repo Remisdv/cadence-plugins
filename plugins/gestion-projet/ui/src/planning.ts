@@ -12,6 +12,9 @@ import {
   type IssueType,
   type PrState,
   type PullRequest,
+  type JalonStatus,
+  type JalonView,
+  type RoadmapSprint,
   type SprintRecord,
   type Version,
 } from "./domain";
@@ -26,6 +29,76 @@ const dayMonth = new Intl.DateTimeFormat("fr-FR", {
 const decimal = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n > 1 ? many : one}`;
+
+/* ---------- Roadmap par jalons ---------- */
+
+const dayMonthYear = new Intl.DateTimeFormat("fr-FR", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** « 16 nov. », avec l'année si elle diffère de celle de `today` (« 25 janv. 2027 »). */
+export function formatDate(iso: string, today: string): string {
+  const date = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
+  return iso.slice(0, 4) === today.slice(0, 4) ? dayMonth.format(date) : dayMonthYear.format(date);
+}
+
+/** Fin estimée : « 16 nov. », et la fourchette si elle n'est pas réduite à ce jour-là. */
+export function estimateRange(
+  on: string | null,
+  early: string | null,
+  late: string | null,
+  today: string,
+): { date: string | null; range: string | null } {
+  if (!on) return { date: null, range: null };
+  const date = formatDate(on, today);
+  if (!early || !late || (early === on && late === on)) return { date, range: null };
+  return { date, range: `entre le ${formatDate(early, today)} et le ${formatDate(late, today)}` };
+}
+
+export const jalonStatusMeta: Record<
+  JalonStatus,
+  { label: string; tone: BadgeTone; bar: string; progress: ProgressTone }
+> = {
+  done: {
+    label: "Atteint",
+    tone: "green",
+    bar: "bg-green-d border-green-line text-green",
+    progress: "green",
+  },
+  in_progress: {
+    label: "En cours",
+    tone: "clay",
+    bar: "bg-clay-d border-clay-line text-clay",
+    progress: "clay",
+  },
+  planned: {
+    label: "Prévu",
+    tone: "blue",
+    bar: "bg-blue-d border-blue-line text-blue",
+    progress: "blue",
+  },
+  empty: {
+    label: "Sans issue",
+    tone: "neutral",
+    bar: "bg-p3 border-line text-tx3",
+    progress: "neutral",
+  },
+};
+
+/** Colonnes (indices de sprints) couvertes par un jalon dans la frise ; `null` sans sprint. */
+export function jalonSpan(
+  jalon: Pick<JalonView, "sprints">,
+  sprints: Pick<RoadmapSprint, "version">[],
+): { from: number; to: number } | null {
+  const idx = jalon.sprints
+    .map((v) => sprints.findIndex((s) => s.version === v))
+    .filter((i) => i >= 0);
+  if (idx.length === 0) return null;
+  return { from: Math.min(...idx), to: Math.max(...idx) };
+}
 
 /** Durées de sprint proposées, en jours (semaines entières). */
 export const sprintDurations = [7, 14, 21, 28];

@@ -45,7 +45,7 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; un sprint par dépôt en mode « Tous les dépôts » |
 | Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
-| Roadmap (`roadmap`)             | Planification  | versions livrées et en cours, sprints planifiés puis paliers (nom, thèmes, avancement), bouton « Proposer des issues » sur un palier                                                                   |
+| Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
 | Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
 | Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
 | Dépôts suivis (`setup-depots`)  | étape de setup | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
@@ -131,6 +131,23 @@ dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait ava
 à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
 Outils réservés à l'UI : `project_start`, `project_pause`, `project_resume`,
 `project_set_duration` ; `sprint_summary` porte l'état (`project`).
+
+## Roadmap par jalons
+
+Un **jalon** est un objectif nommé (« MVP privé », « Bêta publique ») avec une description et des
+issues ; il s'atteint en un ou plusieurs sprints. Les jalons vivent dans l'issue d'état (rangés dans
+l'ordre de la roadmap, une issue dans un seul jalon) et ne servent qu'à l'affichage : ni branche ni
+milestone, les sprints restent remplis par priorité.
+
+L'écran Roadmap montre une frise (sprints terminés, en cours, puis prévus au rythme moyen) et une
+carte par jalon : avancement en story points, sprints concernés, **date de fin estimée** et sa
+**fourchette** (rythmes du meilleur et du moins bon des trois derniers sprints ; ±40 % sans
+historique, ±25 % après un sprint). La prévision rejoue le remplissage du moteur (priorité,
+dépendances, capacité) sur les issues sans version ; un jalon finit avec le sprint qui prend sa
+dernière issue ouverte. Les dates se précisent à chaque sprint. On y crée, renomme, réordonne et
+supprime les jalons, et on y range les issues ; le skill « Créer des issues depuis un document »
+range les issues qu'il crée dans un jalon (existant ou nouveau), « Proposer des issues » complète
+un jalon. Outils : `roadmap`, `jalon_save`, `jalon_delete`, `jalon_issues`.
 
 Les échéances sont envoyées à midi UTC pour que GitHub garde le même jour. Le burndown compte la
 portée actuelle du milestone dès le premier jour (GitHub ne date pas l'entrée d'une issue).
