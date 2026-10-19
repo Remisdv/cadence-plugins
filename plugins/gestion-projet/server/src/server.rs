@@ -1174,7 +1174,7 @@ fn project_view(project: &Project) -> Value {
         "status": s.status,
         "paused_since": s.paused_since,
         "duration_days": s.duration_days,
-        "points_per_day": (s.points_per_day() * 10.0).round() / 10.0,
+        "points_per_day": crate::engine::round1(s.points_per_day()),
         "capacity": cur.map(|c| c.capacity),
         "next_capacity": s.next_capacity(),
         "current": cur.map(|c| c.version.clone()),

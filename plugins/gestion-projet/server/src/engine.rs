@@ -1136,8 +1136,9 @@ enum Ci {
     Failure,
 }
 
-fn round1(x: f32) -> f32 {
-    (x * 10.0).round() / 10.0
+/// Arrondi au dixième, en f64 pour que le JSON porte `0.4` et non `0.4000000059604645`.
+pub(crate) fn round1(x: f32) -> f64 {
+    (f64::from(x) * 10.0).round() / 10.0
 }
 
 /// Jalon tel que la roadmap l'affiche : avancement, sprints concernés, dates estimées.
