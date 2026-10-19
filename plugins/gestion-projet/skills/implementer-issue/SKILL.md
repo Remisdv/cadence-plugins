@@ -1,6 +1,6 @@
 ---
 name: implementer-issue
-description: Implémente une issue GitHub de bout en bout dans le worktree que Cadence ouvre pour la tâche (cadence__repo_checkout) — branche dédiée, code, tests, commits, push de la branche et pull request en brouillon — sans jamais toucher à la branche par défaut. À utiliser depuis le bouton « Implémenter » d'une issue prête (description et critères d'acceptation clairs).
+description: Implémente une issue GitHub de bout en bout dans le worktree que Cadence ouvre pour la tâche (cadence__repo_checkout) — branche dédiée partant de la branche de release du sprint (ou de la branche par défaut), code, tests, commits, push de la branche et pull request en brouillon vers cette même base — sans jamais toucher à la branche par défaut ni à la branche de release. À utiliser depuis le bouton « Implémenter » d'une issue prête (description et critères d'acceptation clairs).
 ---
 
 # Implémenter une issue
@@ -29,7 +29,7 @@ contexte.
 | Outil | Usage |
 | --- | --- |
 | `cadence__repo_checkout` | worktree de la tâche : `{ "repo", "task": "issue-<numéro>" }` → `path` |
-| `gestion-projet__get_repository` | branche par défaut (`default_branch`), nom complet du dépôt |
+| `gestion-projet__get_repository` | branche par défaut (`default_branch`), sprints automatiques (`sprints.release_branch`, `sprints.current_version`) |
 | `gestion-projet__get_issue` | description, critères d'acceptation, type (`type/*`), commentaires |
 | `gestion-projet__update_issue` | passer l'issue en `status: "doing"` puis `"review"` |
 | `gestion-projet__create_pull_request` | ouvrir la PR en brouillon (`draft: true`) |
@@ -40,9 +40,9 @@ l'identité et les accès déjà configurés sur la machine.
 
 ## Règles absolues
 
-- **Jamais de push sur la branche par défaut** (ni sur `main` / `master`), jamais de `--force`,
-  jamais de réécriture d'historique publié. Avant chaque `git push`, vérifie que la branche
-  courante est bien la branche de l'issue.
+- **Jamais de push sur la branche par défaut** (ni sur `main` / `master`) **ni sur une branche
+  `release/*`**, jamais de `--force`, jamais de réécriture d'historique publié. Avant chaque
+  `git push`, vérifie que la branche courante est bien la branche de l'issue.
 - Travaille **uniquement dans le worktree** renvoyé par `cadence__repo_checkout` ; n'écris nulle
   part ailleurs (ni dans le dossier neutre, ni dans un autre clone).
 - Pas de secret dans le code, les commits ou la PR. Pas d'accès réseau autre que `git fetch` /
@@ -55,6 +55,15 @@ l'identité et les accès déjà configurés sur la machine.
 1. **Analyse.** Lis l'issue (`get_issue`) et le dépôt (`get_repository`). Si l'issue n'a pas de
    critères d'acceptation exploitables, déduis-les du titre et de la description et écris-les dans
    la PR. Établis un plan court : approche, fichiers à toucher.
+
+   **Base de travail.** Avec les sprints automatiques, chaque sprint est une version qui a sa
+   branche `release/<version>` : les branches d'issue en partent et y sont fusionnées, puis Cadence
+   fusionne la branche de release dans la branche par défaut à la fin du sprint. La base est :
+   - `sprints.release_branch` (renvoyé par `get_repository`) si la version de l'issue
+     (`milestone`) est `sprints.current_version` ;
+   - sinon `release/<version de l'issue>` si cette branche existe sur `origin`
+     (`git ls-remote --heads origin release/<version>`) ;
+   - sinon la branche par défaut (pas de sprints automatiques, ou issue hors sprint).
 2. **Worktree et branche.**
    - `cadence__repo_checkout` avec `{ "repo": "<repo>", "task": "issue-<numéro>" }` ; note le
      `path` renvoyé. Un appel répété pour la même tâche renvoie le même worktree (reprise).
@@ -63,7 +72,7 @@ l'identité et les accès déjà configurés sur la machine.
    - Dans le worktree :
      ```sh
      git fetch origin
-     git switch <branche>  ||  git switch -c <branche> origin/<branche par défaut>
+     git switch <branche>  ||  git switch -c <branche> origin/<base>
      ```
      (la branche existe déjà en cas de reprise). Vérifie `git status` : pas de changement étranger.
    - Passe l'issue en cours : `update_issue` avec `status: "doing"`.
@@ -76,7 +85,8 @@ l'identité et les accès déjà configurés sur la machine.
    `git status` : rien d'oublié, rien d'étranger à l'issue (fichiers générés, `.env`…).
 6. **Push de la branche** : `git push -u origin <branche>` (après avoir vérifié la branche).
 7. **Pull request en brouillon** avec `create_pull_request` : `repo`, `head` = la branche,
-   `base` = la branche par défaut, `draft: true`, titre `<type>(#<numéro>) : <titre>`, corps :
+   `base` = la base choisie à l'étape 1 (branche de release ou branche par défaut), `draft: true`,
+   titre `<type>(#<numéro>) : <titre>`, corps :
 
    ```
    Ferme #<numéro>

@@ -8,8 +8,11 @@ import {
   currentVersion,
   daysLeftLabel,
   delayLabel,
+  durationLabel,
+  durationOptions,
   formatRange,
   gainedToday,
+  releaseInfo,
   releaseNotes,
   requiredPace,
   reviewSummary,
@@ -217,5 +220,29 @@ describe("pull requests", () => {
     expect(
       reviewSummary(pr({ state: "merged", review_requested_at: "2026-10-14T06:00:00Z" }), now),
     ).toBeNull();
+  });
+});
+
+describe("sprints automatiques", () => {
+  it("nomme les durées en semaines ou en jours", () => {
+    expect(durationLabel(7)).toBe("1 semaine");
+    expect(durationLabel(14)).toBe("2 semaines");
+    expect(durationLabel(10)).toBe("10 jours");
+    expect(durationOptions(14)).toEqual([7, 14, 21, 28]);
+    expect(durationOptions(10)).toEqual([7, 10, 14, 21, 28]);
+  });
+
+  it("décrit la livraison d'un sprint terminé", () => {
+    expect(releaseInfo({ status: "merged", tag: "v0.2.0" })).toMatchObject({
+      label: "v0.2.0 publiée",
+      tone: "green",
+    });
+    expect(releaseInfo({ status: "blocked", message: "CI en échec sur la PR #12." })).toEqual({
+      label: "Livraison bloquée",
+      tone: "red",
+      detail: "CI en échec sur la PR #12.",
+    });
+    expect(releaseInfo({ status: "pending" }).tone).toBe("amber");
+    expect(releaseInfo(null).label).toBe("En cours");
   });
 });

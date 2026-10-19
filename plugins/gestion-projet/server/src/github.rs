@@ -49,6 +49,19 @@ impl GitHub {
         Ok(self.send(Method::PATCH, path, &[], Some(body)).await?.body)
     }
 
+    pub async fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        Ok(self.send(Method::PUT, path, &[], Some(body)).await?.body)
+    }
+
+    /// Lecture qui rend `None` quand la ressource n'existe pas (404) : branche, comparaison…
+    pub async fn get_opt(&self, path: &str, query: &[(&str, String)]) -> Result<Option<Value>> {
+        let url = format!("{}{path}", self.base);
+        Ok(self
+            .request(Method::GET, &url, path, query, None, true)
+            .await?
+            .map(|p| p.body))
+    }
+
     /// Requête GraphQL ; les erreurs GraphQL (réponse 200 avec `errors`) deviennent une erreur.
     pub async fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
         let body = serde_json::json!({ "query": query, "variables": variables });
@@ -77,6 +90,21 @@ impl GitHub {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Page> {
+        self.request(method, url, path, query, body, false)
+            .await?
+            .ok_or_else(|| anyhow!("Introuvable sur GitHub (404) : {path}."))
+    }
+
+    /// Requête ; `missing_ok` : un 404 rend `None` au lieu d'une erreur.
+    async fn request(
+        &self,
+        method: Method,
+        url: &str,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        missing_ok: bool,
+    ) -> Result<Option<Page>> {
         let token = self.token.as_deref().ok_or_else(|| {
             anyhow!(
                 "GitHub n'est pas connecté : connectez votre compte dans Cadence (service Dépôts, \
@@ -102,6 +130,9 @@ impl GitHub {
         let status = res.status();
         let headers = res.headers().clone();
         let text = res.text().await.unwrap_or_default();
+        if missing_ok && status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
         if !status.is_success() {
             bail!(describe_error(status, &headers, &text, path));
         }
@@ -110,10 +141,10 @@ impl GitHub {
         } else {
             serde_json::from_str(&text)?
         };
-        Ok(Page {
+        Ok(Some(Page {
             body,
             has_next: has_next(&headers),
-        })
+        }))
     }
 }
 

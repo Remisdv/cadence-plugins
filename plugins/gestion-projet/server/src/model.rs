@@ -160,6 +160,15 @@ fn u32_of(v: &Value) -> u32 {
     v.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0)
 }
 
+/// Vrai pour l'issue d'état des sprints automatiques (label `cadence/sprints`), masquée des listes.
+pub fn is_state_issue(raw: &Value) -> bool {
+    raw["labels"].as_array().is_some_and(|labels| {
+        labels
+            .iter()
+            .any(|l| l["name"].as_str().or_else(|| l.as_str()) == Some(crate::projet::STATE_LABEL))
+    })
+}
+
 /// Vrai pour une pull request renvoyée par l'API issues.
 pub fn is_pull_request(raw: &Value) -> bool {
     raw.get("pull_request").is_some_and(|v| !v.is_null())

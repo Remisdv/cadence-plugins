@@ -12,6 +12,7 @@ import {
   type IssueType,
   type PrState,
   type PullRequest,
+  type SprintRecord,
   type Version,
 } from "./domain";
 
@@ -25,6 +26,43 @@ const dayMonth = new Intl.DateTimeFormat("fr-FR", {
 const decimal = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n > 1 ? many : one}`;
+
+/** Durées de sprint proposées, en jours (semaines entières). */
+export const sprintDurations = [7, 14, 21, 28];
+
+/** `14` → « 2 semaines », `10` → « 10 jours ». */
+export function durationLabel(days: number): string {
+  return days % 7 === 0 ? plural(days / 7, "semaine") : plural(days, "jour");
+}
+
+/** Durées du sélecteur : les semaines entières, plus la durée actuelle si elle est différente. */
+export function durationOptions(current: number): number[] {
+  return [...new Set([...sprintDurations, current])].sort((a, b) => a - b);
+}
+
+/** Libellé et ton de la livraison d'un sprint terminé. */
+export function releaseInfo(release: SprintRecord["release"]): {
+  label: string;
+  tone: "green" | "amber" | "red" | "muted";
+  detail: string | null;
+} {
+  switch (release?.status) {
+    case "merged":
+      return {
+        label: release.tag ? `${release.tag} publiée` : "Fusionnée",
+        tone: "green",
+        detail: null,
+      };
+    case "blocked":
+      return { label: "Livraison bloquée", tone: "red", detail: release.message ?? null };
+    case "empty":
+      return { label: "Rien à livrer", tone: "muted", detail: release.message ?? null };
+    case "pending":
+      return { label: "Fusion en attente", tone: "amber", detail: release.message ?? null };
+    default:
+      return { label: "En cours", tone: "muted", detail: null };
+  }
+}
 
 /** « 9 sept. » (jour civil, sans décalage horaire). */
 export function formatDay(iso: string): string {

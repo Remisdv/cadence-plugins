@@ -1,0 +1,534 @@
+//! Sprints automatiques : état partagé du projet et planification (fonctions pures).
+//!
+//! L'état vit dans une issue GitHub du dépôt, label `cadence/sprints` : toute l'équipe le voit et
+//! chaque Cadence ouvert le fait avancer. L'issue est masquée dans les listes d'issues. Son corps
+//! est un texte lisible suivi d'un bloc ```json``` (`ProjectState`), seule partie lue.
+//!
+//! Règles :
+//! - un sprint = une version (milestone daté `0.2.0`) et une branche `release/0.2.0` ; les
+//!   branches `feat/…` partent de la branche de release et y sont fusionnées ;
+//! - à la création, un sprint prend les issues sans version par priorité (0 = socle, puis 1 à 5,
+//!   sans priorité en dernier), dans la limite de sa capacité en story points, en respectant les
+//!   dépendances (« Dépend de #12 ») ; une issue sans story points compte pour `DEFAULT_POINTS` ;
+//! - capacité = rythme (SP fermés par jour sur les trois derniers sprints, ou le rythme saisi au
+//!   démarrage) × durée ; un sprint fini en avance tire les issues suivantes ;
+//! - à l'échéance, les issues ouvertes passent en tête du sprint suivant (leur poids réduit la
+//!   place des nouvelles), la branche de release est fusionnée dans la branche par défaut.
+
+use std::collections::HashSet;
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+
+use crate::model::Issue;
+use crate::sprint::{add_days, days_between};
+
+/// Label de l'issue d'état.
+pub const STATE_LABEL: &str = "cadence/sprints";
+/// Titre de l'issue d'état.
+pub const STATE_TITLE: &str = "Sprints automatiques (Cadence)";
+/// Poids d'une issue sans story points.
+pub const DEFAULT_POINTS: u32 = 3;
+/// Bornes de la durée d'un sprint, en jours.
+pub const MIN_DAYS: u32 = 1;
+pub const MAX_DAYS: u32 = 90;
+/// Sprints terminés pris en compte dans le rythme.
+const RATE_WINDOW: usize = 3;
+const MARKER: &str = "<!-- cadence:sprints -->";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Running,
+    Paused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseStatus {
+    /// Fusion de `release/x` dans la branche par défaut à faire (CI en cours, PR à créer…).
+    Pending,
+    /// Fusionnée et taguée.
+    Merged,
+    /// Rien à livrer : la branche n'a aucun commit de plus que la branche par défaut.
+    Empty,
+    /// Bloquée (CI en échec, conflit, PR encore ouvertes vers la branche) : nouvel essai à chaque passe.
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReleaseRecord {
+    pub status: ReleaseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl ReleaseRecord {
+    pub fn pending() -> Self {
+        ReleaseRecord {
+            status: ReleaseStatus::Pending,
+            pull_request: None,
+            tag: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SprintRecord {
+    /// Version semver, titre du milestone.
+    pub version: String,
+    pub start_on: String,
+    pub due_on: String,
+    /// Jours de pause pendant ce sprint (l'échéance a été repoussée d'autant).
+    #[serde(default)]
+    pub paused_days: u32,
+    /// Capacité visée, en story points.
+    pub capacity: u32,
+    /// Remplissage initial fait (les issues reportées y sont déjà).
+    #[serde(default)]
+    pub filled: bool,
+    /// Issues reportées depuis le sprint précédent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<u32>,
+    /// Story points fermés, relevés à la fin du sprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ReleaseRecord>,
+}
+
+impl SprintRecord {
+    pub fn branch(&self) -> String {
+        release_branch(&self.version)
+    }
+
+    /// Jours de travail effectifs (pauses retirées), au moins un.
+    pub fn working_days(&self) -> u32 {
+        let end = self.ended_on.as_deref().unwrap_or(&self.due_on);
+        let days = days_between(&self.start_on, end).unwrap_or(0) - i64::from(self.paused_days);
+        days.max(1) as u32
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectState {
+    pub status: RunStatus,
+    pub duration_days: u32,
+    /// Rythme de départ (capacité saisie / durée), utilisé tant qu'aucun sprint n'est terminé.
+    pub initial_points_per_day: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_since: Option<String>,
+    /// Sprints, du plus ancien au sprint en cours (le dernier).
+    pub sprints: Vec<SprintRecord>,
+}
+
+impl ProjectState {
+    pub fn current(&self) -> Option<&SprintRecord> {
+        self.sprints.last()
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut SprintRecord> {
+        self.sprints.last_mut()
+    }
+
+    /// Story points par jour : trois derniers sprints terminés, sinon le rythme de départ.
+    pub fn points_per_day(&self) -> f32 {
+        let ended: Vec<&SprintRecord> = self
+            .sprints
+            .iter()
+            .filter(|s| s.done_points.is_some())
+            .rev()
+            .take(RATE_WINDOW)
+            .collect();
+        if ended.is_empty() {
+            return self.initial_points_per_day;
+        }
+        let done: u32 = ended.iter().filter_map(|s| s.done_points).sum();
+        let days: u32 = ended.iter().map(|s| s.working_days()).sum();
+        done as f32 / days.max(1) as f32
+    }
+
+    /// Capacité d'un sprint de la durée réglée, au rythme actuel.
+    pub fn next_capacity(&self) -> u32 {
+        capacity_for(self.points_per_day(), self.duration_days)
+    }
+}
+
+pub fn capacity_for(points_per_day: f32, days: u32) -> u32 {
+    (points_per_day * days as f32).round().max(0.0) as u32
+}
+
+pub fn release_branch(version: &str) -> String {
+    format!("release/{version}")
+}
+
+pub fn check_duration(days: u32) -> Result<u32> {
+    if !(MIN_DAYS..=MAX_DAYS).contains(&days) {
+        bail!("Durée de sprint invalide : {days} jours (de {MIN_DAYS} à {MAX_DAYS}).");
+    }
+    Ok(days)
+}
+
+/// Échéance d'un sprint : début + durée + pauses, jamais avant `today`.
+pub fn due_for(start_on: &str, duration_days: u32, paused_days: u32, today: &str) -> String {
+    let due = add_days(start_on, i64::from(duration_days + paused_days)).unwrap_or_else(|| today.into());
+    if due.as_str() < today {
+        today.to_string()
+    } else {
+        due
+    }
+}
+
+/* ---------- Issue d'état ---------- */
+
+/// Corps de l'issue d'état : explication lisible, résumé, puis l'état en JSON.
+pub fn render_body(state: &ProjectState) -> String {
+    let status = match (&state.status, &state.paused_since) {
+        (RunStatus::Paused, Some(since)) => format!("en pause depuis le {since}"),
+        (RunStatus::Paused, None) => "en pause".into(),
+        (RunStatus::Running, _) => "en cours".into(),
+    };
+    let current = state
+        .current()
+        .map(|s| {
+            format!(
+                "{} (du {} au {}, branche `{}`)",
+                s.version,
+                s.start_on,
+                s.due_on,
+                s.branch()
+            )
+        })
+        .unwrap_or_else(|| "aucun".into());
+    let json = serde_json::to_string_pretty(state).unwrap_or_else(|_| "{}".into());
+    format!(
+        "{MARKER}\n\
+         Cette issue est gérée par le plugin **Gestion de projet** de Cadence : elle garde, pour toute \
+         l'équipe, l'état des sprints automatiques de ce dépôt. Elle est masquée dans l'écran Issues. \
+         Ne la fermez pas et ne modifiez pas le bloc JSON à la main : utilisez l'écran « Sprint en \
+         cours » de Cadence (démarrer, mettre en pause, changer la durée).\n\n\
+         - Sprints : {status}\n\
+         - Durée d'un sprint : {} jours\n\
+         - Sprint en cours : {current}\n\n\
+         ```json\n{json}\n```\n",
+        state.duration_days
+    )
+}
+
+/// État lu dans le corps de l'issue (le bloc ```json``` après le marqueur).
+pub fn parse_body(body: &str) -> Result<ProjectState> {
+    let start = body
+        .find("```json")
+        .context("bloc JSON des sprints absent de l'issue d'état")?;
+    let rest = &body[start + "```json".len()..];
+    let end = rest.find("```").context("bloc JSON des sprints non terminé")?;
+    serde_json::from_str(rest[..end].trim()).context("état des sprints illisible dans l'issue d'état")
+}
+
+/* ---------- Planification ---------- */
+
+/// Issues dont celle-ci dépend : les `#n` des lignes qui mentionnent une dépendance, ou de la
+/// section « Dépendances ».
+pub fn dependencies(body: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(title) = trimmed.strip_prefix("##") {
+            in_section = title
+                .trim_start_matches('#')
+                .trim()
+                .to_lowercase()
+                .starts_with("dépendance");
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if in_section || lower.contains("dépend de") || lower.contains("depends on") {
+            for n in issue_refs(trimmed) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `#12` d'une ligne de texte (pas les ancres `owner/repo#12` d'autres dépôts).
+fn issue_refs(line: &str) -> Vec<u32> {
+    let bytes = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' && (i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'/')) {
+            let digits: String = line[i + 1..].chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(n) = digits.parse::<u32>() {
+                out.push(n);
+            }
+            i += 1 + digits.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Poids d'une issue dans la capacité.
+pub fn weight(issue: &Issue) -> u32 {
+    issue.points.unwrap_or(DEFAULT_POINTS)
+}
+
+/// Rang de priorité : 0 (socle) d'abord, sans priorité en dernier.
+fn rank(issue: &Issue) -> (u8, u32) {
+    (
+        issue.priority.unwrap_or(crate::model::LOWEST_PRIORITY + 1),
+        issue.number,
+    )
+}
+
+/// Issues à ajouter au sprint, dans l'ordre : par priorité puis numéro, tant qu'elles tiennent
+/// dans `budget` story points. Une issue dont une dépendance est ouverte hors du sprint attend.
+/// `at_least_one` : une issue plus grosse que le budget est prise si rien d'autre n'entre.
+///
+/// - `backlog` : candidates (issues ouvertes sans version, avec leur description) ;
+/// - `open` : numéros de toutes les issues ouvertes du dépôt ;
+/// - `in_sprint` : numéros des issues déjà dans le sprint.
+pub fn select(
+    backlog: &[Issue],
+    budget: u32,
+    open: &HashSet<u32>,
+    in_sprint: &HashSet<u32>,
+    at_least_one: bool,
+) -> Vec<u32> {
+    let mut ordered: Vec<&Issue> = backlog.iter().collect();
+    ordered.sort_by_key(|i| rank(i));
+    let mut chosen: Vec<u32> = Vec::new();
+    let mut used = 0u32;
+    // Plusieurs passes : une issue débloquée par une dépendance choisie plus loin entre ensuite.
+    for _ in 0..3 {
+        let before = chosen.len();
+        for issue in &ordered {
+            if chosen.contains(&issue.number) {
+                continue;
+            }
+            let deps = dependencies(issue.body.as_deref().unwrap_or(""));
+            let blocked = deps.iter().any(|d| {
+                *d != issue.number && open.contains(d) && !in_sprint.contains(d) && !chosen.contains(d)
+            });
+            if blocked {
+                continue;
+            }
+            let w = weight(issue);
+            if used + w <= budget || (at_least_one && chosen.is_empty() && used == 0) {
+                used += w;
+                chosen.push(issue.number);
+            }
+        }
+        if chosen.len() == before {
+            break;
+        }
+    }
+    chosen
+}
+
+/// Issues à retirer d'un sprint trop chargé (durée réduite) : celles « à faire », non reportées,
+/// de la moins prioritaire à la plus prioritaire, jusqu'à revenir sous `target`.
+pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
+    let mut load: u32 = sprint.iter().map(weight).sum();
+    let mut removable: Vec<&Issue> = sprint
+        .iter()
+        .filter(|i| i.state == "open" && i.status == "todo" && i.assignees.is_empty())
+        .filter(|i| !carried.contains(&i.number))
+        .collect();
+    removable.sort_by_key(|i| std::cmp::Reverse(rank(i)));
+    let mut out = Vec::new();
+    for issue in removable {
+        if load <= target {
+            break;
+        }
+        load -= weight(issue);
+        out.push(issue.number);
+    }
+    out
+}
+
+/* ---------- Versions ---------- */
+
+fn semver(title: &str, prefix: &str) -> Option<(u64, u64, u64)> {
+    let t = title.trim();
+    let t = if prefix.is_empty() {
+        t
+    } else {
+        t.strip_prefix(prefix).unwrap_or(t)
+    };
+    let t = t.strip_prefix('v').unwrap_or(t);
+    let mut parts = t.split('.');
+    let v = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(v)
+}
+
+pub fn is_semver(title: &str) -> bool {
+    semver(title, "").is_some()
+}
+
+/// Version suivante : mineure +1 de la plus haute version connue, `0.1.0` sans historique.
+/// `taken` : titres de milestones et tags existants (jamais réutilisés).
+pub fn next_version(taken: &[String], prefix: &str) -> String {
+    let max = taken.iter().filter_map(|t| semver(t, prefix)).max();
+    let (major, minor) = match max {
+        Some((ma, mi, _)) => (ma, mi + 1),
+        None => (0, 1),
+    };
+    format!("{major}.{minor}.0")
+}
+
+/// Version qui suit `current` (mineure +1), en sautant celles déjà prises.
+pub fn version_after(current: &str, taken: &[String], prefix: &str) -> String {
+    let mut all: Vec<String> = taken.to_vec();
+    all.push(current.to_string());
+    next_version(&all, prefix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::issue_from;
+    use serde_json::json;
+
+    fn issue(number: u32, priority: Option<u8>, points: Option<u32>, body: &str) -> Issue {
+        let mut labels = vec![];
+        if let Some(p) = priority {
+            labels.push(json!({ "name": format!("priority/{p}") }));
+        }
+        if let Some(sp) = points {
+            labels.push(json!({ "name": format!("sp/{sp}") }));
+        }
+        issue_from(
+            &json!({ "number": number, "state": "open", "labels": labels, "body": body }),
+            true,
+        )
+    }
+
+    fn state() -> ProjectState {
+        ProjectState {
+            status: RunStatus::Running,
+            duration_days: 14,
+            initial_points_per_day: 1.5,
+            paused_since: None,
+            sprints: vec![SprintRecord {
+                version: "0.1.0".into(),
+                start_on: "2026-10-19".into(),
+                due_on: "2026-11-02".into(),
+                paused_days: 0,
+                capacity: 21,
+                filled: true,
+                carried: vec![],
+                done_points: None,
+                ended_on: None,
+                release: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn round_trips_the_state_issue() {
+        let s = state();
+        let body = render_body(&s);
+        assert!(body.starts_with(MARKER));
+        assert!(
+            body.contains("Sprint en cours : 0.1.0 (du 2026-10-19 au 2026-11-02, branche `release/0.1.0`)")
+        );
+        assert_eq!(parse_body(&body).unwrap(), s);
+        assert!(parse_body("pas d'état").is_err());
+        assert!(parse_body("```json\n{ cassé\n```").is_err());
+    }
+
+    #[test]
+    fn reads_dependencies() {
+        let body = "## Contexte\nVoir #3.\n\n## Dépendances\nDépend de #1, #2\n\n## Autre\n#9";
+        assert_eq!(dependencies(body), [1, 2]);
+        assert_eq!(dependencies("Dépend de #4 et de me/lib#7"), [4]);
+        assert_eq!(dependencies("## Dépendances\nAucune"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn fills_by_priority_within_capacity() {
+        let backlog = vec![
+            issue(1, Some(0), Some(5), ""),
+            issue(2, Some(0), Some(8), "## Dépendances\nDépend de #1"),
+            issue(3, Some(1), Some(8), "## Dépendances\nDépend de #1, #2"),
+            issue(4, Some(1), Some(5), "## Dépendances\nDépend de #2, #3"),
+            issue(5, None, None, ""),
+            issue(6, Some(5), Some(2), ""),
+        ];
+        let open: HashSet<u32> = (1..=6).collect();
+        let none = HashSet::new();
+        // 21 SP : #1 (5) + #2 (8) + #3 (8) ; #4 attend #3, déjà pris : 21 + 5 > 21.
+        assert_eq!(select(&backlog, 21, &open, &none, true), [1, 2, 3]);
+        // 15 SP : #3 ne tient pas, #4 dépend de #3 : place pour #6 (2) puis rien (#5 = 3 SP par défaut → 15+3).
+        assert_eq!(select(&backlog, 15, &open, &none, true), [1, 2, 6]);
+        // Dépendance hors du sprint et ouverte : l'issue attend.
+        let only_3 = vec![backlog[2].clone()];
+        assert!(select(&only_3, 50, &open, &none, true).is_empty());
+        // Dépendances déjà dans le sprint : elle entre.
+        let in_sprint: HashSet<u32> = [1, 2].into();
+        assert_eq!(select(&only_3, 50, &open, &in_sprint, true), [3]);
+        // Budget trop petit : au moins une issue si demandé.
+        assert_eq!(select(&backlog, 1, &open, &none, true), [1]);
+        assert!(select(&backlog, 1, &open, &none, false).is_empty());
+    }
+
+    #[test]
+    fn trims_the_least_urgent_todo_issues() {
+        let mut sprint = vec![
+            issue(1, Some(0), Some(5), ""),
+            issue(2, Some(1), Some(8), ""),
+            issue(3, Some(3), Some(3), ""),
+            issue(4, Some(2), Some(5), ""),
+        ];
+        sprint[0].status = "doing";
+        assert_eq!(trim(&sprint, &[], 21), Vec::<u32>::new());
+        assert_eq!(trim(&sprint, &[], 15), [3, 4]);
+        // Reportée : jamais retirée.
+        assert_eq!(trim(&sprint, &[3], 15), [4, 2]);
+    }
+
+    #[test]
+    fn measures_the_pace_and_capacity() {
+        let mut s = state();
+        assert_eq!((s.points_per_day(), s.next_capacity()), (1.5, 21));
+        s.sprints[0].done_points = Some(14);
+        s.sprints[0].ended_on = Some("2026-11-02".into());
+        s.sprints[0].paused_days = 4;
+        // 14 SP en 10 jours effectifs.
+        assert_eq!(s.points_per_day(), 1.4);
+        assert_eq!(s.next_capacity(), 20);
+        s.duration_days = 21;
+        assert_eq!(s.next_capacity(), 29);
+    }
+
+    #[test]
+    fn computes_due_dates_and_versions() {
+        assert_eq!(due_for("2026-10-19", 14, 0, "2026-10-20"), "2026-11-02");
+        assert_eq!(due_for("2026-10-19", 14, 3, "2026-10-20"), "2026-11-05");
+        // Durée raccourcie sous la date du jour : fin aujourd'hui.
+        assert_eq!(due_for("2026-10-01", 7, 0, "2026-10-20"), "2026-10-20");
+        assert!(check_duration(0).is_err() && check_duration(91).is_err());
+        assert_eq!(next_version(&[], "v"), "0.1.0");
+        let taken = vec!["0.2.0".to_string(), "v0.3.1".into(), "Cockpit".into()];
+        assert_eq!(next_version(&taken, "v"), "0.4.0");
+        assert_eq!(version_after("0.1.0", &["0.2.0".into()], "v"), "0.3.0");
+        assert!(is_semver("1.2.3") && !is_semver("1.2"));
+    }
+}

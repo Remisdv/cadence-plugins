@@ -13,8 +13,13 @@
 //!   `get_pull_request`, `create_pull_request` (brouillon par défaut, jamais depuis la branche par
 //!   défaut), `mark_pull_request_ready` (GraphQL `markPullRequestReadyForReview`).
 //! - Releases : `list_releases`, `create_release` (brouillon par défaut, tag = préfixe + version).
+//! - Sprints automatiques (réservés à l'UI, voir `projet` et `engine`) : `project_start`,
+//!   `project_pause`, `project_resume`, `project_set_duration`. L'issue d'état `cadence/sprints`
+//!   est masquée de `list_issues`.
 
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use rmcp::{
@@ -33,9 +38,10 @@ use serde_json::{Value, json};
 
 use crate::{
     config::{self, Env, Settings},
+    engine::Project,
     github::GitHub,
     model::{self, IssueType, Status},
-    pulls, sprint,
+    projet, pulls, sprint,
 };
 
 type ToolResult = Result<CallToolResult, McpError>;
@@ -258,6 +264,26 @@ pub struct NumberParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProjectStartParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Durée d'un sprint en jours (1 à 90), modifiable ensuite.
+    pub duration_days: u32,
+    /// Story points du premier sprint ; ensuite, la capacité suit le rythme réel.
+    pub capacity: u32,
+    /// Version du premier sprint (ex. 0.1.0) ; absente : mineure suivante de la plus haute version.
+    pub first_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProjectDurationParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Nouvelle durée d'un sprint en jours (1 à 90) : s'applique au sprint en cours.
+    pub duration_days: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SprintSummaryParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
@@ -314,8 +340,12 @@ struct State {
 
 #[derive(Clone)]
 pub struct GestionProjet {
-    gh: Arc<GitHub>,
+    pub(crate) gh: Arc<GitHub>,
     state: Arc<RwLock<State>>,
+    /// Dernière passe du moteur de sprints, par dépôt (l'écran Sprint ne relance pas à chaque vue).
+    pub(crate) last_pass: Arc<Mutex<HashMap<String, Instant>>>,
+    /// Une seule opération du moteur à la fois dans ce processus.
+    pub(crate) engine_lock: Arc<tokio::sync::Mutex<()>>,
     #[allow(dead_code)] // lu par #[tool_handler]
     tool_router: ToolRouter<Self>,
 }
@@ -334,6 +364,8 @@ impl GestionProjet {
                 repos: env.repos.clone(),
                 settings: env.settings.clone(),
             })),
+            last_pass: Arc::default(),
+            engine_lock: Arc::default(),
             tool_router: Self::tool_router(),
         })
     }
@@ -342,11 +374,11 @@ impl GestionProjet {
         self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn followed(&self) -> Vec<String> {
+    pub(crate) fn followed(&self) -> Vec<String> {
         self.read().repos.clone()
     }
 
-    fn settings(&self) -> Settings {
+    pub(crate) fn settings(&self) -> Settings {
         self.read().settings.clone()
     }
 
@@ -392,7 +424,7 @@ impl GestionProjet {
             })
     }
 
-    async fn milestones(&self, repo: &str, state: &str) -> Result<Vec<Value>> {
+    pub(crate) async fn milestones(&self, repo: &str, state: &str) -> Result<Vec<Value>> {
         let mut out = Vec::new();
         for page in 1..=10u32 {
             let p = self
@@ -470,13 +502,14 @@ impl GestionProjet {
             query.push(("assignee", a.clone()));
         }
         let res = self.gh.get_page(&format!("/repos/{repo}/issues"), &query).await?;
-        // L'API issues renvoie aussi les pull requests : on les écarte.
+        // L'API issues renvoie aussi les pull requests : on les écarte, comme l'issue d'état
+        // des sprints automatiques.
         let issues = res
             .body
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|raw| !model::is_pull_request(raw))
+            .filter(|raw| !model::is_pull_request(raw) && !model::is_state_issue(raw))
             .map(|raw| model::issue_in(repo, raw, false))
             .collect();
         Ok(RepoIssues {
@@ -737,7 +770,7 @@ impl GestionProjet {
     }
 
     /// Toutes les issues d'un milestone (ouvertes et fermées), sans les pull requests.
-    async fn milestone_issues(&self, repo: &str, number: u32) -> Result<Vec<model::Issue>> {
+    pub(crate) async fn milestone_issues(&self, repo: &str, number: u32) -> Result<Vec<model::Issue>> {
         let mut out = Vec::new();
         for page in 1..=5u32 {
             let p = self
@@ -772,43 +805,83 @@ impl GestionProjet {
         let settings = self.settings();
         let today = sprint::today();
         let wanted = p.version.as_deref().map(str::trim).filter(|v| !v.is_empty());
-        let milestones = self
-            .milestones(&repo, if wanted.is_some() { "all" } else { "open" })
-            .await?;
-        let chosen = match wanted {
-            Some(title) => Some(
+        // Sprints automatiques : une passe du moteur (au plus une par minute), puis leur état.
+        let (project, project_error) = match self.reconcile_throttled(&repo).await {
+            Ok(project) => (project, None),
+            Err(err) => (
+                self.load_project(&repo).await.ok().flatten(),
+                Some(format!("{err:#}")),
+            ),
+        };
+        let milestones = self.milestones(&repo, "all").await?;
+        let current = project.as_ref().and_then(|p| p.state.current());
+        let chosen = match (wanted, current) {
+            (Some(title), _) => Some(
                 model::find_milestone(&milestones, title, &settings.tag_prefix).ok_or_else(|| {
                     anyhow!("Version « {title} » introuvable : aucun milestone de ce nom dans {repo}.")
                 })?,
             ),
-            None => sprint::current_sprint(&milestones, &today),
+            (None, Some(cur)) => model::find_milestone(&milestones, &cur.version, &settings.tag_prefix),
+            (None, None) => {
+                let open: Vec<Value> = milestones
+                    .iter()
+                    .filter(|m| m["state"].as_str() == Some("open"))
+                    .cloned()
+                    .collect();
+                sprint::current_sprint(&open, &today)
+                    .and_then(|m| model::find_milestone(&milestones, m["title"].as_str()?, ""))
+            }
         };
+        let mut out = json!({
+            "repo": repo,
+            "today": today,
+            "sprint_length_days": settings.sprint_length_days,
+            "project": project.as_ref().map(project_view),
+        });
+        if let Some(err) = project_error {
+            out["project_error"] = json!(err);
+        }
+        if project.is_none() {
+            let titles: Vec<String> = milestones
+                .iter()
+                .filter_map(|m| m["title"].as_str().map(str::to_string))
+                .collect();
+            let days = settings
+                .sprint_length_days
+                .clamp(projet::MIN_DAYS, projet::MAX_DAYS);
+            out["start_defaults"] = json!({
+                "duration_days": days,
+                // 10 story points par semaine pour commencer : la capacité suit ensuite le rythme réel.
+                "capacity": ((days as f32) * 10.0 / 7.0).round().max(1.0) as u32,
+                "first_version": projet::next_version(&titles, &settings.tag_prefix),
+            });
+        }
         let Some(raw) = chosen else {
-            return Ok(json!({
-                "repo": repo,
-                "today": today,
-                "sprint_length_days": settings.sprint_length_days,
-                "sprint": Value::Null,
-                "message": "Aucun sprint en cours : aucun milestone ouvert n'a d'échéance. Datez une version pour en faire un sprint.",
-            }));
+            out["sprint"] = Value::Null;
+            out["message"] = json!(if project.is_some() {
+                "Le sprint en cours n'a pas encore de milestone : il sera créé à la prochaine passe."
+            } else {
+                "Aucun sprint en cours : démarrez le projet pour que Cadence crée les sprints, ou datez une version."
+            });
+            return Ok(out);
         };
         let version = model::version_from(raw);
+        let record = project
+            .as_ref()
+            .and_then(|p| p.state.sprints.iter().find(|s| s.version == version.title));
         let mut issues = self.milestone_issues(&repo, version.number).await?;
         issues.sort_by_key(|i| i.number);
         let pace = sprint::pace(
             &issues,
+            record.map(|r| r.start_on.as_str()),
             version.due_on.as_deref(),
             settings.sprint_length_days,
             &today,
         );
-        Ok(json!({
-            "repo": repo,
-            "today": today,
-            "sprint_length_days": settings.sprint_length_days,
-            "sprint": version,
-            "pace": pace,
-            "issues": issues,
-        }))
+        out["sprint"] = serde_json::to_value(&version)?;
+        out["pace"] = serde_json::to_value(&pace)?;
+        out["issues"] = serde_json::to_value(&issues)?;
+        Ok(out)
     }
 
     /* ---------- Pull requests ---------- */
@@ -992,7 +1065,7 @@ impl GestionProjet {
 
     /* ---------- Releases ---------- */
 
-    async fn releases(&self, repo: &str) -> Result<Vec<Value>> {
+    pub(crate) async fn releases(&self, repo: &str) -> Result<Vec<Value>> {
         let raw = self
             .gh
             .get(&format!("/repos/{repo}/releases"), &[("per_page", "100".into())])
@@ -1040,6 +1113,37 @@ fn state_str(s: IssueState) -> &'static str {
         IssueState::Open => "open",
         IssueState::Closed => "closed",
     }
+}
+
+/// État des sprints automatiques tel que l'écran Sprint l'affiche (six derniers sprints).
+fn project_view(project: &Project) -> Value {
+    let s = &project.state;
+    let cur = s.current();
+    let sprints: Vec<Value> = s
+        .sprints
+        .iter()
+        .rev()
+        .take(6)
+        .map(|r| {
+            let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
+            v["branch"] = json!(r.branch());
+            v
+        })
+        .collect();
+    json!({
+        "issue": project.issue,
+        "url": project.url,
+        "status": s.status,
+        "paused_since": s.paused_since,
+        "duration_days": s.duration_days,
+        "points_per_day": (s.points_per_day() * 10.0).round() / 10.0,
+        "capacity": cur.map(|c| c.capacity),
+        "next_capacity": s.next_capacity(),
+        "current": cur.map(|c| c.version.clone()),
+        "release_branch": cur.map(|c| c.branch()),
+        "carried": cur.map(|c| c.carried.clone()).unwrap_or_default(),
+        "sprints": sprints,
+    })
 }
 
 fn no_repos_message() -> String {
@@ -1111,7 +1215,7 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Dépôt GitHub suivi : nom complet, branche par défaut, visibilité, URL, préfixe de tag. À lire avant de créer une branche ou une PR."
+        description = "Dépôt GitHub suivi : nom complet, branche par défaut, visibilité, URL, préfixe de tag et, si les sprints automatiques sont démarrés, la branche de release du sprint en cours (`sprints.release_branch`). À lire avant de créer une branche ou une PR."
     )]
     async fn get_repository(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -1119,7 +1223,18 @@ impl GestionProjet {
                 let repo = self.repo(&p.repo)?;
                 let r = self.gh.get(&format!("/repos/{repo}"), &[]).await?;
                 let settings = self.settings();
+                // Sprints automatiques : la branche de release du sprint en cours est la base des
+                // branches d'issue et de leurs PR.
+                let sprints = match self.load_project(&repo).await {
+                    Ok(Some(p)) => json!({
+                        "status": p.state.status,
+                        "current_version": p.state.current().map(|c| c.version.clone()),
+                        "release_branch": p.state.current().map(|c| c.branch()),
+                    }),
+                    _ => Value::Null,
+                };
                 Ok(json!({
+                    "sprints": sprints,
                     "repo": repo,
                     "full_name": r["full_name"],
                     "default_branch": r["default_branch"],
@@ -1278,6 +1393,68 @@ impl GestionProjet {
     async fn sprint_summary(&self, Parameters(p): Parameters<SprintSummaryParams>) -> ToolResult {
         respond(self.do_sprint_summary(p).await)
     }
+
+    #[tool(
+        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints), le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité.",
+        meta = ui_only()
+    )]
+    async fn project_start(&self, Parameters(p): Parameters<ProjectStartParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self
+                    .start_project(&repo, p.duration_days, p.capacity, p.first_version)
+                    .await?;
+                Ok(json!({ "repo": repo, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Met en pause les sprints automatiques : plus de remplissage ni de clôture ; à la reprise, l'échéance du sprint en cours est repoussée de la durée de la pause.",
+        meta = ui_only()
+    )]
+    async fn project_pause(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self.pause_project(&repo, true).await?;
+                Ok(json!({ "repo": repo, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Reprend les sprints automatiques mis en pause (échéance du sprint en cours repoussée de la durée de la pause).",
+        meta = ui_only()
+    )]
+    async fn project_resume(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self.pause_project(&repo, false).await?;
+                Ok(json!({ "repo": repo, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Change la durée des sprints automatiques : l'échéance du sprint en cours est recalculée et sa portée ajustée à la nouvelle capacité (issues ajoutées par priorité, ou issues « à faire » les moins urgentes retirées).",
+        meta = ui_only()
+    )]
+    async fn project_set_duration(&self, Parameters(p): Parameters<ProjectDurationParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self.set_duration(&repo, p.duration_days).await?;
+                Ok(json!({ "repo": repo, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
 }
 
 #[tool_handler]
@@ -1292,7 +1469,9 @@ impl ServerHandler for GestionProjet {
                 "Outils GitHub du plugin Cadence « Gestion de projet » : issues, versions (milestones), \
                  commentaires, pull requests et releases des dépôts suivis. Chaque outil prend `repo` \
                  (owner/name) ; `list_issues` sans `repo` couvre tous les dépôts suivis. Conventions : \
-                 labels type/*, status/*, estimate/* ; un milestone daté est un sprint, sans date un palier. \
+                 labels type/*, status/*, sp/* (story points), priority/* ; un milestone daté est un sprint, \
+                 sans date un palier. Sprints automatiques : chaque sprint a sa branche release/<version>, \
+                 base des branches d'issue (voir get_repository). \
                  Pour lire ou modifier le code, obtenir d'abord un worktree avec cadence__repo_checkout.",
             )
     }
@@ -1354,6 +1533,10 @@ mod tests {
             "list_releases",
             "create_release",
             "sprint_summary",
+            "project_start",
+            "project_pause",
+            "project_resume",
+            "project_set_duration",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -1384,7 +1567,15 @@ mod tests {
     #[test]
     fn marks_ui_only_tools() {
         let tools = server(&[]).tool_router.list_all();
-        for name in ["get_account", "list_account_repos", "sprint_summary"] {
+        for name in [
+            "get_account",
+            "list_account_repos",
+            "sprint_summary",
+            "project_start",
+            "project_pause",
+            "project_resume",
+            "project_set_duration",
+        ] {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             let meta = tool.meta.as_ref().expect("_meta");
             assert_eq!(meta.0.get("cadence/visibility"), Some(&json!("ui")));
@@ -1551,6 +1742,36 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&r).contains("Titre de pull request vide"), "{}", text(&r));
+
+        // Sprints automatiques : durée et capacité vérifiées avant GitHub.
+        let r = s
+            .project_start(Parameters(ProjectStartParams {
+                repo: "me/app".into(),
+                duration_days: 0,
+                capacity: 20,
+                first_version: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("de 1 à 90"), "{}", text(&r));
+        let r = s
+            .project_start(Parameters(ProjectStartParams {
+                repo: "me/app".into(),
+                duration_days: 14,
+                capacity: 0,
+                first_version: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Capacité invalide"), "{}", text(&r));
+        let r = s
+            .project_set_duration(Parameters(ProjectDurationParams {
+                repo: "me/app".into(),
+                duration_days: 120,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("de 1 à 90"), "{}", text(&r));
 
         let r = s
             .sprint_summary(Parameters(SprintSummaryParams {

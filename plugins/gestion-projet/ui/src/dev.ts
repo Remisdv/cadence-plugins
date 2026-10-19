@@ -6,7 +6,7 @@
  * n'est pas utilisé.
  */
 import type { MockHostOptions } from "@cadence/plugin-sdk";
-import type { AccountRepo, Issue, PullRequest, Release, Version } from "./domain";
+import type { AccountRepo, Issue, ProjectView, PullRequest, Release, Version } from "./domain";
 import { sprintStart } from "./planning";
 
 const params = new URLSearchParams(location.search);
@@ -174,16 +174,75 @@ const sprintIssues: Issue[] = [
 const count = (list: Issue[], status: Issue["status"]) =>
   list.filter((i) => i.status === status).length;
 
+/** Sprints automatiques simulés : démarrés sur RemiSDV/cadence, à démarrer sur l'autre dépôt. */
+const projects: Record<string, ProjectView | null> = {
+  "RemiSDV/cadence": {
+    issue: 160,
+    url: "https://github.com/RemiSDV/cadence/issues/160",
+    status: "running",
+    paused_since: null,
+    duration_days: 14,
+    points_per_day: 1.6,
+    capacity: 22,
+    next_capacity: 22,
+    current: "0.1.2",
+    release_branch: "release/0.1.2",
+    carried: [148],
+    sprints: [
+      {
+        version: "0.1.2",
+        branch: "release/0.1.2",
+        start_on: day(-6),
+        due_on: day(8),
+        paused_days: 0,
+        capacity: 22,
+        filled: true,
+        carried: [148],
+      },
+      {
+        version: "0.1.1",
+        branch: "release/0.1.1",
+        start_on: day(-20),
+        due_on: day(-6),
+        paused_days: 0,
+        capacity: 20,
+        filled: true,
+        done_points: 18,
+        ended_on: day(-6),
+        release: { status: "pending", pull_request: 158, message: "CI en cours sur la PR #158." },
+      },
+      {
+        version: "0.1.0",
+        branch: "release/0.1.0",
+        start_on: day(-34),
+        due_on: day(-20),
+        paused_days: 2,
+        capacity: 21,
+        filled: true,
+        done_points: 26,
+        ended_on: day(-20),
+        release: { status: "merged", pull_request: 140, tag: "v0.1.0" },
+      },
+    ],
+  },
+  "RemiSDV/cadence-plugins": null,
+};
+
+const startDefaults = { duration_days: 14, capacity: 20, first_version: "0.4.0" };
+
 function sprintSummary(repo: string, title?: string) {
   const v = versions.find((x) => x.title === (title ?? "0.1.2"));
+  const project = projects[repo] ?? null;
   if (!v || repo !== "RemiSDV/cadence") {
     return {
       repo,
       today: day(0),
       sprint_length_days: 14,
       sprint: null,
+      project,
+      ...(project ? {} : { start_defaults: startDefaults }),
       message:
-        "Aucun sprint en cours : aucun milestone ouvert n'a d'échéance. Datez une version pour en faire un sprint.",
+        "Aucun sprint en cours : démarrez le projet pour que Cadence crée les sprints, ou datez une version.",
     };
   }
   const list = v.title === "0.1.2" ? sprintIssues : [];
@@ -206,6 +265,7 @@ function sprintSummary(repo: string, title?: string) {
     today: day(0),
     sprint_length_days: 14,
     sprint: v,
+    project,
     issues: list,
     pace: {
       start_on: start,
@@ -321,6 +381,51 @@ const planningTools: MockHostOptions["tools"] = {
   }),
   sprint_summary: ({ repo, version }) =>
     sprintSummary(repo as string, version as string | undefined),
+  project_start: ({ repo, duration_days, capacity, first_version }) => {
+    const version = String(first_version);
+    const project: ProjectView = {
+      issue: 31,
+      url: `https://github.com/${String(repo)}/issues/31`,
+      status: "running",
+      paused_since: null,
+      duration_days: Number(duration_days),
+      points_per_day: Number(capacity) / Number(duration_days),
+      capacity: Number(capacity),
+      next_capacity: Number(capacity),
+      current: version,
+      release_branch: `release/${version}`,
+      carried: [],
+      sprints: [
+        {
+          version,
+          branch: `release/${version}`,
+          start_on: day(0),
+          due_on: day(Number(duration_days)),
+          paused_days: 0,
+          capacity: Number(capacity),
+          filled: true,
+        },
+      ],
+    };
+    projects[repo as string] = project;
+    return { repo, project };
+  },
+  project_pause: ({ repo }) => {
+    const p = projects[repo as string]!;
+    Object.assign(p, { status: "paused", paused_since: day(0) });
+    return { repo, project: p };
+  },
+  project_resume: ({ repo }) => {
+    const p = projects[repo as string]!;
+    Object.assign(p, { status: "running", paused_since: null });
+    return { repo, project: p };
+  },
+  project_set_duration: ({ repo, duration_days }) => {
+    const p = projects[repo as string]!;
+    p.duration_days = Number(duration_days);
+    p.capacity = Math.round(p.points_per_day * p.duration_days);
+    return { repo, project: p };
+  },
   list_pull_requests: ({ repo, state }) => {
     const wanted = (state as string | undefined) ?? "open";
     return {

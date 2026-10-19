@@ -84,6 +84,20 @@ pub fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Secondes écoulées depuis un instant ISO `AAAA-MM-JJTHH:MM:SSZ` (UTC) ; `None` s'il est illisible.
+pub fn seconds_since(iso: &str) -> Option<i64> {
+    let days = day_number(iso)?;
+    let time = iso.get(11..19)?;
+    let mut hms = time.split(':').map(|p| p.parse::<i64>().ok());
+    let (h, m, s) = (hms.next()??, hms.next()??, hms.next()??);
+    let then = days * 86_400 + h * 3_600 + m * 60 + s;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(now - then)
+}
+
 /// Sprint à résumer : parmi les milestones ouverts et datés, celui dont l'échéance à venir est
 /// la plus proche ; à défaut (toutes dépassées), celui dont l'échéance est la plus récente.
 pub fn current_sprint<'a>(milestones: &'a [Value], today: &str) -> Option<&'a Value> {
@@ -235,8 +249,15 @@ pub struct Pace {
 }
 
 /// Rythme d'une version à partir de ses issues (toutes, ouvertes et fermées). Sans échéance
-/// (palier), seuls l'avancement et les compteurs sont renseignés.
-pub fn pace(issues: &[Issue], due_on: Option<&str>, sprint_length_days: u32, today: &str) -> Pace {
+/// (palier), seuls l'avancement et les compteurs sont renseignés. Le début est `start_on` (sprint
+/// automatique) ou, à défaut, l'échéance moins la durée de sprint réglée.
+pub fn pace(
+    issues: &[Issue],
+    start_on: Option<&str>,
+    due_on: Option<&str>,
+    sprint_length_days: u32,
+    today: &str,
+) -> Pace {
     let closed_on: Vec<Option<&str>> = issues
         .iter()
         .map(|i| {
@@ -273,8 +294,12 @@ pub fn pace(issues: &[Issue], due_on: Option<&str>, sprint_length_days: u32, tod
     let Some(due) = due_on.filter(|d| is_date(d)).map(|d| day(d).to_string()) else {
         return out;
     };
-    let Some(start) = add_days(&due, -i64::from(sprint_length_days.max(1))) else {
-        return out;
+    let start = match start_on.filter(|d| is_date(d)) {
+        Some(start) => day(start).to_string(),
+        None => match add_days(&due, -i64::from(sprint_length_days.max(1))) {
+            Some(start) => start,
+            None => return out,
+        },
     };
     let today = day(today);
     out.days_left = days_between(today, &due);
@@ -316,6 +341,8 @@ mod tests {
         assert!(is_date("2026-10-20") && is_date("2026-10-20T00:00:00Z"));
         assert!(!is_date("20-10-2026") && !is_date("2026-13-01") && !is_date("demain"));
         assert_eq!(today().len(), 10);
+        assert!(seconds_since("2026-01-01T00:00:00Z").is_some_and(|s| s > 0));
+        assert_eq!(seconds_since("2026-01-01"), None);
     }
 
     #[test]
@@ -398,7 +425,7 @@ mod tests {
             issue("open", &[], None),
             issue("open", &["status/todo"], None),
         ];
-        let p = pace(&issues, Some("2026-09-23T07:00:00Z"), 14, "2026-09-13");
+        let p = pace(&issues, None, Some("2026-09-23T07:00:00Z"), 14, "2026-09-13");
         assert_eq!(
             (p.start_on.as_deref(), p.due_on.as_deref()),
             (Some("2026-09-09"), Some("2026-09-23"))
@@ -422,13 +449,19 @@ mod tests {
 
         // Sprint de 7 jours réglé : début une semaine avant l'échéance.
         assert_eq!(
-            pace(&issues, Some("2026-09-23"), 7, "2026-09-13")
+            pace(&issues, None, Some("2026-09-23"), 7, "2026-09-13")
                 .start_on
                 .as_deref(),
             Some("2026-09-16")
         );
         // Palier : avancement seulement.
-        let palier = pace(&issues, None, 14, "2026-09-13");
+        let palier = pace(&issues, None, None, 14, "2026-09-13");
+        // Sprint automatique : début donné (une pause a repoussé l'échéance).
+        let auto = pace(&issues, Some("2026-09-05"), Some("2026-09-23"), 14, "2026-09-13");
+        assert_eq!(
+            (auto.start_on.as_deref(), auto.length_days),
+            (Some("2026-09-05"), Some(18))
+        );
         assert_eq!(
             (palier.progress, palier.days_left, palier.burndown.len()),
             (33, None, 0)

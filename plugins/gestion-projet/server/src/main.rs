@@ -4,8 +4,10 @@
 //! Journal sur stderr (stdout porte le protocole MCP) ; niveau réglable avec `RUST_LOG`.
 
 mod config;
+mod engine;
 mod github;
 mod model;
+mod projet;
 mod pulls;
 mod server;
 mod sprint;
@@ -38,6 +40,8 @@ async fn main() -> Result<()> {
         repos = env.repos.len(),
         "serveur gestion-projet prêt"
     );
+    // Sprints automatiques : une passe de fond par dépôt suivi toutes les dix minutes.
+    tokio::spawn(server.clone().run_engine());
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

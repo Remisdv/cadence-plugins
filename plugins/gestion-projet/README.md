@@ -43,7 +43,7 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 
 | Vue                             | Section        | État                                                                                                                                                                                                   |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Sprint en cours (`sprint`)      | Pilotage       | KPI (portée, avancement, restantes, rythme, retard), kanban par état, burndown, progression (`sprint_summary`) ; un sprint par dépôt en mode « Tous les dépôts »                                       |
+| Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; un sprint par dépôt en mode « Tous les dépôts » |
 | Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
 | Roadmap (`roadmap`)             | Planification  | versions livrées et en cours, sprints planifiés puis paliers (nom, thèmes, avancement), bouton « Proposer des issues » sur un palier                                                                   |
 | Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
@@ -101,6 +101,36 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
 | `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
 | `sprint_summary` (réservé à l'UI)                     | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; début du sprint = échéance − `sprint_length_days` |
+| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (réservés à l'UI) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag (voir « Sprints automatiques ») |
+
+## Sprints automatiques
+
+L'écran « Sprint en cours » propose **Démarrer le projet** : on saisit la durée d'un sprint (par
+exemple 2 semaines), la capacité du premier sprint en story points et sa version (`0.1.0` par
+défaut). Ensuite, Cadence fait tout seul :
+
+- **Un sprint = une version** : milestone daté `0.2.0` et branche `release/0.2.0` (créée depuis la
+  branche par défaut, ou depuis la release précédente si elle n'est pas encore fusionnée). Les
+  branches `feat/…` partent de la branche de release et y sont fusionnées (skill « Implémenter »).
+- **Remplissage par priorité** : les issues ouvertes sans version, `priority/0` (socle) d'abord
+  puis 1 à 5, sans priorité en dernier, tant qu'elles tiennent dans la capacité ; une issue dont une
+  dépendance (« Dépend de #12 ») est ouverte hors du sprint attend ; une issue sans story points
+  compte pour 3.
+- **Adaptation** : la capacité suit le rythme réel (story points fermés par jour sur les trois
+  derniers sprints, pauses déduites). Un sprint fini en avance tire les issues suivantes. À
+  l'échéance, les issues ouvertes passent en tête du sprint suivant et leurs PR visent la nouvelle
+  branche de release.
+- **Livraison** : à la fin du sprint, PR `release/x` → branche par défaut, fusionnée dès que la CI
+  est verte (bloquée et signalée en cas d'échec ou de conflit), puis release `v0.2.0` publiée.
+- **Pause** : plus de remplissage ni de clôture ; à la reprise, l'échéance est repoussée d'autant.
+  La **durée** se change à tout moment : l'échéance du sprint en cours est recalculée et sa portée
+  ajustée (issues ajoutées, ou issues « à faire » les moins urgentes retirées).
+
+L'état est partagé par toute l'équipe dans une issue du dépôt, label `cadence/sprints`, masquée
+dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait avancer les sprints :
+à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
+Outils réservés à l'UI : `project_start`, `project_pause`, `project_resume`,
+`project_set_duration` ; `sprint_summary` porte l'état (`project`).
 
 Les échéances sont envoyées à midi UTC pour que GitHub garde le même jour. Le burndown compte la
 portée actuelle du milestone dès le premier jour (GitHub ne date pas l'entrée d'une issue).

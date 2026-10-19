@@ -191,6 +191,58 @@ export interface Pace {
   burndown: BurndownPoint[];
 }
 
+export type ReleaseStatus = "pending" | "merged" | "empty" | "blocked";
+
+/** Sprint automatique (issue d'état `cadence/sprints`). */
+export interface SprintRecord {
+  version: string;
+  /** Branche de release : `release/<version>`. */
+  branch: string;
+  start_on: string;
+  due_on: string;
+  paused_days: number;
+  /** Capacité visée, en story points. */
+  capacity: number;
+  filled: boolean;
+  /** Issues reportées depuis le sprint précédent. */
+  carried?: number[];
+  done_points?: number | null;
+  ended_on?: string | null;
+  /** Fusion de la branche de release dans la branche par défaut, à la fin du sprint. */
+  release?: {
+    status: ReleaseStatus;
+    pull_request?: number;
+    tag?: string;
+    message?: string;
+  } | null;
+}
+
+/** Sprints automatiques d'un dépôt (`sprint_summary.project`, `project_*`). */
+export interface ProjectView {
+  /** Issue d'état partagée par l'équipe. */
+  issue: number;
+  url: string;
+  status: "running" | "paused";
+  paused_since: string | null;
+  duration_days: number;
+  /** Rythme : story points fermés par jour. */
+  points_per_day: number;
+  capacity: number | null;
+  next_capacity: number;
+  current: string | null;
+  release_branch: string | null;
+  carried: number[];
+  /** Du plus récent au plus ancien (six au plus). */
+  sprints: SprintRecord[];
+}
+
+/** Valeurs proposées par « Démarrer le projet ». */
+export interface StartDefaults {
+  duration_days: number;
+  capacity: number;
+  first_version: string;
+}
+
 /** Réponse de `sprint_summary` : `sprint` absent quand aucun milestone daté n'est ouvert. */
 export interface SprintSummary {
   repo: string;
@@ -200,6 +252,10 @@ export interface SprintSummary {
   pace?: Pace;
   issues?: Issue[];
   message?: string;
+  /** Sprints automatiques ; `null` tant que le projet n'est pas démarré. */
+  project?: ProjectView | null;
+  project_error?: string;
+  start_defaults?: StartDefaults;
 }
 
 export type PrState = "draft" | "open" | "merged" | "closed";

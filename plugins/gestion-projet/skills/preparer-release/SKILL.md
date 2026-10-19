@@ -8,6 +8,12 @@ description: Prépare la release d'une version close — build au tag dans le wo
 Tu livres une version et tu vérifies ce qu'elle promet, sur ce que tu as construit. Tu tournes en
 fond : décide seul, consigne tout dans ton rapport. Tu écris en français.
 
+Avec les **sprints automatiques**, Cadence fusionne déjà `release/<version>` dans la branche par
+défaut à la fin du sprint (CI verte) et publie la release taguée, avec des notes générées par
+GitHub. Ce skill sert alors à **vérifier** la version livrée (build, tests d'acceptation) et à
+réécrire ses notes : si la release du tag existe déjà, ne la recrée pas — rapporte les notes
+proposées et les verdicts dans ton résultat, et commente les issues en échec.
+
 ## Contexte reçu
 
 `{ "repo": "<owner/name>", "version": "<titre du milestone>" }` (type de contexte `version`), ex.
