@@ -6,7 +6,7 @@
  * incorporés par le serveur (`get_design` avec `inline`). L'IA voit les mêmes designs
  * (`list_designs`, `get_design`) : on peut les citer dans le chat ou en tirer des issues.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
 import {
   Badge,
@@ -24,6 +24,7 @@ import {
   Textarea,
   cn,
 } from "@cadence/ui";
+import { clampZoom, fitZoom, previewSize, stepZoom, type Size } from "../artboard";
 import type { Design, DesignDetail, DesignList } from "../domain";
 import { EmptyCard, Loading, NoRepos, PageHeader, ToolError } from "../components";
 import { formatDay } from "../planning";
@@ -246,42 +247,6 @@ function Viewer({
         </Button>
       </Card>
       {design.description && <p className="text-body-sm text-tx2">{design.description}</p>}
-      {pages.length > 6 && (
-        <label className="flex items-center gap-2 text-caption text-tx3">
-          Écran
-          <Select
-            size="sm"
-            value={current ?? ""}
-            onChange={(e) => setFile(e.target.value)}
-            aria-label="Écran du design"
-          >
-            {pages.map((p) => (
-              <option key={p.path} value={p.path}>
-                {pageLabel(p.path)}
-              </option>
-            ))}
-          </Select>
-          <span>· {pages.length} écrans</span>
-        </label>
-      )}
-      {pages.length > 1 && pages.length <= 6 && (
-        <div role="tablist" aria-label="Pages du design" className="flex flex-wrap gap-1">
-          {pages.map((p) => (
-            <button
-              key={p.path}
-              role="tab"
-              aria-selected={current === p.path}
-              onClick={() => setFile(p.path)}
-              className={cn(
-                "mono h-[26px] rounded-control px-2.5 text-caption text-tx3",
-                current === p.path ? "bg-p4 text-tx" : "hover:bg-p2",
-              )}
-            >
-              {pageLabel(p.path)}
-            </button>
-          ))}
-        </div>
-      )}
       {error && <ToolError message={error.message} />}
       {!detail && loading && <Loading label="Chargement du design…" />}
       {detail && !detail.content && (
@@ -291,13 +256,180 @@ function Viewer({
         </EmptyCard>
       )}
       {detail?.content && (
-        <iframe
-          title={`${design.name} — ${current ?? ""}`}
-          sandbox="allow-scripts"
-          srcDoc={detail.content}
-          className="min-h-[520px] w-full grow rounded-card border border-line"
+        <DesignCanvas
+          title={design.name}
+          html={detail.content}
+          pages={pages.map((p) => p.path)}
+          current={current}
+          onPick={setFile}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Canvas d'un design : fond pointillé distinct de Cadence, l'écran posé comme un plan de travail
+ * encadré (nom et taille au-dessus), zoom par paliers, Ctrl + molette, « Ajuster », « 100 % »,
+ * déplacement par les barres de défilement, plein écran (Échap pour sortir). L'écran est rendu à
+ * sa taille réelle dans une iframe isolée, puis mis à l'échelle.
+ */
+function DesignCanvas({
+  title,
+  html,
+  pages,
+  current,
+  onPick,
+}: {
+  title: string;
+  html: string;
+  pages: string[];
+  current: string | null;
+  onPick: (page: string) => void;
+}) {
+  const size = previewSize(html);
+  const area = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<Size>({ width: 0, height: 0 });
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [full, setFull] = useState(false);
+  // La ligne du nom de l'écran (28 px) se retire de la hauteur disponible.
+  const z = zoom ?? fitZoom(size, { width: box.width, height: box.height - 28 });
+  const zoomRef = useRef(z);
+  zoomRef.current = z;
+
+  // Nouvel écran : on recadre.
+  useEffect(() => setZoom(null), [current]);
+  // Taille de la zone visible (fenêtre, plein écran).
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() =>
+      setBox({ width: el.clientWidth, height: el.clientHeight }),
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // Ctrl + molette : zoom (écouteur non passif pour bloquer le zoom de la page).
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(clampZoom(zoomRef.current * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
+
+  return (
+    <div
+      className={cn(
+        "flex min-h-[560px] grow flex-col overflow-hidden rounded-card border border-line2",
+        full && "fixed inset-3 z-50 min-h-0 shadow-2xl",
+      )}
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-panel px-3 py-2">
+        <Icon name="layers" size={14} className="text-tx3" />
+        {pages.length > 1 ? (
+          <Select
+            size="sm"
+            value={current ?? ""}
+            onChange={(e) => onPick(e.target.value)}
+            aria-label="Écran du design"
+          >
+            {pages.map((p) => (
+              <option key={p} value={p}>
+                {pageLabel(p)}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <span className="text-caption text-tx2">{current ? pageLabel(current) : title}</span>
+        )}
+        {pages.length > 1 && <span className="text-caption text-tx3">{pages.length} écrans</span>}
+        <div className="grow" />
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-label="Dézoomer"
+          onClick={() => setZoom(stepZoom(z, -1))}
+        >
+          −
+        </Button>
+        <span className="mono w-[46px] text-center text-caption text-tx2">
+          {Math.round(z * 100)} %
+        </span>
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-label="Zoomer"
+          onClick={() => setZoom(stepZoom(z, 1))}
+        >
+          +
+        </Button>
+        <Button
+          size="xs"
+          variant={zoom === null ? "secondary" : "ghost"}
+          onClick={() => setZoom(null)}
+        >
+          Ajuster
+        </Button>
+        <Button size="xs" variant={zoom === 1 ? "secondary" : "ghost"} onClick={() => setZoom(1)}>
+          100 %
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          icon={full ? "close" : "eye"}
+          onClick={() => setFull((f) => !f)}
+        >
+          {full ? "Quitter le plein écran" : "Plein écran"}
+        </Button>
+      </div>
+      <div
+        ref={area}
+        className="relative min-h-0 grow overflow-auto"
+        style={{
+          backgroundColor: "var(--color-bg)",
+          backgroundImage: "radial-gradient(var(--color-line2) 1px, transparent 1px)",
+          backgroundSize: "18px 18px",
+        }}
+      >
+        <div className="flex min-h-full w-max min-w-full items-start justify-center p-12">
+          <div>
+            <div className="mb-2 flex items-baseline gap-2 text-caption">
+              <span className="font-medium text-tx2">{current ? pageLabel(current) : title}</span>
+              <span className="mono text-tx3">
+                {size.width} × {size.height}
+              </span>
+            </div>
+            <div
+              className="relative overflow-hidden rounded-[3px] shadow-2xl ring-1 ring-line2"
+              style={{ width: size.width * z, height: size.height * z }}
+            >
+              <iframe
+                title={`${title} — ${current ?? ""}`}
+                sandbox="allow-scripts"
+                srcDoc={html}
+                className="absolute top-0 left-0 border-0"
+                style={{
+                  width: size.width,
+                  height: size.height,
+                  transform: `scale(${z})`,
+                  transformOrigin: "0 0",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
