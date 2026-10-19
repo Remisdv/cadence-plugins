@@ -1,11 +1,10 @@
 # CI des pull requests : manifestes, paquets TypeScript, UI et archives des plugins, serveurs Rust
-# sur les quatre cibles de l'archive (scripts/lib/targets.ts, comme release.yml).
+# sur Linux seulement, pour économiser les minutes GitHub Actions (macOS compte 10×, Windows 2×) :
+# les quatre cibles de l'archive restent construites par release.yml, à chaque nouvelle version.
 name: CI
 
 on:
   pull_request:
-  push:
-    branches-ignore: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -64,20 +63,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Cibles de scripts/lib/targets.ts (vérifié par scripts/lib/scripts.test.ts).
+        # Linux seulement ici ; release.yml construit les quatre cibles de scripts/lib/targets.ts
+        # (vérifié par scripts/lib/scripts.test.ts).
         include:
-          - target: windows-x86_64
-            rust: x86_64-pc-windows-msvc
-            runner: windows-latest
-            test: true
-          - target: macos-aarch64
-            rust: aarch64-apple-darwin
-            runner: macos-latest
-            test: true
-          - target: macos-x86_64
-            rust: x86_64-apple-darwin
-            runner: macos-latest # compilation croisée depuis un Mac Apple Silicon : pas de tests
-            test: false
           - target: linux-x86_64
             rust: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04 # glibc 2.35 : comme la release, pour les distributions plus anciennes

@@ -612,7 +612,10 @@ describe("workflows", () => {
 
   it("construisent les serveurs sur les quatre cibles de l'archive", () => {
     expect(matrixTargets(workflow("release.yml").yaml.jobs.build)).toEqual(expected);
-    expect(matrixTargets(workflow("ci.yml").yaml.jobs.rust)).toEqual(expected);
+    // CI des PR : Linux seulement (minutes GitHub Actions) ; la release garde les quatre cibles.
+    expect(matrixTargets(workflow("ci.yml").yaml.jobs.rust)).toEqual(
+      expected.filter((t) => t.id === "linux-x86_64"),
+    );
     // Suffixe de l'exécutable copié dans bins/<cible>/ : celui que cherche l'assemblage.
     const exe = (workflow("release.yml").yaml.jobs.build.strategy.matrix.include as { target: string; exe: string }[]).map(
       (t) => [t.target, t.exe],
