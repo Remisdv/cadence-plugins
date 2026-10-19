@@ -1,6 +1,6 @@
 [package]
 name = "cadence-gestion-projet"
-version = "0.3.0"
+version = "0.4.0"
 description = "Serveur MCP du plugin Cadence « Gestion de projet » (issues, sprints, versions, PR GitHub)."
 edition.workspace = true
 license.workspace = true

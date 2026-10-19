@@ -52,12 +52,14 @@ chemin renvoyé pour savoir ce qui existe déjà. Ne modifie aucun fichier.
    - version : celle visée ; une autre version ouverte seulement si la roadmap le justifie
      (thème marqué non prioritaire, prérequis d'une version plus proche) ;
    - type parmi `feat`, `fix`, `chore`, `perf`, `docs` ; au plus trois labels de domaine
-     (`area/auth`…), jamais `type/*`, `status/*`, `estimate/*`.
+     (`area/auth`…), jamais `type/*`, `status/*`, `estimate/*`, `sp/*`, `priority/*` à la main ;
+   - estimation en story points (`points` : 1, 2, 3, 5, 8 ou 13) et priorité (`priority` : 0 pour
+     le socle, puis 1 la plus urgente à 5).
 4. **Relecture.** Présente les propositions dans le chat, numérotées, avec thème, justification et
    recouvrement. L'utilisateur choisit celles à créer et peut les modifier. Si rien ne manque,
    dis-le.
 5. **Création.** Pour chaque proposition retenue : `create_issue` avec `title`, `body`,
-   `milestone`, `type`, `labels`. Termine le corps par :
+   `milestone`, `type`, `points`, `priority`, `labels`. Termine le corps par :
 
    ```
    ---

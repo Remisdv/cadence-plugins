@@ -2,7 +2,10 @@
 //!
 //! - Type d'issue : label `type/feat|fix|chore|perf|docs`.
 //! - État : `status/todo|doing|review` ; une issue fermée est « done ».
-//! - Estimation : `estimate/S|M|L|XL`.
+//! - Estimation : story points `sp/1|2|3|5|8|13` (suite de Fibonacci ; au-delà, on découpe).
+//!   L'ancienne estimation en tailles `estimate/S|M|L|XL` est encore lue, plus jamais écrite.
+//! - Priorité : `priority/0` (le socle : à faire avant tout, d'autres issues en dépendent), puis
+//!   `priority/1` (la plus urgente) à `priority/5` (la moins urgente).
 //! - Version : milestone semver (`0.1.2`) ; daté = sprint, sans date = palier de roadmap. La
 //!   description du milestone donne son nom (premier titre `# Nom`) et ses thèmes (éléments de
 //!   liste).
@@ -15,6 +18,43 @@ use serde_json::Value;
 
 pub const ISSUE_TYPES: [&str; 5] = ["feat", "fix", "chore", "perf", "docs"];
 pub const ESTIMATES: [&str; 4] = ["S", "M", "L", "XL"];
+/// Story points admis (suite de Fibonacci).
+pub const STORY_POINTS: [u32; 6] = [1, 2, 3, 5, 8, 13];
+/// Priorité la plus basse (0 = socle, 1 = la plus urgente).
+pub const LOWEST_PRIORITY: u8 = 5;
+
+/// Label `sp/<n>` d'une estimation, refusée hors de la suite de Fibonacci.
+pub fn points_label(points: u32) -> Result<String> {
+    if !STORY_POINTS.contains(&points) {
+        bail!("{points} story points : valeurs admises 1, 2, 3, 5, 8 ou 13 (au-delà, découper l'issue).");
+    }
+    Ok(format!("sp/{points}"))
+}
+
+/// Label `priority/<n>`, de 0 (socle) à 5.
+pub fn priority_label(priority: u8) -> Result<String> {
+    if priority > LOWEST_PRIORITY {
+        bail!("Priorité {priority} : de 0 (socle) à 5 (la moins urgente).");
+    }
+    Ok(format!("priority/{priority}"))
+}
+
+/// Remplace les labels de même préfixe (`sp/`, `priority/`, et l'ancien `estimate/` pour une
+/// estimation) par `label`.
+pub fn with_unique(labels: &[String], label: &str) -> Vec<String> {
+    let prefix = label.split_once('/').map(|(p, _)| p).unwrap_or(label);
+    let estimate = prefix == "sp";
+    let mut out: Vec<String> = labels
+        .iter()
+        .filter(|l| {
+            let other = l.split_once('/').map(|(p, _)| p).unwrap_or(l);
+            other != prefix && !(estimate && other == "estimate")
+        })
+        .cloned()
+        .collect();
+    out.push(label.to_string());
+    out
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -92,7 +132,12 @@ pub struct Issue {
     pub status: &'static str,
     #[serde(rename = "type")]
     pub issue_type: Option<String>,
+    /// Ancienne estimation en tailles (`estimate/S|M|L|XL`), lue seulement.
     pub estimate: Option<String>,
+    /// Story points (`sp/<n>`, suite de Fibonacci).
+    pub points: Option<u32>,
+    /// Priorité (`priority/<n>`) : 0 = socle, puis 1 (la plus urgente) à 5.
+    pub priority: Option<u8>,
     pub labels: Vec<String>,
     /// Titre du milestone (version).
     pub milestone: Option<String>,
@@ -170,6 +215,14 @@ pub fn issue_from(raw: &Value, with_body: bool) -> Issue {
         status,
         issue_type: suffix("type/", &ISSUE_TYPES),
         estimate: suffix("estimate/", &ESTIMATES),
+        points: labels
+            .iter()
+            .filter_map(|l| l.strip_prefix("sp/")?.parse::<u32>().ok())
+            .find(|n| STORY_POINTS.contains(n)),
+        priority: labels
+            .iter()
+            .filter_map(|l| l.strip_prefix("priority/")?.parse::<u8>().ok())
+            .find(|p| *p <= LOWEST_PRIORITY),
         milestone: str_of(&raw["milestone"]["title"]),
         assignees: raw["assignees"]
             .as_array()
@@ -374,6 +427,42 @@ mod tests {
         assert_eq!(issue_from(&closed, false).status, "done");
         assert!(!is_pull_request(&raw()));
         assert!(is_pull_request(&json!({"pull_request": {"url": "x"}})));
+    }
+
+    #[test]
+    fn reads_story_points_and_priority() {
+        let raw = json!({
+            "number": 7, "title": "Socle", "state": "open",
+            "labels": [{"name": "sp/5"}, {"name": "priority/0"}, {"name": "estimate/M"}],
+        });
+        let issue = issue_from(&raw, false);
+        assert_eq!((issue.points, issue.priority), (Some(5), Some(0)));
+        let odd = issue_from(
+            &json!({ "number": 8, "labels": [{"name": "sp/4"}, {"name": "priority/9"}] }),
+            false,
+        );
+        assert_eq!((odd.points, odd.priority), (None, None), "hors échelle : ignoré");
+
+        assert_eq!(points_label(8).unwrap(), "sp/8");
+        assert!(points_label(4).is_err() && points_label(21).is_err() && points_label(0).is_err());
+        assert_eq!(priority_label(0).unwrap(), "priority/0");
+        assert!(priority_label(6).is_err());
+
+        let labels = vec![
+            "type/feat".to_string(),
+            "estimate/L".to_string(),
+            "sp/3".to_string(),
+            "priority/2".to_string(),
+        ];
+        assert_eq!(
+            with_unique(&labels, "sp/5"),
+            ["type/feat", "priority/2", "sp/5"],
+            "l'ancienne taille disparaît"
+        );
+        assert_eq!(
+            with_unique(&labels, "priority/1"),
+            ["type/feat", "estimate/L", "sp/3", "priority/1"]
+        );
     }
 
     #[test]

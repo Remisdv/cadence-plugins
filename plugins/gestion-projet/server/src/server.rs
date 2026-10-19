@@ -130,7 +130,13 @@ pub struct CreateIssueParams {
     pub issue_type: Option<IssueType>,
     /// État initial, posé en label `status/<état>`.
     pub status: Option<Status>,
-    /// Labels supplémentaires (ex. `area/api`, `estimate/M`).
+    /// Story points, suite de Fibonacci : 1, 2, 3, 5, 8 ou 13 (label `sp/<n>`). Au-delà de
+    /// 13, découper l'issue.
+    pub points: Option<u32>,
+    /// Priorité (label `priority/<n>`) : 0 = socle (à faire avant tout, d'autres issues en
+    /// dépendent), puis 1 (la plus urgente) à 5 (la moins urgente).
+    pub priority: Option<u8>,
+    /// Labels supplémentaires (ex. `area/api`).
     #[serde(default)]
     pub labels: Vec<String>,
     /// Version : titre du milestone (ex. « 0.2.0 »).
@@ -167,6 +173,10 @@ pub struct UpdateIssueParams {
     pub state_reason: Option<StateReason>,
     /// Change l'état d'avancement (remplace le label `status/*`).
     pub status: Option<Status>,
+    /// Nouvelle estimation en story points : 1, 2, 3, 5, 8 ou 13 (remplace `sp/*`).
+    pub points: Option<u32>,
+    /// Nouvelle priorité : 0 (socle) à 5 (remplace `priority/*`).
+    pub priority: Option<u8>,
     /// Remplace tous les labels.
     pub labels: Option<Vec<String>>,
     /// Labels à ajouter.
@@ -585,6 +595,12 @@ impl GestionProjet {
         labels.extend(p.issue_type.map(IssueType::label));
         labels.extend(p.status.map(|s| s.label().to_string()));
         labels = model::edit_labels(&labels, &p.labels, &[]);
+        if let Some(points) = p.points {
+            labels = model::with_unique(&labels, &model::points_label(points)?);
+        }
+        if let Some(priority) = p.priority {
+            labels = model::with_unique(&labels, &model::priority_label(priority)?);
+        }
         let mut body =
             json!({ "title": p.title.trim(), "body": p.body.unwrap_or_default(), "labels": labels });
         if let Some(m) = p.milestone.filter(|m| !m.trim().is_empty()) {
@@ -619,8 +635,13 @@ impl GestionProjet {
                 StateReason::Reopened => "reopened",
             });
         }
+        // Valeurs vérifiées avant tout appel à GitHub.
+        let points = p.points.map(model::points_label).transpose()?;
+        let priority = p.priority.map(model::priority_label).transpose()?;
         let touches_labels = p.labels.is_some()
             || p.status.is_some()
+            || points.is_some()
+            || priority.is_some()
             || !p.add_labels.is_empty()
             || !p.remove_labels.is_empty();
         if touches_labels {
@@ -631,6 +652,9 @@ impl GestionProjet {
             labels = model::edit_labels(&labels, &p.add_labels, &p.remove_labels);
             if let Some(s) = p.status {
                 labels = model::with_status(&labels, s);
+            }
+            for label in points.iter().chain(priority.iter()) {
+                labels = model::with_unique(&labels, label);
             }
             body["labels"] = json!(labels);
         }
@@ -1451,6 +1475,44 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&r).contains("AAAA-MM-JJ"), "{}", text(&r));
+
+        // Story points hors de la suite de Fibonacci, priorité hors de 0..5 : refus lisible.
+        let r = s
+            .create_issue(Parameters(CreateIssueParams {
+                repo: "me/app".into(),
+                title: "Export PDF".into(),
+                body: None,
+                issue_type: None,
+                status: None,
+                points: Some(4),
+                priority: None,
+                labels: vec![],
+                milestone: None,
+                assignees: vec![],
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("1, 2, 3, 5, 8 ou 13"), "{}", text(&r));
+        let r = s
+            .update_issue(Parameters(UpdateIssueParams {
+                repo: "me/app".into(),
+                number: 3,
+                title: None,
+                body: None,
+                state: None,
+                state_reason: None,
+                status: None,
+                points: None,
+                priority: Some(7),
+                labels: None,
+                add_labels: vec![],
+                remove_labels: vec![],
+                milestone: None,
+                assignees: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("de 0 (socle) à 5"), "{}", text(&r));
 
         let r = s
             .update_milestone(Parameters(UpdateMilestoneParams {

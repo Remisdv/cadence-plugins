@@ -1,6 +1,6 @@
 ---
 name: decouper-issue
-description: Découpe une issue GitHub trop grosse (estimation L ou XL, plusieurs livrables) en sous-issues tenant chacune dans un sprint, créées dans la même version et reliées à l'issue d'origine par une liste de tâches. À utiliser depuis le bouton « Découper l'issue » ou quand une issue mélange plusieurs changements indépendants.
+description: Découpe une issue GitHub trop grosse (plus de 13 story points, ou 8 et 13 quand elle regroupe plusieurs livrables) en sous-issues tenant chacune dans un sprint, créées dans la même version et reliées à l'issue d'origine par une liste de tâches. À utiliser depuis le bouton « Découper l'issue » ou quand une issue mélange plusieurs changements indépendants.
 ---
 
 # Découper une issue
@@ -33,7 +33,7 @@ worktree avec `cadence__repo_checkout` et lis-le à partir du chemin renvoyé, s
 ## Démarche
 
 1. Lis l'issue et repère les livrables indépendants : chacun doit pouvoir être relu, testé et
-   fusionné seul, et tenir en une estimation `S`, `M` ou `L`.
+   fusionné seul, et tenir en 8 story points au plus.
 2. Propose le découpage dans le chat (titres, une phrase chacun, ordre conseillé, dépendances) et
    laisse l'utilisateur l'ajuster. Deux à six sous-issues ; si l'issue est déjà petite, dis-le et
    arrête-toi.
@@ -42,7 +42,8 @@ worktree avec `cadence__repo_checkout` et lis-le à partir du chemin renvoyé, s
    - description en trois sections `## Contexte` (avec « Partie de #<origine> »), `## Attendu`,
      `## Critères d'acceptation` (cases `- [ ]`), reprenant les critères d'origine qui la
      concernent ;
-   - les labels de domaine de l'origine et `estimate/<taille>`.
+   - les labels de domaine de l'origine, `points` (1, 2, 3, 5 ou 8) et `priority` : celle de
+     l'origine, ou 0 pour une sous-issue dont les autres dépendent.
 4. Ajoute à la fin de la description d'origine (`update_issue`, `body` complet) :
 
    ```

@@ -1,7 +1,7 @@
 api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
-version = "0.3.0"
+version = "0.4.0"
 description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
@@ -59,6 +59,12 @@ schema = "settings.schema.json"
 
 # Boutons liés aux skills (ex-agents CTO, développeur, CEO et déploiement). Le contexte porte
 # toujours le dépôt concerné : { "repo": "owner/name", "issue": 42 } ou { "repo", "version" }.
+
+[[actions]]
+id = "extraire-issues"
+label = "Créer des issues depuis un document"
+skill = "extraire-issues"
+mode = "chat"
 
 [[actions]]
 id = "completer-issue"

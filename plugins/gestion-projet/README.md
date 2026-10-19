@@ -30,7 +30,9 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
   le chemin dans `CADENCE_TOOLS`.
 
 Conventions GitHub reprises de Cadence : labels `type/feat|fix|chore|perf|docs`,
-`status/todo|doing|review` (une issue fermée est « faite »), `estimate/S|M|L|XL` ; une version est
+`status/todo|doing|review` (une issue fermée est « faite »), story points `sp/1|2|3|5|8|13` (Fibonacci ;
+l'ancien `estimate/S|M|L|XL` est encore lu), priorité `priority/0` (socle) puis `priority/1` (la plus
+urgente) à `priority/5` ; une version est
 un milestone semver, **daté = sprint**, **sans date = palier** de roadmap dont les thèmes sont les
 éléments de liste de la description.
 
@@ -64,6 +66,7 @@ version).
 
 | Action              | Skill               | Mode | Contexte                                   | Ex-agent    |
 | ------------------- | ------------------- | ---- | ------------------------------------------ | ----------- |
+| Créer des issues depuis un document | `extraire-issues` | chat | `{ "repo": "me/app" }` (ou rien depuis la barre du plugin) | — |
 | Compléter l'issue   | `completer-issue`   | chat | `{ "repo": "me/app", "issue": 42 }`        | CTO         |
 | Découper l'issue    | `decouper-issue`    | chat | `{ "repo": "me/app", "issue": 42 }`        | —           |
 | Implémenter         | `implementer-issue` | fond | `{ "repo": "me/app", "issue": 42 }`        | développeur |

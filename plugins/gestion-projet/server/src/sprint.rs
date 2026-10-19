@@ -221,6 +221,12 @@ pub struct Pace {
     pub closed: u32,
     pub progress: u8,
     pub counts: StatusCounts,
+    /// Story points de toutes les issues estimées (`sp/<n>`).
+    pub points_total: u32,
+    /// Story points des issues fermées.
+    pub points_done: u32,
+    /// Issues sans estimation en story points.
+    pub unestimated: u32,
     /// Issues fermées par jour écoulé.
     pub velocity: f32,
     /// Retard (positif) ou avance (négatif) sur la droite idéale, en jours.
@@ -253,6 +259,13 @@ pub fn pace(issues: &[Issue], due_on: Option<&str>, sprint_length_days: u32, tod
         closed,
         progress: progress(closed, total),
         counts: StatusCounts::of(issues),
+        points_total: issues.iter().filter_map(|i| i.points).sum(),
+        points_done: issues
+            .iter()
+            .filter(|i| i.state == "closed")
+            .filter_map(|i| i.points)
+            .sum(),
+        unestimated: issues.iter().filter(|i| i.points.is_none()).count() as u32,
         velocity: 0.0,
         delay_days: 0.0,
         burndown: vec![],

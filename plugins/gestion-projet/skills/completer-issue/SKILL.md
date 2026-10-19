@@ -49,18 +49,21 @@ lance aucune commande qui écrit.
    même la meilleure description possible et intègre les réponses quand elles arrivent ; ne repose
    une question que si une réponse en ouvre une nouvelle.
 4. Propose :
-   - une estimation `S` (≈ 1 h), `M` (≈ 4 h), `L` (≈ 1 j) ou `XL` (plusieurs jours), posée en label
-     `estimate/<taille>` (remplace un `estimate/*` existant via `remove_labels`) ;
-   - au plus trois labels de domaine (`area/api`, `area/ui`…), jamais `type/*`, `status/*` ni
-     `estimate/*` en dehors de l'estimation ;
+   - une estimation en story points, suite de Fibonacci : 1, 2, 3, 5, 8 ou 13 (au-delà, propose
+     de découper l'issue), passée en `points` à `update_issue` (elle remplace l'estimation
+     existante, ancienne taille `estimate/*` comprise) ;
+   - une priorité si l'issue n'en a pas : 0 pour le socle (d'autres issues en dépendent), sinon de
+     1 (la plus urgente) à 5, passée en `priority` ;
+   - au plus trois labels de domaine (`area/api`, `area/ui`…), jamais `type/*`, `status/*`,
+     `sp/*`, `priority/*` ni `estimate/*` à la main ;
    - un risque (faible, moyen, élevé) et les numéros d'issues liées, que tu cites dans la
      description (« Voir aussi #129 ») si elles aident.
-5. Écris : `update_issue` avec `body` et `add_labels`, puis `add_comment` :
+5. Écris : `update_issue` avec `body`, `points`, `priority` et `add_labels`, puis `add_comment` :
 
    ```
    **Issue complétée** · skill « Compléter l'issue » (Cadence)
 
-   Estimation : M · Risque : faible · Liées : #129
+   Estimation : 3 SP · Priorité : 2 · Risque : faible · Liées : #129
    <une ou deux phrases sur ce qui a changé>
    ```
 
