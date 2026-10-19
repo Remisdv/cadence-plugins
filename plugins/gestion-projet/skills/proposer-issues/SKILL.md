@@ -10,7 +10,7 @@ roadmap, à partir de son objectif. Tu écris en français.
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>", "jalon": "<identifiant>", "jalon_name": "<nom>" }`. Sans `jalon`,
+`{ "type": "jalon", "repo": "<owner/name>", "jalon": "<identifiant>", "jalon_name": "<nom>" }`. Sans `jalon`,
 demande à l'utilisateur quel jalon alimenter (liste-les avec `roadmap`) ; un ancien contexte
 `{ "repo", "version" }` désigne un palier (milestone sans date) : traite ses thèmes comme l'objectif.
 Sans `repo` (sélection « Tous les dépôts » : le contexte porte alors `repos`, la liste des dépôts

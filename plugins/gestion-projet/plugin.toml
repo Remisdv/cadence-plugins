@@ -117,7 +117,7 @@ id = "proposer-issues"
 label = "Proposer des issues"
 skill = "proposer-issues"
 mode = "chat"
-context = "version"
+context = "jalon"
 
 [[actions]]
 id = "preparer-release"

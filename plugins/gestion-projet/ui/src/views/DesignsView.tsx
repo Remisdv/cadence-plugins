@@ -188,7 +188,13 @@ function Viewer({
 
   const importNow = () =>
     cadence
-      .runAction("importer-design", { repo, design: design.id, url: design.url, name: design.name })
+      .runAction("importer-design", {
+        type: "design",
+        repo,
+        design: design.id,
+        url: design.url,
+        name: design.name,
+      })
       .catch(notifyError);
   const toIssues = () =>
     cadence.runAction("extraire-issues", { repo, design: design.id }).catch(notifyError);
@@ -302,7 +308,13 @@ function AddDialog({
       });
       // L'IA récupère les fichiers dans une conversation (accès claude.ai, ou export joint).
       await cadence
-        .runAction("importer-design", { repo, design: res.id, url: url.trim(), name: name.trim() })
+        .runAction("importer-design", {
+          type: "design",
+          repo,
+          design: res.id,
+          url: url.trim(),
+          name: name.trim(),
+        })
         .catch(notifyError);
       onAdded(res.id);
     } catch (e) {

@@ -64,18 +64,19 @@ pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données 
 ## Actions et skills
 
 Le contexte d'une action porte toujours le dépôt concerné (`repo`, celui de l'issue ou de la
-version).
+version) et, pour une action qui déclare un type de contexte, `type` égal à ce type (`issue`,
+`version`, `jalon`, `design`) : Cadence refuse sinon de la lancer.
 
 | Action              | Skill               | Mode | Contexte                                   | Ex-agent    |
 | ------------------- | ------------------- | ---- | ------------------------------------------ | ----------- |
 | Créer des issues depuis un document | `extraire-issues` | chat | `{ "repo": "me/app" }` (ou rien depuis la barre du plugin) | — |
-| Compléter l'issue   | `completer-issue`   | chat | `{ "repo": "me/app", "issue": 42 }`        | CTO         |
-| Découper l'issue    | `decouper-issue`    | chat | `{ "repo": "me/app", "issue": 42 }`        | —           |
-| Implémenter         | `implementer-issue` | fond | `{ "repo": "me/app", "issue": 42 }`        | développeur |
-| Proposer des issues | `proposer-issues`   | chat | `{ "repo": "me/app", "jalon": "mvp" }`     | CEO         |
-| Importer un design  | `importer-design`   | chat | `{ "repo", "design", "url", "name" }`      | —           |
+| Compléter l'issue   | `completer-issue`   | chat | `{ "type": "issue", "repo", "issue": 42 }` | CTO         |
+| Découper l'issue    | `decouper-issue`    | chat | `{ "type": "issue", "repo", "issue": 42 }` | —           |
+| Implémenter         | `implementer-issue` | fond | `{ "type": "issue", "repo", "issue": 42 }` | développeur |
+| Proposer des issues | `proposer-issues`   | chat | `{ "type": "jalon", "repo", "jalon": "mvp" }` | CEO      |
+| Importer un design  | `importer-design`   | chat | `{ "type": "design", "repo", "design", "url", "name" }` | — |
 | Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
-| Préparer la release | `preparer-release`  | fond | `{ "repo": "me/app", "version": "0.1.2" }` | déploiement |
+| Préparer la release | `preparer-release`  | fond | `{ "type": "version", "repo", "version" }` | déploiement |
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
 ou modifient le code demandent d'abord un worktree avec l'outil du cœur `cadence__repo_checkout`

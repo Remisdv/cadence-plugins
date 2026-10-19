@@ -123,7 +123,7 @@ function RepoRoadmap({
   };
   const propose = (j: JalonView) =>
     cadence
-      .runAction("proposer-issues", { repo, jalon: j.id, jalon_name: j.name })
+      .runAction("proposer-issues", { type: "jalon", repo, jalon: j.id, jalon_name: j.name })
       .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
   const closeAndReload = () => {
     setEditing(null);

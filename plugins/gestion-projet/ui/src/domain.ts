@@ -63,12 +63,16 @@ export function issueKey(issue: Pick<Issue, "repo" | "number">): string {
   return `${issue.repo}#${issue.number}`;
 }
 
-/** Contexte des actions liées à une issue : le dépôt de l'issue et son numéro. */
+/**
+ * Contexte des actions liées à une issue. Cadence exige `type` égal au type de contexte déclaré
+ * par l'action dans le manifeste (`context = "issue"`).
+ */
 export function issueContext(issue: Pick<Issue, "repo" | "number">): {
+  type: "issue";
   repo: string;
   issue: number;
 } {
-  return { repo: issue.repo, issue: issue.number };
+  return { type: "issue", repo: issue.repo, issue: issue.number };
 }
 
 /** Nom court d'un dépôt (`owner/name` → `name`) pour la colonne dépôt. */

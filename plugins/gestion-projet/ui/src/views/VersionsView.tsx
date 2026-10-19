@@ -288,7 +288,7 @@ function VersionDetail({ repo, version, onBack }: Selected & { onBack: () => voi
 
   const prepareRelease = () =>
     cadence
-      .runAction("preparer-release", { repo, version })
+      .runAction("preparer-release", { type: "version", repo, version })
       .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
 
   return (

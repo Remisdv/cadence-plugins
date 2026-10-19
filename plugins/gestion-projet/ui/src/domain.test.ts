@@ -41,7 +41,7 @@ describe("dépôts", () => {
   it("identifie une issue par dépôt et numéro", () => {
     const a = { repo: "me/app", number: 4 };
     expect(issueKey(a)).not.toBe(issueKey({ repo: "me/site", number: 4 }));
-    expect(issueContext(a)).toEqual({ repo: "me/app", issue: 4 });
+    expect(issueContext(a)).toEqual({ type: "issue", repo: "me/app", issue: 4 });
     expect(repoShortName("RemiSDV/cadence-plugins")).toBe("cadence-plugins");
   });
 });
