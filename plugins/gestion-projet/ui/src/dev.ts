@@ -9,7 +9,9 @@ import type { MockHostOptions } from "@cadence/plugin-sdk";
 import type {
   AccountRepo,
   Issue,
+  Design,
   JalonView,
+  Planning,
   ProjectView,
   PullRequest,
   Release,
@@ -360,6 +362,110 @@ function roadmap(repo: string): RoadmapPlan {
   };
 }
 
+/** Planning simulé : étude, conception, développement, recette, lancement, trois personnes. */
+const ptask = (
+  id: string,
+  name: string,
+  phase: string,
+  start: number,
+  end: number,
+  extra: Partial<Planning["tasks"][number]> = {},
+): Planning["tasks"][number] => ({
+  id,
+  name,
+  phase,
+  start: day(start),
+  end: day(end),
+  people: [],
+  depends: [],
+  progress: 0,
+  milestone: false,
+  ...extra,
+});
+
+let planning: Planning = {
+  revision: 4,
+  people: [
+    { id: "remi", name: "Rémi Lhuillier" },
+    { id: "marc", name: "Marc Durand" },
+    { id: "lea", name: "Léa Martin" },
+  ],
+  phases: ["Étude", "Conception", "Développement", "Recette", "Lancement"],
+  tasks: [
+    ptask("entretiens", "Entretiens utilisateurs", "Étude", -14, -8, {
+      people: ["lea"],
+      progress: 100,
+    }),
+    ptask("marche", "Étude de marché", "Étude", -10, -3, { people: ["remi"], progress: 100 }),
+    ptask("synthese", "Synthèse et périmètre", "Étude", -2, 1, {
+      people: ["remi", "lea"],
+      depends: ["entretiens", "marche"],
+      progress: 60,
+    }),
+    ptask("maquettes", "Maquettes Claude Design", "Conception", 2, 9, {
+      people: ["lea"],
+      depends: ["synthese"],
+    }),
+    ptask("archi", "Architecture technique", "Conception", 2, 6, {
+      people: ["remi"],
+      depends: ["synthese"],
+    }),
+    ptask("socle", "Socle de l'application", "Développement", 7, 13, {
+      people: ["marc"],
+      depends: ["archi"],
+      issue: 1,
+    }),
+    ptask("liste", "Liste partagée en temps réel", "Développement", 14, 34, {
+      people: ["marc", "remi"],
+      depends: ["socle", "maquettes"],
+    }),
+    ptask("recette", "Recette avec deux familles", "Recette", 35, 44, {
+      people: ["lea"],
+      depends: ["liste"],
+    }),
+    ptask("demo", "Démo aux familles", "Recette", 45, 45, {
+      milestone: true,
+      depends: ["recette"],
+    }),
+    ptask("lancement", "Mise en ligne", "Lancement", 52, 52, {
+      milestone: true,
+      depends: ["demo"],
+    }),
+  ],
+};
+
+const designs: Design[] = [
+  {
+    id: "ecrans-de-l-app",
+    name: "Écrans de l'app",
+    url: "https://claude.ai/design/exemple",
+    status: "imported",
+    description: "Liste partagée, réglages et invitations.",
+    path: "design/ecrans-de-l-app",
+    ref: "design/ecrans-de-l-app",
+    entry: "index.html",
+    added_on: day(-3),
+    imported_on: day(-3),
+  },
+  {
+    id: "page-d-accueil",
+    name: "Page d'accueil",
+    url: "https://claude.ai/design/accueil",
+    status: "pending",
+    added_on: day(0),
+  },
+];
+
+const designPage = (
+  title: string,
+) => `<!doctype html><html><body style="margin:0;font-family:system-ui;background:#faf7f2;color:#1d1b18">
+<header style="padding:18px 24px;background:#c96442;color:white;font-weight:600">${title}</header>
+<main style="padding:24px;display:grid;gap:12px;max-width:420px">
+<div style="padding:14px;border-radius:12px;background:white;box-shadow:0 1px 3px #0002">🥕 Carottes · 1 kg <span style="float:right">✓</span></div>
+<div style="padding:14px;border-radius:12px;background:white;box-shadow:0 1px 3px #0002">🧀 Comté · 300 g</div>
+<div style="padding:14px;border-radius:12px;background:white;box-shadow:0 1px 3px #0002">🧻 Essuie-tout · 2</div>
+</main></body></html>`;
+
 const startDefaults = { duration_days: 14, capacity: 20, first_version: "0.4.0" };
 
 function sprintSummary(repo: string, title?: string) {
@@ -514,6 +620,54 @@ const planningTools: MockHostOptions["tools"] = {
   sprint_summary: ({ repo, version }) =>
     sprintSummary(repo as string, version as string | undefined),
   roadmap: ({ repo }) => roadmap(repo as string),
+  planning_get: ({ repo }) => ({ repo, revision: planning.revision, planning, today: day(0) }),
+  planning_save: ({ repo, planning: next, base_revision }) => {
+    if (base_revision !== planning.revision)
+      throw new Error("Le planning a été modifié par quelqu'un d'autre : rechargez-le.");
+    planning = { ...(next as Planning), revision: planning.revision + 1 };
+    return { repo, revision: planning.revision, planning };
+  },
+  list_designs: ({ repo }) => ({ repo, designs: repo === "RemiSDV/cadence" ? designs : [] }),
+  get_design: ({ repo, id, file }) => {
+    const d = designs.find((x) => x.id === id)!;
+    if (d.status !== "imported")
+      return {
+        repo,
+        design: d,
+        files: [],
+        branch: null,
+        path: `design/${d.id}`,
+        message: "Fichiers pas encore dans le dépôt : lancez « Importer ».",
+      };
+    const page = (file as string | undefined) ?? "index.html";
+    return {
+      repo,
+      design: d,
+      branch: d.ref,
+      path: d.path,
+      files: [
+        { path: "index.html", size: 1200 },
+        { path: "reglages.html", size: 900 },
+        { path: "README.md", size: 300 },
+      ],
+      file: page,
+      content: designPage(page === "index.html" ? "Liste de la maison" : "Réglages"),
+    };
+  },
+  design_add: ({ repo, name, url }) => {
+    const id = String(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-");
+    designs.push({ id, name: String(name), url: String(url), status: "pending", added_on: day(0) });
+    return { repo, id, designs };
+  },
+  design_delete: ({ repo, id }) => {
+    designs.splice(
+      designs.findIndex((d) => d.id === id),
+      1,
+    );
+    return { repo, designs };
+  },
   jalon_save: ({ repo, id, name, description, position }) => {
     let j = jalons.find((x) => x.id === id);
     if (!j) {

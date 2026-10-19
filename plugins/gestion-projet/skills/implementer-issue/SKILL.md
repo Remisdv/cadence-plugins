@@ -31,6 +31,7 @@ contexte.
 | `cadence__repo_checkout` | worktree de la tâche : `{ "repo", "task": "issue-<numéro>" }` → `path` |
 | `gestion-projet__get_repository` | branche par défaut (`default_branch`), sprints automatiques (`sprints.release_branch`, `sprints.current_version`) |
 | `gestion-projet__get_issue` | description, critères d'acceptation, type (`type/*`), commentaires |
+| `gestion-projet__list_designs` | designs du projet (Claude Design) : référence visuelle des écrans |
 | `gestion-projet__update_issue` | passer l'issue en `status: "doing"` puis `"review"` |
 | `gestion-projet__create_pull_request` | ouvrir la PR en brouillon (`draft: true`) |
 | `gestion-projet__add_comment` | lier la PR dans l'issue, résumer le travail |
@@ -55,6 +56,12 @@ l'identité et les accès déjà configurés sur la machine.
 1. **Analyse.** Lis l'issue (`get_issue`) et le dépôt (`get_repository`). Si l'issue n'a pas de
    critères d'acceptation exploitables, déduis-les du titre et de la description et écris-les dans
    la PR. Établis un plan court : approche, fichiers à toucher.
+
+   **Design.** Si l'issue cite un design (`design/<id>/…`) ou si un design du projet
+   (`list_designs`) montre l'écran concerné, ouvre ses pages dans le worktree (sous son `path`) et
+   reproduis-en la structure, les textes et les valeurs (tailles, couleurs, espacements) en
+   respectant les conventions du code existant (composants et tokens du projet plutôt que des
+   valeurs en dur quand le projet en a).
 
    **Base de travail.** Avec les sprints automatiques, chaque sprint est une version qui a sa
    branche `release/<version>` : les branches d'issue en partent et y sont fusionnées, puis Cadence

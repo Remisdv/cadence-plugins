@@ -163,9 +163,10 @@ fn u32_of(v: &Value) -> u32 {
 /// Vrai pour l'issue d'état des sprints automatiques (label `cadence/sprints`), masquée des listes.
 pub fn is_state_issue(raw: &Value) -> bool {
     raw["labels"].as_array().is_some_and(|labels| {
-        labels
-            .iter()
-            .any(|l| l["name"].as_str().or_else(|| l.as_str()) == Some(crate::projet::STATE_LABEL))
+        labels.iter().any(|l| {
+            let name = l["name"].as_str().or_else(|| l.as_str());
+            name == Some(crate::projet::STATE_LABEL) || name == Some(crate::planning::PLANNING_LABEL)
+        })
     })
 }
 

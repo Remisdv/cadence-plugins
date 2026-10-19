@@ -46,7 +46,9 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 | Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; un sprint par dépôt en mode « Tous les dépôts » |
 | Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
 | Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
+| Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
 | Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
+| Designs (`designs`)             | Conception     | designs de Claude Design : ajout par lien claude.ai (import par l'IA), visionneuse des pages, « Créer des issues depuis ce design » |
 | Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
 | Dépôts suivis (`setup-depots`)  | étape de setup | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
 
@@ -70,7 +72,9 @@ version).
 | Compléter l'issue   | `completer-issue`   | chat | `{ "repo": "me/app", "issue": 42 }`        | CTO         |
 | Découper l'issue    | `decouper-issue`    | chat | `{ "repo": "me/app", "issue": 42 }`        | —           |
 | Implémenter         | `implementer-issue` | fond | `{ "repo": "me/app", "issue": 42 }`        | développeur |
-| Proposer des issues | `proposer-issues`   | chat | `{ "repo": "me/app", "version": "0.2.0" }` | CEO         |
+| Proposer des issues | `proposer-issues`   | chat | `{ "repo": "me/app", "jalon": "mvp" }`     | CEO         |
+| Importer un design  | `importer-design`   | chat | `{ "repo", "design", "url", "name" }`      | —           |
+| Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
 | Préparer la release | `preparer-release`  | fond | `{ "repo": "me/app", "version": "0.1.2" }` | déploiement |
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
@@ -148,6 +152,30 @@ dernière issue ouverte. Les dates se précisent à chaque sprint. On y crée, r
 supprime les jalons, et on y range les issues ; le skill « Créer des issues depuis un document »
 range les issues qu'il crée dans un jalon (existant ou nouveau), « Proposer des issues » complète
 un jalon. Outils : `roadmap`, `jalon_save`, `jalon_delete`, `jalon_issues`.
+
+## Designs (Claude Design)
+
+« Ajouter un design » prend le lien claude.ai d'un design et ouvre une conversation avec le skill
+« Importer un design » : l'IA récupère les fichiers avec l'outil Artifact de Claude Code (ou, sans
+accès à claude.ai, depuis l'export que l'utilisateur joint au chat), les commite sous
+`design/<id>/` sur une branche `design/<id>` (partant de la release en cours ou de la branche par
+défaut) et ouvre la pull request. Le registre des designs (nom, lien, état, branche, dossier) vit
+dans l'issue d'état. La page Designs affiche chaque page HTML dans une iframe isolée (`sandbox`),
+images et styles relatifs incorporés par le serveur. L'IA les voit avec `list_designs` et
+`get_design` : on peut les citer dans le chat, « Créer des issues depuis ce design » en tire les
+issues, et « Implémenter » s'y réfère pour les écrans.
+
+## Planning (Gantt)
+
+Un planning libre, pas seulement du développement : tâches groupées par **phase** (étude,
+conception, développement, recette, lancement…), **personnes** affectées, **dépendances**
+(flèches), avancement, **jalons-dates** (losanges), issue liée facultative. On glisse une barre
+pour la déplacer, ses bords pour changer ses dates ; un clic ouvre la tâche ; zoom jours /
+semaines / mois, filtre par personne. « Planifier avec l'IA » (skill `planifier`) propose un
+planning à partir des contraintes données et de la roadmap, et ne l'enregistre qu'après accord.
+Le planning est partagé dans une seconde issue cachée, label `cadence/planning` ; chaque
+enregistrement augmente sa `revision` et une écriture fondée sur une révision dépassée est refusée
+(deux personnes qui modifient en même temps). Outils : `planning_get`, `planning_save`.
 
 Les échéances sont envoyées à midi UTC pour que GitHub garde le même jour. Le burndown compte la
 portée actuelle du milestone dès le premier jour (GitHub ne date pas l'entrée d'une issue).

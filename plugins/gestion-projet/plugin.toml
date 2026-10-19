@@ -37,10 +37,22 @@ icon = "roadmap"
 section = "Planification"
 
 [[ui.views]]
+id = "planning"
+title = "Planning"
+icon = "calendar"
+section = "Planification"
+
+[[ui.views]]
 id = "versions"
 title = "Versions"
 icon = "tag"
 section = "Planification"
+
+[[ui.views]]
+id = "designs"
+title = "Designs"
+icon = "layers"
+section = "Conception"
 
 [[ui.views]]
 id = "pull-requests"
@@ -64,6 +76,19 @@ schema = "settings.schema.json"
 id = "extraire-issues"
 label = "Créer des issues depuis un document"
 skill = "extraire-issues"
+mode = "chat"
+
+[[actions]]
+id = "importer-design"
+label = "Importer un design"
+skill = "importer-design"
+mode = "chat"
+context = "design"
+
+[[actions]]
+id = "planifier"
+label = "Planifier avec l'IA"
+skill = "planifier"
 mode = "chat"
 
 [[actions]]

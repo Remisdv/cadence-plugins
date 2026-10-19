@@ -18,6 +18,9 @@
 //!   est masquée de `list_issues`.
 //! - Roadmap : `roadmap` (jalons, sprints passés et prévus, dates estimées avec fourchette),
 //!   `jalon_save`, `jalon_delete`, `jalon_issues` (jalons rangés dans l'issue d'état).
+//! - Designs (Claude Design) : `list_designs`, `get_design`, `design_add`, `design_update`,
+//!   `design_delete` ; fichiers dans le dépôt sous `design/<id>`, registre dans l'issue d'état.
+//! - Planning (Gantt) : `planning_get`, `planning_save` (issue cachée `cadence/planning`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -322,6 +325,67 @@ pub struct JalonIssuesParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DesignAddParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Nom clair du design (« Écran d'accueil », « Maquettes V2 »).
+    pub name: String,
+    /// Lien claude.ai du design.
+    pub url: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DesignUpdateParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant du design (voir `list_designs`).
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// `true` une fois les fichiers commités et poussés : le design passe « importé ».
+    pub imported: Option<bool>,
+    /// Branche où les fichiers ont été poussés (`design/<id>`).
+    #[serde(rename = "ref")]
+    pub branch: Option<String>,
+    /// Dossier des fichiers dans le dépôt (`design/<id>` par défaut).
+    pub path: Option<String>,
+    /// Fichier à afficher d'abord, relatif au dossier (`index.html`).
+    pub entry: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DesignParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant du design (voir `list_designs`).
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetDesignParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant du design (voir `list_designs`).
+    pub id: String,
+    /// Fichier à lire, relatif au dossier du design ; absent : le fichier d'entrée.
+    pub file: Option<String>,
+    /// Réservé à l'écran Designs : incorpore images et styles relatifs en `data:`.
+    #[serde(default)]
+    pub inline: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PlanningSaveParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Planning complet (personnes, phases, tâches) : il remplace le précédent.
+    pub planning: crate::planning::Planning,
+    /// Révision lue avec `planning_get` : refus si le planning a changé depuis.
+    pub base_revision: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SprintSummaryParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
@@ -384,6 +448,9 @@ pub struct GestionProjet {
     pub(crate) last_pass: Arc<Mutex<HashMap<String, Instant>>>,
     /// Une seule opération du moteur à la fois dans ce processus.
     pub(crate) engine_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Numéros des issues cachées (état, planning) déjà trouvées ou créées, par `dépôt#label` :
+    /// la recherche par label de GitHub peut ne pas voir tout de suite une issue toute neuve.
+    pub(crate) hidden_issues: Arc<Mutex<HashMap<String, u32>>>,
     #[allow(dead_code)] // lu par #[tool_handler]
     tool_router: ToolRouter<Self>,
 }
@@ -404,6 +471,7 @@ impl GestionProjet {
             })),
             last_pass: Arc::default(),
             engine_lock: Arc::default(),
+            hidden_issues: Arc::default(),
             tool_router: Self::tool_router(),
         })
     }
@@ -1520,7 +1588,7 @@ impl GestionProjet {
                 }
                 let mut saved = String::new();
                 let project = self
-                    .edit_jalons(&repo, |state| {
+                    .edit_state(&repo, |state| {
                         let index = match p.id.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
                             Some(id) => state
                                 .jalons
@@ -1565,7 +1633,7 @@ impl GestionProjet {
             async {
                 let repo = self.repo(&p.repo)?;
                 let project = self
-                    .edit_jalons(&repo, |state| {
+                    .edit_state(&repo, |state| {
                         let before = state.jalons.len();
                         state.jalons.retain(|j| j.id != p.id);
                         if state.jalons.len() == before {
@@ -1575,6 +1643,190 @@ impl GestionProjet {
                     })
                     .await?;
                 Ok(json!({ "repo": repo, "jalons": project.state.jalons }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Designs du projet (Claude Design) : nom, lien claude.ai, état (pending = lien seulement, imported = fichiers dans le dépôt sous `path`), branche, fichier d'entrée. À consulter quand l'utilisateur parle d'un design ou d'un écran à réaliser."
+    )]
+    async fn list_designs(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let designs = self
+                    .load_project(&repo)
+                    .await?
+                    .map(|p| p.state.designs)
+                    .unwrap_or_default();
+                Ok(json!({ "repo": repo, "designs": designs }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Lit un design importé : liste de ses fichiers dans le dépôt et contenu d'un fichier (le fichier d'entrée par défaut, tronqué à 60 000 caractères : lire le reste dans un worktree, sous `path`)."
+    )]
+    async fn get_design(&self, Parameters(p): Parameters<GetDesignParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let mut out = self
+                    .read_design(&repo, &p.id, p.file.as_deref(), p.inline)
+                    .await?;
+                out["repo"] = json!(repo);
+                Ok(out)
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Ajoute un design au projet à partir de son lien claude.ai (état « pending » : fichiers à importer par le skill « Importer un design »).",
+        meta = ui_only()
+    )]
+    async fn design_add(&self, Parameters(p): Parameters<DesignAddParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let name = p.name.trim().to_string();
+                let url = p.url.trim().to_string();
+                if name.is_empty() || name.chars().count() > 80 {
+                    bail!("Nom de design vide ou trop long (80 caractères au plus).");
+                }
+                if !url.starts_with("https://claude.ai/") {
+                    bail!("Lien invalide : collez le lien claude.ai du design (https://claude.ai/…).");
+                }
+                let mut id = String::new();
+                let project = self
+                    .edit_state(&repo, |state| {
+                        id = state.new_design_id(&name);
+                        state.designs.push(projet::Design {
+                            id: id.clone(),
+                            name: name.clone(),
+                            url: url.clone(),
+                            status: projet::DesignStatus::Pending,
+                            description: p.description.unwrap_or_default().trim().to_string(),
+                            path: None,
+                            branch: None,
+                            entry: None,
+                            added_on: sprint::today(),
+                            imported_on: None,
+                        });
+                        Ok(())
+                    })
+                    .await?;
+                Ok(json!({ "repo": repo, "id": id, "designs": project.state.designs }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Met à jour un design : nom, description, et après import (fichiers commités et poussés) `imported: true` avec la branche (`ref`), le dossier (`path`) et le fichier d'entrée (`entry`)."
+    )]
+    async fn design_update(&self, Parameters(p): Parameters<DesignUpdateParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self
+                    .edit_state(&repo, |state| {
+                        let d = state
+                            .designs
+                            .iter_mut()
+                            .find(|d| d.id == p.id)
+                            .ok_or_else(|| anyhow!("Design « {} » introuvable.", p.id))?;
+                        if let Some(n) = p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                            d.name = n.to_string();
+                        }
+                        if let Some(desc) = &p.description {
+                            d.description = desc.trim().to_string();
+                        }
+                        if let Some(b) = p.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+                            d.branch = Some(b.to_string());
+                        }
+                        if let Some(path) = p
+                            .path
+                            .as_deref()
+                            .map(|x| x.trim().trim_matches('/'))
+                            .filter(|x| !x.is_empty())
+                        {
+                            if path.contains("..") {
+                                bail!("Dossier invalide : « {path} ».");
+                            }
+                            d.path = Some(path.to_string());
+                        }
+                        if let Some(e) = p.entry.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+                            d.entry = Some(e.to_string());
+                        }
+                        match p.imported {
+                            Some(true) => {
+                                d.status = projet::DesignStatus::Imported;
+                                d.imported_on = Some(sprint::today());
+                                d.path.get_or_insert_with(|| format!("design/{}", d.id));
+                            }
+                            Some(false) => d.status = projet::DesignStatus::Pending,
+                            None => {}
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                let design = project.state.design(&p.id).cloned();
+                Ok(json!({ "repo": repo, "design": design }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Retire un design du projet (ses fichiers restent dans le dépôt).",
+        meta = ui_only()
+    )]
+    async fn design_delete(&self, Parameters(p): Parameters<DesignParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self
+                    .edit_state(&repo, |state| {
+                        let before = state.designs.len();
+                        state.designs.retain(|d| d.id != p.id);
+                        if state.designs.len() == before {
+                            bail!("Design « {} » introuvable.", p.id);
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                Ok(json!({ "repo": repo, "designs": project.state.designs }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Planning (Gantt) du dépôt : personnes, phases (étude, développement, recette…), tâches avec dates, personnes affectées, dépendances, avancement, jalons-dates. Rend aussi `revision`, à repasser à planning_save."
+    )]
+    async fn planning_get(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let (planning, url) = self.load_planning(&repo).await?;
+                Ok(json!({ "repo": repo, "revision": planning.revision, "planning": planning, "url": url, "today": sprint::today() }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Enregistre le planning (Gantt) complet du dépôt, qui remplace le précédent. Vérifie dates (AAAA-MM-JJ, fin ≥ début), personnes, dépendances (sans boucle) ; refuse si `base_revision` n'est plus la révision courante. Un skill ne l'appelle qu'après accord explicite de l'utilisateur sur le planning proposé."
+    )]
+    async fn planning_save(&self, Parameters(p): Parameters<PlanningSaveParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let planning = self.save_planning(&repo, p.planning, p.base_revision).await?;
+                Ok(json!({ "repo": repo, "revision": planning.revision, "planning": planning }))
             }
             .await,
         )
@@ -1591,7 +1843,7 @@ impl GestionProjet {
                     bail!("Rien à modifier : précisez `add` ou `remove`.");
                 }
                 let project = self
-                    .edit_jalons(&repo, |state| state.assign(&p.id, &p.add, &p.remove))
+                    .edit_state(&repo, |state| state.assign(&p.id, &p.add, &p.remove))
                     .await?;
                 Ok(json!({ "repo": repo, "jalons": project.state.jalons }))
             }
@@ -1685,6 +1937,13 @@ mod tests {
             "jalon_save",
             "jalon_delete",
             "jalon_issues",
+            "list_designs",
+            "get_design",
+            "design_add",
+            "design_update",
+            "design_delete",
+            "planning_get",
+            "planning_save",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -1723,6 +1982,8 @@ mod tests {
             "project_pause",
             "project_resume",
             "project_set_duration",
+            "design_add",
+            "design_delete",
         ] {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             let meta = tool.meta.as_ref().expect("_meta");
@@ -1943,6 +2204,41 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&r).contains("Rien à modifier"), "{}", text(&r));
+
+        // Designs : lien claude.ai exigé ; planning vérifié avant GitHub.
+        let r = s
+            .design_add(Parameters(DesignAddParams {
+                repo: "me/app".into(),
+                name: "Accueil".into(),
+                url: "https://example.com/design".into(),
+                description: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("lien claude.ai"), "{}", text(&r));
+        let mut planning = crate::planning::Planning::default();
+        planning.tasks.push(crate::planning::Task {
+            id: "t1".into(),
+            name: "Étude".into(),
+            phase: String::new(),
+            start: "2026-10-20".into(),
+            end: "2026-10-01".into(),
+            people: vec![],
+            depends: vec![],
+            progress: 0,
+            milestone: false,
+            issue: None,
+            notes: String::new(),
+        });
+        let r = s
+            .planning_save(Parameters(PlanningSaveParams {
+                repo: "me/app".into(),
+                planning,
+                base_revision: 0,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("avant de commencer"), "{}", text(&r));
 
         let r = s
             .sprint_summary(Parameters(SprintSummaryParams {

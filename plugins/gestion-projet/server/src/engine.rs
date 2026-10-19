@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     model::{self, Issue},
+    planning::{self, PLANNING_LABEL, PLANNING_TITLE, Planning},
     projet::{
         self, Jalon, ProjectState, ReleaseRecord, ReleaseStatus, RunStatus, STATE_LABEL, STATE_TITLE,
         SprintRecord,
@@ -39,26 +40,78 @@ pub struct Project {
 impl GestionProjet {
     /* ---------- Issue d'état ---------- */
 
-    pub(crate) async fn load_project(&self, repo: &str) -> Result<Option<Project>> {
+    /// Issue cachée (état des sprints, planning) d'un dépôt : celle déjà connue de ce processus,
+    /// sinon la plus ancienne issue ouverte du label (deux créations simultanées : elle fait foi).
+    pub(crate) async fn hidden_issue(&self, repo: &str, label: &str) -> Result<Option<Value>> {
+        let key = format!("{repo}#{label}");
+        let known = self
+            .hidden_issues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .copied();
+        if let Some(n) = known
+            && let Some(raw) = self.gh.get_opt(&format!("/repos/{repo}/issues/{n}"), &[]).await?
+            && raw["state"].as_str() == Some("open")
+        {
+            return Ok(Some(raw));
+        }
         let raw = self
             .gh
             .get(
                 &format!("/repos/{repo}/issues"),
                 &[
-                    ("labels", STATE_LABEL.into()),
+                    ("labels", label.into()),
                     ("state", "open".into()),
                     ("per_page", "10".into()),
                 ],
             )
             .await?;
-        // Deux démarrages simultanés : la plus ancienne fait foi.
-        let Some(issue) = raw
+        let found = raw
             .as_array()
             .into_iter()
             .flatten()
             .filter(|i| !model::is_pull_request(i))
             .min_by_key(|i| i["number"].as_u64().unwrap_or(u64::MAX))
-        else {
+            .cloned();
+        if let Some(n) = found.as_ref().and_then(|i| i["number"].as_u64()) {
+            self.remember_hidden(repo, label, n as u32);
+        }
+        Ok(found)
+    }
+
+    pub(crate) fn remember_hidden(&self, repo: &str, label: &str, number: u32) {
+        self.hidden_issues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(format!("{repo}#{label}"), number);
+    }
+
+    /// Crée une issue cachée et la retient (la recherche par label peut tarder à la voir).
+    async fn create_hidden(
+        &self,
+        repo: &str,
+        label: &str,
+        title: &str,
+        body: String,
+    ) -> Result<(u32, String)> {
+        let raw = self
+            .gh
+            .post(
+                &format!("/repos/{repo}/issues"),
+                &json!({ "title": title, "body": body, "labels": [label] }),
+            )
+            .await?;
+        let number = raw["number"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .context("numéro de l'issue créée illisible")?;
+        self.remember_hidden(repo, label, number);
+        Ok((number, raw["html_url"].as_str().unwrap_or("").to_string()))
+    }
+
+    pub(crate) async fn load_project(&self, repo: &str) -> Result<Option<Project>> {
+        let Some(issue) = self.hidden_issue(repo, STATE_LABEL).await? else {
             return Ok(None);
         };
         let number = issue["number"]
@@ -810,6 +863,10 @@ impl GestionProjet {
                 .as_ref()
                 .map(|p| p.state.jalons.clone())
                 .unwrap_or_default(),
+            designs: existing
+                .as_ref()
+                .map(|p| p.state.designs.clone())
+                .unwrap_or_default(),
         };
         let project = match existing {
             Some(p) => {
@@ -895,27 +952,242 @@ impl GestionProjet {
     }
 
     async fn create_state_issue(&self, repo: &str, state: ProjectState) -> Result<Project> {
+        let (issue, url) = self
+            .create_hidden(repo, STATE_LABEL, STATE_TITLE, projet::render_body(&state))
+            .await?;
+        Ok(Project { issue, url, state })
+    }
+
+    /* ---------- Planning (Gantt) ---------- */
+
+    /// Planning du dépôt (vide s'il n'a jamais été enregistré) et le lien de son issue.
+    pub(crate) async fn load_planning(&self, repo: &str) -> Result<(Planning, Option<String>)> {
+        match self.hidden_issue(repo, PLANNING_LABEL).await? {
+            Some(raw) => Ok((
+                planning::parse_body(raw["body"].as_str().unwrap_or(""))?,
+                raw["html_url"].as_str().map(str::to_string),
+            )),
+            None => Ok((Planning::default(), None)),
+        }
+    }
+
+    /// Enregistre un planning fondé sur la révision `base_revision` ; refuse si quelqu'un l'a
+    /// modifié entre-temps.
+    pub(crate) async fn save_planning(
+        &self,
+        repo: &str,
+        mut next: Planning,
+        base_revision: u32,
+    ) -> Result<Planning> {
+        planning::validate(&next)?;
+        let _guard = self.engine_lock.lock().await;
+        let current = self.hidden_issue(repo, PLANNING_LABEL).await?;
+        let revision = match &current {
+            Some(raw) => planning::parse_body(raw["body"].as_str().unwrap_or(""))?.revision,
+            None => 0,
+        };
+        if revision != base_revision {
+            bail!(
+                "Le planning a été modifié par quelqu'un d'autre (révision {revision}, vous partiez de la {base_revision}) : rechargez-le puis refaites la modification."
+            );
+        }
+        next.revision = revision + 1;
+        let body = planning::render_body(&next);
+        match current.and_then(|raw| raw["number"].as_u64()) {
+            Some(n) => {
+                self.gh
+                    .patch(&format!("/repos/{repo}/issues/{n}"), &json!({ "body": body }))
+                    .await?;
+            }
+            None => {
+                self.create_hidden(repo, PLANNING_LABEL, PLANNING_TITLE, body)
+                    .await?;
+            }
+        }
+        Ok(next)
+    }
+
+    /* ---------- Designs ---------- */
+
+    /// Fichiers d'un dossier du dépôt sur une branche (sous-dossiers compris, 100 au plus),
+    /// chemins relatifs au dossier ; `None` si le dossier n'existe pas sur cette branche.
+    async fn folder_files(
+        &self,
+        repo: &str,
+        folder: &str,
+        branch: &str,
+    ) -> Result<Option<Vec<(String, u64)>>> {
+        let mut out = Vec::new();
+        let mut queue = vec![folder.to_string()];
+        let mut first = true;
+        while let Some(dir) = queue.pop() {
+            let listing = self
+                .gh
+                .get_opt(
+                    &format!("/repos/{repo}/contents/{dir}"),
+                    &[("ref", branch.to_string())],
+                )
+                .await?;
+            let Some(listing) = listing.filter(|l| l.is_array()) else {
+                if first {
+                    return Ok(None);
+                }
+                continue;
+            };
+            first = false;
+            for entry in listing.as_array().into_iter().flatten() {
+                let path = entry["path"].as_str().unwrap_or("");
+                match entry["type"].as_str() {
+                    Some("dir") if queue.len() < 20 => queue.push(path.to_string()),
+                    Some("file") if out.len() < 100 => {
+                        let rel = path.strip_prefix(folder).unwrap_or(path).trim_start_matches('/');
+                        out.push((rel.to_string(), entry["size"].as_u64().unwrap_or(0)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out.sort();
+        Ok(Some(out))
+    }
+
+    /// Contenu d'un fichier du dépôt (1 Mo au plus).
+    async fn file_bytes(&self, repo: &str, path: &str, branch: &str) -> Result<Vec<u8>> {
+        use base64::Engine as _;
         let raw = self
             .gh
-            .post(
-                &format!("/repos/{repo}/issues"),
-                &json!({ "title": STATE_TITLE, "body": projet::render_body(&state), "labels": [STATE_LABEL] }),
+            .get(
+                &format!("/repos/{repo}/contents/{path}"),
+                &[("ref", branch.to_string())],
             )
             .await?;
-        Ok(Project {
-            issue: raw["number"]
-                .as_u64()
-                .and_then(|n| u32::try_from(n).ok())
-                .context("numéro de l'issue d'état illisible")?,
-            url: raw["html_url"].as_str().unwrap_or("").to_string(),
-            state,
-        })
+        let encoded: String = raw["content"].as_str().unwrap_or("").split_whitespace().collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .with_context(|| format!("contenu illisible : {path}"))
+    }
+
+    /// Design : ses fichiers (branche d'import, sinon release en cours, sinon branche par défaut)
+    /// et le contenu d'un fichier. `inline` (écran Designs) : images, styles et scripts relatifs
+    /// du HTML sont incorporés en `data:` pour s'afficher hors du dépôt.
+    pub(crate) async fn read_design(
+        &self,
+        repo: &str,
+        id: &str,
+        file: Option<&str>,
+        inline: bool,
+    ) -> Result<Value> {
+        let project = self
+            .load_project(repo)
+            .await?
+            .ok_or_else(|| anyhow!("Aucun design dans {repo}."))?;
+        let design = project
+            .state
+            .design(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Design « {id} » introuvable dans {repo}."))?;
+        let folder = design
+            .path
+            .clone()
+            .unwrap_or_else(|| format!("design/{}", design.id));
+        let mut branches: Vec<String> = design.branch.iter().cloned().collect();
+        branches.extend(project.state.current().map(|c| c.branch()));
+        branches.push(self.default_branch(repo).await?);
+        branches.dedup();
+        let mut found = None;
+        for b in &branches {
+            if let Some(files) = self.folder_files(repo, &folder, b).await? {
+                found = Some((b.clone(), files));
+                break;
+            }
+        }
+        let Some((branch, files)) = found else {
+            return Ok(json!({
+                "design": design, "files": [], "branch": Value::Null, "path": folder,
+                "message": "Fichiers pas encore dans le dépôt : lancez « Importer » pour que l'IA les récupère.",
+            }));
+        };
+        let names: Vec<&str> = files.iter().map(|(f, _)| f.as_str()).collect();
+        let chosen = file
+            .map(str::to_string)
+            .or_else(|| design.entry.clone())
+            .filter(|f| names.contains(&f.as_str()))
+            .or_else(|| {
+                names
+                    .iter()
+                    .find(|f| f.eq_ignore_ascii_case("index.html"))
+                    .map(|f| f.to_string())
+            })
+            .or_else(|| {
+                names
+                    .iter()
+                    .find(|f| f.ends_with(".html") || f.ends_with(".htm"))
+                    .map(|f| f.to_string())
+            })
+            .or_else(|| names.first().map(|f| f.to_string()));
+        let mut out = json!({
+            "design": design,
+            "branch": branch,
+            "path": folder,
+            "files": files.iter().map(|(f, size)| json!({ "path": f, "size": size })).collect::<Vec<_>>(),
+            "file": chosen,
+        });
+        if let Some(chosen) = chosen {
+            let bytes = self
+                .file_bytes(repo, &format!("{folder}/{chosen}"), &branch)
+                .await?;
+            let mut text = String::from_utf8_lossy(&bytes).to_string();
+            if inline && (chosen.ends_with(".html") || chosen.ends_with(".htm")) {
+                let dir = chosen
+                    .rsplit_once('/')
+                    .map(|(d, _)| format!("{d}/"))
+                    .unwrap_or_default();
+                let mut budget: usize = 5 * 1024 * 1024;
+                for (f, size) in &files {
+                    let Some(rel) = f.strip_prefix(&dir) else { continue };
+                    if rel == chosen.as_str() || f.ends_with(".html") || *size as usize > budget {
+                        continue;
+                    }
+                    let quoted = [
+                        format!("\"{rel}\""),
+                        format!("'{rel}'"),
+                        format!("\"./{rel}\""),
+                        format!("'./{rel}'"),
+                        format!("({rel})"),
+                    ];
+                    if !quoted.iter().any(|q| text.contains(q.as_str())) {
+                        continue;
+                    }
+                    let data = self.file_bytes(repo, &format!("{folder}/{f}"), &branch).await?;
+                    budget = budget.saturating_sub(data.len());
+                    let uri = data_uri(f, &data);
+                    for q in &quoted {
+                        let wrapped = match q.chars().next() {
+                            Some('(') => format!("({uri})"),
+                            Some(c) => format!("{c}{uri}{c}"),
+                            None => continue,
+                        };
+                        text = text.replace(q.as_str(), &wrapped);
+                    }
+                }
+            } else if !inline && text.len() > 60_000 {
+                let cut = (0..=60_000)
+                    .rev()
+                    .find(|i| text.is_char_boundary(*i))
+                    .unwrap_or(0);
+                text.truncate(cut);
+                text.push_str("\n… (tronqué : lire le fichier complet dans le worktree)");
+            }
+            out["content"] = json!(text);
+        }
+        Ok(out)
     }
 
     /* ---------- Jalons de la roadmap ---------- */
 
-    /// Modifie les jalons ; crée l'issue d'état (sprints pas démarrés) s'il n'y en a pas encore.
-    pub(crate) async fn edit_jalons(
+    /// Modifie l'état partagé (jalons, designs) ; crée l'issue d'état (sprints pas démarrés)
+    /// s'il n'y en a pas encore.
+    pub(crate) async fn edit_state(
         &self,
         repo: &str,
         edit: impl FnOnce(&mut ProjectState) -> Result<()>,
@@ -934,6 +1206,7 @@ impl GestionProjet {
                     paused_since: None,
                     sprints: vec![],
                     jalons: vec![],
+                    designs: vec![],
                 };
                 self.create_state_issue(repo, state).await?
             }
@@ -1215,4 +1488,28 @@ fn jalon_view(
         "end_early": if done { None } else { end_in(1) },
         "end_late": if done { None } else { end_in(2) },
     })
+}
+
+/// `data:` d'un fichier, type d'après l'extension.
+fn data_uri(path: &str, bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "css" => "text/css",
+        "js" | "mjs" => "text/javascript",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    };
+    format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
 }

@@ -128,6 +128,8 @@ export const views = {
   issues: { title: "Issues", icon: "issue" },
   roadmap: { title: "Roadmap", icon: "roadmap" },
   versions: { title: "Versions", icon: "tag" },
+  planning: { title: "Planning", icon: "calendar" },
+  designs: { title: "Designs", icon: "layers" },
   "pull-requests": { title: "Pull requests", icon: "pullRequest" },
   "setup-depots": { title: "Dépôts suivis", icon: "github" },
 } satisfies Record<string, ViewMeta>;
@@ -309,6 +311,79 @@ export interface RoadmapPlan {
   }[];
   /** Fin de tout le travail ouvert. */
   end: { on: string | null; early: string | null; late: string | null; unplanned: number } | null;
+}
+
+/* ---------- Designs (Claude Design) ---------- */
+
+/** Design du projet (`list_designs`) : lien claude.ai et, une fois importé, ses fichiers. */
+export interface Design {
+  id: string;
+  name: string;
+  url: string;
+  status: "pending" | "imported";
+  description?: string;
+  /** Dossier des fichiers dans le dépôt (`design/<id>`). */
+  path?: string;
+  /** Branche d'import (`design/<id>`), avant fusion. */
+  ref?: string;
+  entry?: string;
+  added_on: string;
+  imported_on?: string;
+}
+
+export interface DesignList {
+  repo: string;
+  designs: Design[];
+}
+
+/** `get_design` : fichiers du design et contenu d'une page. */
+export interface DesignDetail {
+  repo: string;
+  design: Design;
+  branch: string | null;
+  path: string;
+  files: { path: string; size: number }[];
+  file?: string | null;
+  content?: string;
+  message?: string;
+}
+
+/* ---------- Planning (Gantt) ---------- */
+
+export interface PlanningPerson {
+  id: string;
+  name: string;
+}
+
+export interface PlanningTask {
+  id: string;
+  name: string;
+  phase: string;
+  start: string;
+  /** Dernier jour, inclus. */
+  end: string;
+  people: string[];
+  depends: string[];
+  progress: number;
+  milestone: boolean;
+  issue?: number | null;
+  notes?: string;
+}
+
+export interface Planning {
+  revision: number;
+  people: PlanningPerson[];
+  phases: string[];
+  tasks: PlanningTask[];
+}
+
+/** `planning_get` / `planning_save`. */
+export interface PlanningResponse {
+  repo: string;
+  revision: number;
+  planning: Planning;
+  url?: string | null;
+  today?: string;
 }
 
 /** Valeurs proposées par « Démarrer le projet ». */

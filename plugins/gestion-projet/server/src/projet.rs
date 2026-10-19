@@ -137,6 +137,39 @@ pub struct Jalon {
     pub issues: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesignStatus {
+    /// Lien enregistré, fichiers pas encore dans le dépôt.
+    Pending,
+    /// Fichiers commités sous `path` (branche `ref`).
+    Imported,
+}
+
+/// Design de Claude Design : lien d'origine et, une fois importé, ses fichiers dans le dépôt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Design {
+    pub id: String,
+    pub name: String,
+    /// Lien claude.ai du design.
+    pub url: String,
+    pub status: DesignStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Dossier des fichiers dans le dépôt (`design/<id>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Branche où les fichiers ont été commités (avant fusion dans la base).
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Fichier à afficher d'abord (`index.html`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    pub added_on: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_on: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectState {
     pub status: RunStatus,
@@ -151,6 +184,9 @@ pub struct ProjectState {
     /// Jalons de la roadmap, dans l'ordre d'affichage.
     #[serde(default)]
     pub jalons: Vec<Jalon>,
+    /// Designs (Claude Design) du projet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub designs: Vec<Design>,
 }
 
 impl ProjectState {
@@ -212,19 +248,15 @@ impl ProjectState {
 
     /// Identifiant libre tiré d'un nom (`MVP privé` → `mvp-prive`, puis `mvp-prive-2`…).
     pub fn new_jalon_id(&self, name: &str) -> String {
-        let base = slug(name);
-        let base = if base.is_empty() {
-            "jalon".to_string()
-        } else {
-            base
-        };
-        let mut id = base.clone();
-        let mut n = 2;
-        while self.jalon(&id).is_some() {
-            id = format!("{base}-{n}");
-            n += 1;
-        }
-        id
+        unique_id(name, "jalon", |id| self.jalon(id).is_some())
+    }
+
+    pub fn design(&self, id: &str) -> Option<&Design> {
+        self.designs.iter().find(|d| d.id == id)
+    }
+
+    pub fn new_design_id(&self, name: &str) -> String {
+        unique_id(name, "design", |id| self.design(id).is_some())
     }
 
     /// Range des issues dans un jalon (et les retire de tout autre jalon), en retire d'autres.
@@ -246,6 +278,23 @@ impl ProjectState {
         }
         Ok(())
     }
+}
+
+/// Identifiant tiré d'un nom, suffixé (`-2`, `-3`…) tant que `taken` le refuse.
+fn unique_id(name: &str, fallback: &str, taken: impl Fn(&str) -> bool) -> String {
+    let base = slug(name);
+    let base = if base.is_empty() {
+        fallback.to_string()
+    } else {
+        base
+    };
+    let mut id = base.clone();
+    let mut n = 2;
+    while taken(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
 }
 
 /// `MVP privé : l'essentiel` → `mvp-prive-l-essentiel`.
@@ -338,9 +387,11 @@ pub fn render_body(state: &ProjectState) -> String {
          - Sprints : {status}\n\
          - Durée d'un sprint : {} jours\n\
          - Sprint en cours : {current}\n\
-         - Jalons : {jalons}\n\n\
+         - Jalons : {jalons}\n\
+         - Designs : {}\n\n\
          ```json\n{json}\n```\n",
-        state.duration_days
+        state.duration_days,
+        state.designs.len()
     )
 }
 
@@ -641,6 +692,7 @@ mod tests {
                 release: None,
             }],
             jalons: vec![],
+            designs: vec![],
         }
     }
 

@@ -27,6 +27,12 @@ Il peut arriver de plusieurs façons, toutes valables, seules ou ensemble :
   de fichiers (PDF compris). Si un fichier est illisible pour toi (format binaire inconnu, image sans
   texte), dis-le et demande à l'utilisateur d'en coller le texte.
 
+- un **design** du projet (Claude Design importé) : contexte `{ "repo", "design": "<id>" }` (bouton
+  « Créer des issues depuis ce design ») ou design cité dans le message. Lis-le avec
+  `gestion-projet__get_design` (chaque page HTML : `file`), ou dans le worktree sous son `path` ;
+  chaque écran ou composant visible devient un besoin. Cite le design dans le corps des issues
+  (« Design : `design/<id>/<page>.html` ») pour que « Implémenter » s'y réfère.
+
 S'il n'y a encore aucun document (lancement par le bouton, message vide), demande à l'utilisateur de
 coller le texte ou de joindre ses fichiers avec le trombone du chat, puis attends sa réponse.
 
@@ -43,6 +49,7 @@ Chaque outil du plugin prend le dépôt en paramètre `repo` (`owner/name`) : pa
 | `gestion-projet__create_issue` | créer chaque issue (`title`, `body`, `type`, `points`, `priority`, `labels`, `milestone` éventuel) |
 | `gestion-projet__update_issue` | compléter après coup la section « Dépendances » d'une issue créée plus tôt dans la même passe |
 | `gestion-projet__roadmap` | jalons existants (nom, objectif, issues) et issues sans jalon |
+| `gestion-projet__list_designs`, `gestion-projet__get_design` | designs du projet et leurs pages (référence visuelle) |
 | `gestion-projet__jalon_save` | créer un jalon (`name` clair, `description` = objectif ; sans `id`) |
 | `gestion-projet__jalon_issues` | ranger les issues créées dans un jalon (`{ "repo", "id", "add": [numéros] }`) |
 

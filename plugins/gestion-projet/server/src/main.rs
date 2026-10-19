@@ -7,6 +7,7 @@ mod config;
 mod engine;
 mod github;
 mod model;
+mod planning;
 mod projet;
 mod pulls;
 mod server;
