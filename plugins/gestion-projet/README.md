@@ -77,6 +77,9 @@ version) et, pour une action qui déclare un type de contexte, `type` égal à c
 | Proposer des issues | `proposer-issues`   | chat | `{ "type": "jalon", "repo", "jalon": "mvp" }` | CEO      |
 | Importer un design  | `importer-design`   | chat | `{ "type": "design", "repo", "design", "url", "name" }` | — |
 | Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
+| Développer le sprint | `developper-sprint` | chat | `{ "repo": "me/app" }` (ou `issues`)       | développeur |
+| Relire les PR       | `relire-pr`         | chat | `{ "repo", "number" }` (`number` facultatif : tout le sprint) | relecteur |
+| Créer un design     | `creer-design`      | chat | `{ "repo", "design" }` (`design` pour modifier) | —      |
 | Adapter le code à l'architecture | `adapter-architecture` | chat | `{ "repo", "service" }` (service facultatif) | — |
 | Préparer la release | `preparer-release`  | fond | `{ "type": "version", "repo", "version" }` | déploiement |
 
@@ -186,6 +189,22 @@ l'écran lit la PR ouverte en priorité. « Implémenter » suit l'architecture 
 avant la PR ; « Adapter le code » (skill `adapter-architecture`) audite le code, liste les écarts,
 puis après accord refactore dans une PR ou crée des issues. Outils : `architecture_get`,
 `architecture_templates`, `architecture_save`.
+
+## Depuis le chat
+
+Tout se demande aussi dans le chat de Cadence, sans ouvrir les écrans : les skills du plugin sont
+dans le menu Skills (`/cadence:gestion-projet-…`) et ses outils sont visibles de l'IA (sauf
+`get_account`, `list_account_repos` et `design_delete`, réservés à l'écran). Exemples :
+« ajoute une fonctionnalité d'export PDF » (issues), « développe le sprint », « relis les PR et
+fusionne ce qui est bon », « décale la recette d'une semaine dans le planning », « passe les sprints
+à trois semaines » (`project_set_duration`), « fais-moi le design de l'écran d'accueil »,
+« ajoute un worker à l'architecture puis adapte le code ». Les outils qui écrivent (sprints,
+planning, architecture, fusion) ne servent qu'à la demande explicite de l'utilisateur.
+
+Revue des PR : `get_pull_request_diff` (patchs), `review_pull_request` (APPROVE /
+REQUEST_CHANGES / COMMENT, remarques sur des lignes ; sur une PR du même compte GitHub, le verdict
+est publié en commentaire) et `merge_pull_request` (ferme les issues liées quand la base est une
+branche de release, ce que GitHub ne fait que pour la branche par défaut).
 
 ## Planning (Gantt)
 

@@ -98,6 +98,24 @@ skill = "adapter-architecture"
 mode = "chat"
 
 [[actions]]
+id = "developper-sprint"
+label = "Développer le sprint"
+skill = "developper-sprint"
+mode = "chat"
+
+[[actions]]
+id = "relire-pr"
+label = "Relire les PR"
+skill = "relire-pr"
+mode = "chat"
+
+[[actions]]
+id = "creer-design"
+label = "Créer un design"
+skill = "creer-design"
+mode = "chat"
+
+[[actions]]
 id = "planifier"
 label = "Planifier avec l'IA"
 skill = "planifier"

@@ -68,6 +68,25 @@ export function SprintView() {
       >
         <Button
           size="sm"
+          icon="play"
+          disabled={!repo}
+          title={
+            repo
+              ? "L'IA développe les issues à faire du sprint, par priorité : une PR par issue"
+              : "Choisissez un dépôt"
+          }
+          onClick={() =>
+            void cadence
+              .runAction("developper-sprint", { repo })
+              .catch((e: unknown) =>
+                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
+              )
+          }
+        >
+          Développer le sprint
+        </Button>
+        <Button
+          size="sm"
           variant="ghost"
           icon="refresh"
           iconOnly

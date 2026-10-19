@@ -397,6 +397,73 @@ pub struct ArchitectureSaveParams {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewEvent {
+    /// Approuver (impossible sur sa propre PR : la revue est alors publiée en commentaire).
+    Approve,
+    /// Demander des changements.
+    RequestChanges,
+    /// Commenter sans verdict.
+    Comment,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReviewComment {
+    /// Fichier, chemin relatif au dépôt.
+    pub path: String,
+    /// Ligne du fichier dans la nouvelle version (côté droit du diff).
+    pub line: u32,
+    /// Remarque en markdown.
+    pub body: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReviewParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Numéro de la pull request.
+    pub number: u32,
+    /// APPROVE, REQUEST_CHANGES ou COMMENT.
+    pub event: ReviewEvent,
+    /// Synthèse de la revue (markdown).
+    pub body: String,
+    /// Remarques sur des lignes du diff.
+    #[serde(default)]
+    pub comments: Vec<ReviewComment>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiffParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Numéro de la pull request.
+    pub number: u32,
+    /// Un seul fichier (chemin) ; absent : tous, tronqués à 60 000 caractères.
+    pub file: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeMethod {
+    /// Commit de fusion (par défaut).
+    #[default]
+    Merge,
+    /// Un seul commit.
+    Squash,
+    Rebase,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MergeParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Numéro de la pull request.
+    pub number: u32,
+    #[serde(default)]
+    pub method: MergeMethod,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SprintSummaryParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
@@ -1478,6 +1545,127 @@ impl GestionProjet {
     }
 
     #[tool(
+        description = "Diff d'une pull request (patchs par fichier) pour la relire : tous les fichiers tronqués à 60 000 caractères, ou un seul avec `file`. Pour le contexte complet, lire le code dans un worktree."
+    )]
+    async fn get_pull_request_diff(&self, Parameters(p): Parameters<DiffParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let files = self
+                    .gh
+                    .get(
+                        &format!("/repos/{repo}/pulls/{}/files", p.number),
+                        &[("per_page", "100".into())],
+                    )
+                    .await?;
+                let files = files.as_array().cloned().unwrap_or_default();
+                let (diff, skipped) = pulls::diff_text(&files, p.file.as_deref(), 60_000);
+                Ok(json!({ "repo": repo, "number": p.number, "files": files.len(), "diff": diff, "not_shown": skipped }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Publie une revue sur une pull request : APPROVE, REQUEST_CHANGES ou COMMENT, avec une synthèse et des remarques sur des lignes (`comments` : path, line côté nouvelle version, body). GitHub refuse d'approuver sa propre PR : la revue est alors publiée en commentaire et la réponse le signale."
+    )]
+    async fn review_pull_request(&self, Parameters(p): Parameters<ReviewParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                if p.body.trim().is_empty() {
+                    bail!("Revue sans synthèse : résumez votre avis dans `body`.");
+                }
+                let event = match p.event {
+                    ReviewEvent::Approve => "APPROVE",
+                    ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+                    ReviewEvent::Comment => "COMMENT",
+                };
+                let comments: Vec<Value> = p
+                    .comments
+                    .iter()
+                    .map(|c| json!({ "path": c.path, "line": c.line, "side": "RIGHT", "body": c.body }))
+                    .collect();
+                let send = |event: &str, body: &str| {
+                    json!({ "event": event, "body": body, "comments": comments })
+                };
+                let path = format!("/repos/{repo}/pulls/{}/reviews", p.number);
+                let (review, posted, note) = match self.gh.post(&path, &send(event, &p.body)).await {
+                    Ok(r) => (r, event, None),
+                    // Sa propre PR : ni approbation ni demande de changements possibles.
+                    Err(e) if event != "COMMENT" && e.to_string().contains("your own pull request") => {
+                        let verdict = if event == "APPROVE" { "✅ Approuvée" } else { "✋ Changements demandés" };
+                        let body = format!("**{verdict}** (revue de l'IA ; GitHub n'accepte pas ce verdict sur une PR du même compte)\n\n{}", p.body);
+                        let r = self.gh.post(&path, &send("COMMENT", &body)).await?;
+                        (r, "COMMENT", Some("PR du même compte GitHub : verdict publié en commentaire."))
+                    }
+                    Err(e) => return Err(e),
+                };
+                Ok(json!({
+                    "repo": repo, "number": p.number, "event": posted, "note": note,
+                    "url": review["html_url"], "comments": p.comments.len(),
+                }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Fusionne une pull request prête (sortie du brouillon, sans conflit). Vers une branche de release, ferme aussi les issues que la PR déclare fermer (« Ferme #12 ») : GitHub ne le fait que pour la branche par défaut. Jamais sans accord explicite de l'utilisateur."
+    )]
+    async fn merge_pull_request(&self, Parameters(p): Parameters<MergeParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let pr = self.gh.get(&format!("/repos/{repo}/pulls/{}", p.number), &[]).await?;
+                if !pr["merged_at"].is_null() {
+                    bail!("La pull request #{} est déjà fusionnée.", p.number);
+                }
+                if pr["state"].as_str() != Some("open") {
+                    bail!("La pull request #{} est fermée.", p.number);
+                }
+                if pr["draft"].as_bool() == Some(true) {
+                    bail!("La pull request #{} est en brouillon : sortez-la du brouillon (mark_pull_request_ready) avant de la fusionner.", p.number);
+                }
+                if pr["mergeable"].as_bool() == Some(false) {
+                    bail!("La pull request #{} a des conflits avec {} : à résoudre d'abord.", p.number, pr["base"]["ref"].as_str().unwrap_or("sa base"));
+                }
+                let method = match p.method {
+                    MergeMethod::Merge => "merge",
+                    MergeMethod::Squash => "squash",
+                    MergeMethod::Rebase => "rebase",
+                };
+                let merged = self
+                    .gh
+                    .put(
+                        &format!("/repos/{repo}/pulls/{}/merge", p.number),
+                        &json!({ "merge_method": method, "sha": pr["head"]["sha"] }),
+                    )
+                    .await?;
+                let base = pr["base"]["ref"].as_str().unwrap_or("").to_string();
+                let default_branch = pr["base"]["repo"]["default_branch"].as_str().unwrap_or("main");
+                let mut closed = Vec::new();
+                if base != default_branch {
+                    for n in pulls::closing_refs(pr["body"].as_str().unwrap_or("")) {
+                        let done = self
+                            .gh
+                            .patch(
+                                &format!("/repos/{repo}/issues/{n}"),
+                                &json!({ "state": "closed", "state_reason": "completed" }),
+                            )
+                            .await;
+                        if done.is_ok() {
+                            closed.push(n);
+                        }
+                    }
+                }
+                Ok(json!({ "repo": repo, "number": p.number, "merged": true, "sha": merged["sha"], "base": base, "closed_issues": closed }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         description = "Liste les releases d'un dépôt suivi (publiées et brouillons) : tag, version, état, date, lien."
     )]
     async fn list_releases(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
@@ -1505,16 +1693,14 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Résumé du sprint en cours (milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale, durée de sprint réglée.",
-        meta = ui_only()
+        description = "Résumé du sprint en cours (sprints automatiques : leur état, durée, capacité, rythme, sprints terminés et livraison ; sinon le milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale."
     )]
     async fn sprint_summary(&self, Parameters(p): Parameters<SprintSummaryParams>) -> ToolResult {
         respond(self.do_sprint_summary(p).await)
     }
 
     #[tool(
-        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints), le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité.",
-        meta = ui_only()
+        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints), le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité. Seulement à la demande explicite de l'utilisateur (durée et capacité confirmées)."
     )]
     async fn project_start(&self, Parameters(p): Parameters<ProjectStartParams>) -> ToolResult {
         respond(
@@ -1530,8 +1716,7 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Met en pause les sprints automatiques : plus de remplissage ni de clôture ; à la reprise, l'échéance du sprint en cours est repoussée de la durée de la pause.",
-        meta = ui_only()
+        description = "Met en pause les sprints automatiques : plus de remplissage ni de clôture ; à la reprise, l'échéance du sprint en cours est repoussée de la durée de la pause. Seulement à la demande de l'utilisateur."
     )]
     async fn project_pause(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -1545,8 +1730,7 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Reprend les sprints automatiques mis en pause (échéance du sprint en cours repoussée de la durée de la pause).",
-        meta = ui_only()
+        description = "Reprend les sprints automatiques mis en pause (échéance du sprint en cours repoussée de la durée de la pause)."
     )]
     async fn project_resume(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -1560,8 +1744,7 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Change la durée des sprints automatiques : l'échéance du sprint en cours est recalculée et sa portée ajustée à la nouvelle capacité (issues ajoutées par priorité, ou issues « à faire » les moins urgentes retirées).",
-        meta = ui_only()
+        description = "Change la durée des sprints automatiques (en jours : 14 = 2 semaines) : l'échéance du sprint en cours est recalculée et sa portée ajustée à la nouvelle capacité (issues ajoutées par priorité, ou issues « à faire » les moins urgentes retirées). Seulement à la demande de l'utilisateur."
     )]
     async fn project_set_duration(&self, Parameters(p): Parameters<ProjectDurationParams>) -> ToolResult {
         respond(
@@ -1696,8 +1879,7 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Ajoute un design au projet à partir de son lien claude.ai (état « pending » : fichiers à importer par le skill « Importer un design »).",
-        meta = ui_only()
+        description = "Ajoute un design au projet à partir de son lien claude.ai (état « pending » : fichiers à importer ensuite, comme le fait le skill « Importer un design »). Rend son identifiant."
     )]
     async fn design_add(&self, Parameters(p): Parameters<DesignAddParams>) -> ToolResult {
         respond(
@@ -1996,6 +2178,9 @@ mod tests {
             "architecture_get",
             "architecture_templates",
             "architecture_save",
+            "get_pull_request_diff",
+            "review_pull_request",
+            "merge_pull_request",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -2026,23 +2211,22 @@ mod tests {
     #[test]
     fn marks_ui_only_tools() {
         let tools = server(&[]).tool_router.list_all();
-        for name in [
-            "get_account",
-            "list_account_repos",
-            "sprint_summary",
-            "project_start",
-            "project_pause",
-            "project_resume",
-            "project_set_duration",
-            "design_add",
-            "design_delete",
-        ] {
+        for name in ["get_account", "list_account_repos", "design_delete"] {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             let meta = tool.meta.as_ref().expect("_meta");
             assert_eq!(meta.0.get("cadence/visibility"), Some(&json!("ui")));
         }
-        let list = tools.iter().find(|t| t.name == "list_issues").unwrap();
-        assert!(list.meta.is_none());
+        // Ouverts à l'IA : on peut tout demander depuis le chat.
+        for name in [
+            "list_issues",
+            "sprint_summary",
+            "project_set_duration",
+            "design_add",
+            "review_pull_request",
+        ] {
+            let tool = tools.iter().find(|t| t.name == name).unwrap();
+            assert!(tool.meta.is_none(), "{name} devrait être visible de l'IA");
+        }
     }
 
     #[tokio::test]

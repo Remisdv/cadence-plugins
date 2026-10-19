@@ -90,6 +90,25 @@ export function PullRequestsView() {
         <SegmentedTabs items={filters} value={state} onChange={setState} label="État" />
         <Button
           size="sm"
+          icon="review"
+          disabled={!repo}
+          title={
+            repo
+              ? "L'IA relit les PR du sprint : critères, diff, architecture, tests, puis publie ses revues"
+              : "Choisissez un dépôt"
+          }
+          onClick={() =>
+            void cadence
+              .runAction("relire-pr", { repo })
+              .catch((e: unknown) =>
+                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
+              )
+          }
+        >
+          Relire les PR
+        </Button>
+        <Button
+          size="sm"
           variant="ghost"
           icon="refresh"
           iconOnly
@@ -396,6 +415,19 @@ function PrDialog({
           Ouvrir sur GitHub
         </Button>
         <div className="grow" />
+        <Button
+          variant="secondary"
+          icon="sparkle"
+          onClick={() =>
+            void cadence
+              .runAction("relire-pr", { repo: pr.repo, number: pr.number })
+              .catch((e: unknown) =>
+                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
+              )
+          }
+        >
+          Relire avec l'IA
+        </Button>
         {state === "draft" && (
           <Button variant="primary" icon="review" onClick={() => void markReady()} disabled={busy}>
             Prête pour la revue

@@ -101,6 +101,15 @@ export function DesignsView() {
         )}
         <Button
           size="sm"
+          icon="sparkle"
+          disabled={!repo}
+          title="L'IA dessine les écrans dans Claude Design, vous les validez, puis elle les importe"
+          onClick={() => void cadence.runAction("creer-design", { repo }).catch(notifyError)}
+        >
+          Créer un design
+        </Button>
+        <Button
+          size="sm"
           variant="primary"
           icon="plus"
           disabled={!repo}

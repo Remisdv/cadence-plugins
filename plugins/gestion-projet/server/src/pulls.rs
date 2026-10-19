@@ -342,6 +342,60 @@ pub fn check_head(head: &str, base: &str, default_branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Issues qu'une PR déclare fermer (`Ferme #12`, `Closes #3`, `fixes #7`, `Résout #4`…).
+/// GitHub ne les ferme d'elle-même qu'en fusionnant dans la branche par défaut : vers une branche
+/// de release, c'est à nous de le faire.
+pub fn closing_refs(body: &str) -> Vec<u32> {
+    const WORDS: [&str; 12] = [
+        "ferme", "fermes", "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves",
+        "résout", "corrige",
+    ];
+    let lower = body.to_lowercase();
+    let mut out = Vec::new();
+    for (i, _) in lower.match_indices('#') {
+        let digits: String = lower[i + 1..].chars().take_while(char::is_ascii_digit).collect();
+        let Ok(n) = digits.parse::<u32>() else { continue };
+        // Le mot juste avant le #, ponctuation (« : ») tolérée.
+        let before = lower[..i].trim_end().trim_end_matches(':').trim_end();
+        let word = before
+            .rsplit(|c: char| c.is_whitespace() || "([".contains(c))
+            .next()
+            .unwrap_or("");
+        if WORDS.contains(&word) && !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// Diff d'une PR, fichier par fichier, tronqué à `budget` caractères au total (les fichiers
+/// suivants sont listés sans patch).
+pub fn diff_text(files: &[Value], only: Option<&str>, budget: usize) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut skipped = Vec::new();
+    for f in files {
+        let name = f["filename"].as_str().unwrap_or("");
+        if only.is_some_and(|o| o != name) {
+            continue;
+        }
+        let patch = f["patch"]
+            .as_str()
+            .unwrap_or("(binaire ou trop gros : pas de patch)");
+        let block = format!(
+            "--- {name} ({}, +{} −{})\n{patch}\n\n",
+            f["status"].as_str().unwrap_or("?"),
+            f["additions"].as_u64().unwrap_or(0),
+            f["deletions"].as_u64().unwrap_or(0)
+        );
+        if out.len() + block.len() > budget {
+            skipped.push(name.to_string());
+        } else {
+            out.push_str(&block);
+        }
+    }
+    (out, skipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,5 +553,25 @@ mod tests {
                 .contains("identiques")
         );
         assert!(check_head("fork:develop", "develop", "main").is_ok());
+    }
+
+    #[test]
+    fn finds_the_issues_a_pr_closes() {
+        let body = "Ferme #12\n\nVoir aussi #13. Closes: #3 et fixes #7 (lié à #8) ; Résout #4, corrige #4";
+        assert_eq!(closing_refs(body), [12, 3, 7, 4]);
+        assert!(closing_refs("Aucune référence, juste #5").is_empty());
+    }
+
+    #[test]
+    fn truncates_a_diff_by_file() {
+        let files = vec![
+            serde_json::json!({ "filename": "a.rs", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@ +1 @@\n+x" }),
+            serde_json::json!({ "filename": "b.rs", "status": "added", "additions": 9, "deletions": 0, "patch": "x".repeat(500) }),
+        ];
+        let (text, skipped) = diff_text(&files, None, 200);
+        assert!(text.contains("--- a.rs (modified, +1 −0)"));
+        assert_eq!(skipped, ["b.rs"]);
+        let (only, _) = diff_text(&files, Some("b.rs"), 10_000);
+        assert!(only.starts_with("--- b.rs"));
     }
 }
