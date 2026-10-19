@@ -44,10 +44,10 @@ describe("architecture", () => {
   it("range les services en colonnes, de l'entrée vers les données", () => {
     const { boxes, width, height } = layoutSystem(arch);
     const x = (id: string) => boxes.find((b) => b.service.id === id)!.x;
-    expect([x("nginx"), x("web"), x("api"), x("db")]).toEqual([0, 306, 612, 918]);
+    expect([x("nginx"), x("web"), x("api"), x("db")]).toEqual([0, 350, 700, 1050]);
     // Back-end et tâches de fond partagent une colonne.
     expect(x("worker")).toBe(x("api"));
-    expect(width).toBe(4 * BOX_W + 3 * 96);
+    expect(width).toBe(4 * BOX_W + 3 * 140);
     expect(height).toBe(2 * BOX_H + 28);
     expect(layoutSystem({ services: [] }).width).toBe(0);
   });

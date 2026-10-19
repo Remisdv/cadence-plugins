@@ -35,7 +35,7 @@ export const kindOf = (k: string): ServiceKind =>
 
 export const BOX_W = 210;
 export const BOX_H = 92;
-const COL_GAP = 96;
+const COL_GAP = 140;
 const ROW_GAP = 28;
 
 export interface Placed {
