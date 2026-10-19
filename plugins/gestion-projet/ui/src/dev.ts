@@ -8,6 +8,8 @@
 import type { MockHostOptions } from "@cadence/plugin-sdk";
 import type {
   AccountRepo,
+  ArchiTemplate,
+  Architecture,
   Issue,
   Design,
   JalonView,
@@ -19,6 +21,8 @@ import type {
   Version,
 } from "./domain";
 import { sprintStart } from "./planning";
+// Bibliothèque de modèles du serveur, la même qu'en vrai.
+import archiTemplates from "../../server/src/templates.json";
 
 const params = new URLSearchParams(location.search);
 
@@ -466,6 +470,28 @@ const designPage = (
 <div style="padding:14px;border-radius:12px;background:white;box-shadow:0 1px 3px #0002">🧻 Essuie-tout · 2</div>
 </main></body></html>`;
 
+/** Architecture simulée : web classique, l'API en couches (modèle REST). */
+const templates = archiTemplates as unknown as ArchiTemplate[];
+const webSystem = templates.find((t) => t.id === "systeme-web-classique")!;
+const rest = templates.find((t) => t.id === "rest-couches")!;
+let architecture: Architecture | null = {
+  version: 1,
+  services: webSystem.services.map((s) =>
+    s.id === "api"
+      ? {
+          ...s,
+          tech: "NestJS",
+          template: rest.id,
+          layers: rest.layers,
+          rules: rest.rules,
+          conventions: rest.conventions,
+        }
+      : { ...s, layers: s.layers ?? [], rules: s.rules ?? [], conventions: s.conventions ?? [] },
+  ),
+  links: webSystem.links,
+  rules: webSystem.rules,
+};
+
 const startDefaults = { duration_days: 14, capacity: 20, first_version: "0.4.0" };
 
 function sprintSummary(repo: string, title?: string) {
@@ -620,6 +646,24 @@ const planningTools: MockHostOptions["tools"] = {
   sprint_summary: ({ repo, version }) =>
     sprintSummary(repo as string, version as string | undefined),
   roadmap: ({ repo }) => roadmap(repo as string),
+  architecture_get: ({ repo }) => ({
+    repo,
+    architecture: repo === "RemiSDV/cadence" ? architecture : null,
+    source: { branch: "main", pull_request: null, url: null },
+  }),
+  architecture_templates: () => ({ templates }),
+  architecture_save: ({ repo, architecture: next }) => {
+    architecture = next as Architecture;
+    return {
+      repo,
+      architecture,
+      source: {
+        branch: "archi/2026-10-19",
+        pull_request: 14,
+        url: "https://github.com/RemiSDV/cadence/pull/14",
+      },
+    };
+  },
   planning_get: ({ repo }) => ({ repo, revision: planning.revision, planning, today: day(0) }),
   planning_save: ({ repo, planning: next, base_revision }) => {
     if (base_revision !== planning.revision)

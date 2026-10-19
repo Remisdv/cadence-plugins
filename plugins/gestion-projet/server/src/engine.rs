@@ -139,12 +139,12 @@ impl GestionProjet {
 
     /* ---------- Briques GitHub ---------- */
 
-    async fn default_branch(&self, repo: &str) -> Result<String> {
+    pub(crate) async fn default_branch(&self, repo: &str) -> Result<String> {
         let info = self.gh.get(&format!("/repos/{repo}"), &[]).await?;
         Ok(info["default_branch"].as_str().unwrap_or("main").to_string())
     }
 
-    async fn branch_sha(&self, repo: &str, branch: &str) -> Result<Option<String>> {
+    pub(crate) async fn branch_sha(&self, repo: &str, branch: &str) -> Result<Option<String>> {
         Ok(self
             .gh
             .get_opt(&format!("/repos/{repo}/git/ref/heads/{branch}"), &[])
@@ -153,7 +153,7 @@ impl GestionProjet {
     }
 
     /// Crée `branch` depuis `from` si elle n'existe pas.
-    async fn ensure_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()> {
+    pub(crate) async fn ensure_branch(&self, repo: &str, branch: &str, from: &str) -> Result<()> {
         if self.branch_sha(repo, branch).await?.is_some() {
             return Ok(());
         }
@@ -1052,7 +1052,7 @@ impl GestionProjet {
     }
 
     /// Contenu d'un fichier du dépôt (1 Mo au plus).
-    async fn file_bytes(&self, repo: &str, path: &str, branch: &str) -> Result<Vec<u8>> {
+    pub(crate) async fn file_bytes(&self, repo: &str, path: &str, branch: &str) -> Result<Vec<u8>> {
         use base64::Engine as _;
         let raw = self
             .gh

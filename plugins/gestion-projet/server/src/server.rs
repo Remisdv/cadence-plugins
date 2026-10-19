@@ -21,6 +21,8 @@
 //! - Designs (Claude Design) : `list_designs`, `get_design`, `design_add`, `design_update`,
 //!   `design_delete` ; fichiers dans le dépôt sous `design/<id>`, registre dans l'issue d'état.
 //! - Planning (Gantt) : `planning_get`, `planning_save` (issue cachée `cadence/planning`).
+//! - Architecture : `architecture_get`, `architecture_templates`, `architecture_save` (fichiers
+//!   `architecture/` du dépôt, modifiés par une branche `archi/…` et une PR).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -383,6 +385,16 @@ pub struct PlanningSaveParams {
     pub planning: crate::planning::Planning,
     /// Révision lue avec `planning_get` : refus si le planning a changé depuis.
     pub base_revision: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ArchitectureSaveParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Architecture complète (services, liens, couches, règles) : elle remplace la précédente.
+    pub architecture: crate::architecture::Architecture,
+    /// Résumé de la modification (message de commit et titre de PR).
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1833,6 +1845,43 @@ impl GestionProjet {
     }
 
     #[tool(
+        description = "Architecture du projet, à suivre en codant : services (proxy, front, back, base…) et leurs liens, puis pour chaque service ses couches (controller, service, DTO, repository…), les couches que chacune peut utiliser, ses règles et conventions. Lue dans `architecture/architecture.json` (branche de la PR d'architecture ouverte, sinon la base) ; aussi lisible en Markdown dans `architecture/ARCHITECTURE.md` du worktree."
+    )]
+    async fn architecture_get(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let (architecture, source) = self.load_architecture(&repo).await?;
+                let markdown = architecture.as_ref().map(|a| crate::architecture::render_markdown(a, &repo));
+                Ok(json!({ "repo": repo, "architecture": architecture, "source": source, "markdown": markdown }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Modèles d'architecture prêts à appliquer : systèmes complets (web classique, API + cache + tâches, microservices) et intérieurs de service (API REST en couches, hexagonale, NestJS, Spring Boot, Express, FastAPI, Django, React par fonctionnalités, Next.js, Tauri)."
+    )]
+    async fn architecture_templates(&self, Parameters(_): Parameters<Empty>) -> ToolResult {
+        respond(Ok(json!({ "templates": crate::architecture::templates() })))
+    }
+
+    #[tool(
+        description = "Enregistre l'architecture complète du dépôt : commit de architecture/architecture.json et du ARCHITECTURE.md généré sur une branche archi/… et pull request (réutilisée tant qu'elle est ouverte). Vérifie identifiants, natures de service, liens et couches. Une IA ne l'appelle qu'après accord explicite de l'utilisateur."
+    )]
+    async fn architecture_save(&self, Parameters(p): Parameters<ArchitectureSaveParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                crate::architecture::validate(&p.architecture)?;
+                let source = self.save_architecture(&repo, &p.architecture, &p.message).await?;
+                Ok(json!({ "repo": repo, "source": source, "architecture": p.architecture }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         description = "Range des issues dans un jalon (une issue n'appartient qu'à un jalon : elle quitte le précédent) ou les en retire."
     )]
     async fn jalon_issues(&self, Parameters(p): Parameters<JalonIssuesParams>) -> ToolResult {
@@ -1944,6 +1993,9 @@ mod tests {
             "design_delete",
             "planning_get",
             "planning_save",
+            "architecture_get",
+            "architecture_templates",
+            "architecture_save",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -1960,7 +2012,7 @@ mod tests {
                 .map(|r| r.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             match tool.name.as_ref() {
-                "get_account" | "list_account_repos" => {}
+                "get_account" | "list_account_repos" | "architecture_templates" => {}
                 // `repo` absent : tous les dépôts suivis.
                 "list_issues" | "list_pull_requests" => {
                     assert!(props.is_some_and(|p| p.contains_key("repo")), "{}", tool.name);
@@ -2239,6 +2291,23 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&r).contains("avant de commencer"), "{}", text(&r));
+
+        // Architecture vérifiée avant GitHub.
+        let mut architecture = crate::architecture::Architecture::default();
+        architecture.links.push(crate::architecture::Link {
+            from: "web".into(),
+            to: "api".into(),
+            label: String::new(),
+        });
+        let r = s
+            .architecture_save(Parameters(ArchitectureSaveParams {
+                repo: "me/app".into(),
+                architecture,
+                message: "test".into(),
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("n'existe pas"), "{}", text(&r));
 
         let r = s
             .sprint_summary(Parameters(SprintSummaryParams {

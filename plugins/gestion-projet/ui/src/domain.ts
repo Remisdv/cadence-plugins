@@ -133,6 +133,7 @@ export const views = {
   roadmap: { title: "Roadmap", icon: "roadmap" },
   versions: { title: "Versions", icon: "tag" },
   planning: { title: "Planning", icon: "calendar" },
+  architecture: { title: "Architecture", icon: "folder" },
   designs: { title: "Designs", icon: "layers" },
   "pull-requests": { title: "Pull requests", icon: "pullRequest" },
   "setup-depots": { title: "Dépôts suivis", icon: "github" },
@@ -350,6 +351,74 @@ export interface DesignDetail {
   file?: string | null;
   content?: string;
   message?: string;
+}
+
+/* ---------- Architecture ---------- */
+
+export interface ArchiLayer {
+  id: string;
+  name: string;
+  /** Emplacement du code de la couche. */
+  path: string;
+  role: string;
+  /** Couches qu'elle peut utiliser (identifiants). */
+  uses: string[];
+}
+
+export interface ArchiService {
+  id: string;
+  name: string;
+  /** proxy, frontend, backend, worker, database, cache, queue, external, autre. */
+  kind: string;
+  tech: string;
+  path: string;
+  description: string;
+  template?: string | null;
+  layers: ArchiLayer[];
+  rules: string[];
+  conventions: string[];
+}
+
+export interface ArchiLink {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface Architecture {
+  version: number;
+  services: ArchiService[];
+  links: ArchiLink[];
+  rules: string[];
+}
+
+export interface ArchitectureSource {
+  branch: string;
+  pull_request: number | null;
+  url: string | null;
+}
+
+/** `architecture_get` : `architecture` nulle tant que le dépôt n'en a pas. */
+export interface ArchitectureResponse {
+  repo: string;
+  architecture: Architecture | null;
+  source: ArchitectureSource;
+  markdown?: string | null;
+}
+
+/** Modèle prêt : système complet ou intérieur d'un service. */
+export interface ArchiTemplate {
+  id: string;
+  name: string;
+  scope: "system" | "service";
+  description: string;
+  kind: string;
+  tech: string;
+  layers: ArchiLayer[];
+  rules: string[];
+  conventions: string[];
+  services: ArchiService[];
+  links: ArchiLink[];
 }
 
 /* ---------- Planning (Gantt) ---------- */

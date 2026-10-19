@@ -3,6 +3,7 @@
 //! Lancé par Cadence, un seul processus pour le plugin (dépôts suivis via le service `repos`).
 //! Journal sur stderr (stdout porte le protocole MCP) ; niveau réglable avec `RUST_LOG`.
 
+mod architecture;
 mod config;
 mod engine;
 mod github;

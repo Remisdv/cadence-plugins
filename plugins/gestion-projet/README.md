@@ -48,6 +48,7 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 | Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
 | Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
 | Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
+| Architecture (`architecture`)   | Conception     | système (services et liens, schéma automatique) puis couches d'un service (rôles, dépendances autorisées, règles, conventions) ; modèles prêts ; enregistrement par PR ; « Adapter le code » |
 | Designs (`designs`)             | Conception     | designs de Claude Design : ajout par lien claude.ai (import par l'IA), visionneuse des pages, « Créer des issues depuis ce design » |
 | Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
 | Dépôts suivis (`setup-depots`)  | étape de setup | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
@@ -76,6 +77,7 @@ version) et, pour une action qui déclare un type de contexte, `type` égal à c
 | Proposer des issues | `proposer-issues`   | chat | `{ "type": "jalon", "repo", "jalon": "mvp" }` | CEO      |
 | Importer un design  | `importer-design`   | chat | `{ "type": "design", "repo", "design", "url", "name" }` | — |
 | Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
+| Adapter le code à l'architecture | `adapter-architecture` | chat | `{ "repo", "service" }` (service facultatif) | — |
 | Préparer la release | `preparer-release`  | fond | `{ "type": "version", "repo", "version" }` | déploiement |
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
@@ -165,6 +167,25 @@ dans l'issue d'état. La page Designs affiche chaque page HTML dans une iframe i
 images et styles relatifs incorporés par le serveur. L'IA les voit avec `list_designs` et
 `get_design` : on peut les citer dans le chat, « Créer des issues depuis ce design » en tire les
 issues, et « Implémenter » s'y réfère pour les écrans.
+
+## Architecture
+
+L'écran Architecture décrit le projet à deux niveaux : le **système** (services — proxy, front,
+back, worker, base, cache, file, service externe — et leurs liens, dessinés automatiquement en
+colonnes de l'entrée vers les données), puis, en cliquant sur un service, son **intérieur** :
+couches (controller, service, DTO, repository…), emplacement du code de chacune, couches qu'elle
+peut utiliser (toute autre dépendance est un écart), règles et conventions. Des **modèles** prêts
+s'appliquent au système (web classique, API + cache + tâches, microservices) ou à un service (API
+REST en couches, hexagonale, NestJS, Spring Boot, Express, FastAPI, Django, React par
+fonctionnalités, Next.js, Tauri) puis s'ajustent par formulaires.
+
+L'architecture vit dans le dépôt : `architecture/architecture.json` (source) et
+`architecture/ARCHITECTURE.md` (généré, schéma Mermaid lisible sur GitHub). « Enregistrer » commite
+les deux fichiers sur une branche `archi/…` et ouvre la PR (réutilisée tant qu'elle est ouverte) ;
+l'écran lit la PR ouverte en priorité. « Implémenter » suit l'architecture et vérifie son diff
+avant la PR ; « Adapter le code » (skill `adapter-architecture`) audite le code, liste les écarts,
+puis après accord refactore dans une PR ou crée des issues. Outils : `architecture_get`,
+`architecture_templates`, `architecture_save`.
 
 ## Planning (Gantt)
 

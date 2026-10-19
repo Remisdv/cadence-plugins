@@ -49,6 +49,12 @@ icon = "tag"
 section = "Planification"
 
 [[ui.views]]
+id = "architecture"
+title = "Architecture"
+icon = "folder"
+section = "Conception"
+
+[[ui.views]]
 id = "designs"
 title = "Designs"
 icon = "layers"
@@ -84,6 +90,12 @@ label = "Importer un design"
 skill = "importer-design"
 mode = "chat"
 context = "design"
+
+[[actions]]
+id = "adapter-architecture"
+label = "Adapter le code à l'architecture"
+skill = "adapter-architecture"
+mode = "chat"
 
 [[actions]]
 id = "planifier"

@@ -32,6 +32,7 @@ contexte.
 | `gestion-projet__get_repository` | branche par défaut (`default_branch`), sprints automatiques (`sprints.release_branch`, `sprints.current_version`) |
 | `gestion-projet__get_issue` | description, critères d'acceptation, type (`type/*`), commentaires |
 | `gestion-projet__list_designs` | designs du projet (Claude Design) : référence visuelle des écrans |
+| `gestion-projet__architecture_get` | architecture à suivre : services, couches, dépendances autorisées, règles, conventions |
 | `gestion-projet__update_issue` | passer l'issue en `status: "doing"` puis `"review"` |
 | `gestion-projet__create_pull_request` | ouvrir la PR en brouillon (`draft: true`) |
 | `gestion-projet__add_comment` | lier la PR dans l'issue, résumer le travail |
@@ -56,6 +57,12 @@ l'identité et les accès déjà configurés sur la machine.
 1. **Analyse.** Lis l'issue (`get_issue`) et le dépôt (`get_repository`). Si l'issue n'a pas de
    critères d'acceptation exploitables, déduis-les du titre et de la description et écris-les dans
    la PR. Établis un plan court : approche, fichiers à toucher.
+
+   **Architecture.** Lis l'architecture (`architecture_get`, ou `architecture/ARCHITECTURE.md` du
+   worktree) : place chaque fichier dans la couche prévue, à l'emplacement prévu, n'utilise que les
+   couches autorisées (`uses`), applique les règles et conventions du service. Si l'issue demande
+   quelque chose que l'architecture ne prévoit pas, suis l'esprit le plus proche et signale-le
+   dans la PR (« Points à relire »).
 
    **Design.** Si l'issue cite un design (`design/<id>/…`) ou si un design du projet
    (`list_designs`) montre l'écran concerné, ouvre ses pages dans le worktree (sous son `path`) et
@@ -84,14 +91,18 @@ l'identité et les accès déjà configurés sur la machine.
      (la branche existe déjà en cas de reprise). Vérifie `git status` : pas de changement étranger.
    - Passe l'issue en cours : `update_issue` avec `status: "doing"`.
 3. **Implémentation** dans le worktree.
-4. **Tests.** Lance le build et les tests pertinents du dépôt (ceux des parties touchées au
+4. **Conformité.** Avant de commiter, relis ton diff contre l'architecture : fichiers dans les
+   bonnes couches, imports autorisés seulement, règles et conventions respectées. Corrige les
+   écarts ; ceux que tu laisses (code existant, hors périmètre) vont dans la PR, section
+   « Architecture ».
+5. **Tests.** Lance le build et les tests pertinents du dépôt (ceux des parties touchées au
    minimum) et corrige ce que tes changements ont cassé. Note le résultat : réussis, échecs
    restants, ou non lancés (et pourquoi).
-5. **Commits.** Un ou quelques commits cohérents, message
+6. **Commits.** Un ou quelques commits cohérents, message
    `<type>(#<numéro>): <titre de l'issue>` + un corps court qui résume le changement. Vérifie
    `git status` : rien d'oublié, rien d'étranger à l'issue (fichiers générés, `.env`…).
-6. **Push de la branche** : `git push -u origin <branche>` (après avoir vérifié la branche).
-7. **Pull request en brouillon** avec `create_pull_request` : `repo`, `head` = la branche,
+7. **Push de la branche** : `git push -u origin <branche>` (après avoir vérifié la branche).
+8. **Pull request en brouillon** avec `create_pull_request` : `repo`, `head` = la branche,
    `base` = la base choisie à l'étape 1 (branche de release ou branche par défaut), `draft: true`,
    titre `<type>(#<numéro>) : <titre>`, corps :
 
@@ -104,6 +115,8 @@ l'identité et les accès déjà configurés sur la machine.
    …
    ### Tests
    …
+   ### Architecture
+   …(conforme, ou écarts laissés et pourquoi)
    ### Points à relire
    …(choix faits sans pouvoir demander, limites connues)
 
@@ -113,9 +126,9 @@ l'identité et les accès déjà configurés sur la machine.
    Si l'outil répond qu'il n'est pas disponible, utilise `gh pr create --draft --repo <repo>` s'il
    est installé et authentifié ; sinon donne l'URL de comparaison
    `https://github.com/<repo>/compare/<base>...<branche>?expand=1` dans ton résultat.
-8. **Suivi.** `update_issue` avec `status: "review"`, puis `add_comment` sur l'issue avec le lien
+9. **Suivi.** `update_issue` avec `status: "review"`, puis `add_comment` sur l'issue avec le lien
    de la PR et le résultat des tests. Laisse la PR en brouillon : l'utilisateur la sort du
    brouillon après relecture.
-9. **Résultat.** Termine par un résumé court : dépôt, branche, PR, fichiers modifiés, tests. En
+10. **Résultat.** Termine par un résumé court : dépôt, branche, PR, fichiers modifiés, tests. En
    cas d'échec, dis à quelle étape et ce qui reste dans le worktree (ne le supprime pas : Cadence
    le gère).

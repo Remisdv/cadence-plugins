@@ -1,0 +1,279 @@
+[
+  {
+    "id": "systeme-web-classique",
+    "name": "Web classique : Nginx, front, API, base",
+    "scope": "system",
+    "description": "Nginx en entrée (HTTPS, fichiers statiques), une application front, une API et une base relationnelle.",
+    "services": [
+      { "id": "nginx", "name": "Nginx", "kind": "proxy", "tech": "Nginx", "path": "deploy/nginx", "description": "Entrée HTTPS, sert le front et relaie /api vers l'API." },
+      { "id": "web", "name": "Front-end", "kind": "frontend", "tech": "React + Vite", "path": "apps/web", "description": "Application web (SPA)." },
+      { "id": "api", "name": "API", "kind": "backend", "tech": "Node.js", "path": "apps/api", "description": "API REST : logique métier et accès aux données." },
+      { "id": "db", "name": "Base de données", "kind": "database", "tech": "PostgreSQL", "path": "", "description": "Données de l'application." }
+    ],
+    "links": [
+      { "from": "nginx", "to": "web", "label": "fichiers statiques" },
+      { "from": "web", "to": "api", "label": "REST /api" },
+      { "from": "nginx", "to": "api", "label": "proxy /api" },
+      { "from": "api", "to": "db", "label": "SQL" }
+    ],
+    "rules": [
+      "Le front ne parle qu'à l'API, jamais à la base.",
+      "Secrets et configuration par variables d'environnement, jamais dans le dépôt."
+    ]
+  },
+  {
+    "id": "systeme-api-cache-taches",
+    "name": "SPA, API, cache et tâches de fond",
+    "scope": "system",
+    "description": "Une SPA, une API, une base, un cache Redis et un worker qui consomme une file de messages pour les traitements longs.",
+    "services": [
+      { "id": "web", "name": "Front-end", "kind": "frontend", "tech": "React + Vite", "path": "apps/web", "description": "Application web." },
+      { "id": "api", "name": "API", "kind": "backend", "tech": "Node.js", "path": "apps/api", "description": "API REST synchrone." },
+      { "id": "worker", "name": "Worker", "kind": "worker", "tech": "Node.js", "path": "apps/worker", "description": "Traitements longs (e-mails, exports, imports)." },
+      { "id": "queue", "name": "File de messages", "kind": "queue", "tech": "RabbitMQ", "path": "", "description": "Tâches à traiter par le worker." },
+      { "id": "cache", "name": "Cache", "kind": "cache", "tech": "Redis", "path": "", "description": "Sessions et réponses fréquentes." },
+      { "id": "db", "name": "Base de données", "kind": "database", "tech": "PostgreSQL", "path": "", "description": "Données de l'application." }
+    ],
+    "links": [
+      { "from": "web", "to": "api", "label": "REST" },
+      { "from": "api", "to": "db", "label": "SQL" },
+      { "from": "api", "to": "cache", "label": "lecture/écriture" },
+      { "from": "api", "to": "queue", "label": "publie" },
+      { "from": "worker", "to": "queue", "label": "consomme" },
+      { "from": "worker", "to": "db", "label": "SQL" }
+    ],
+    "rules": [
+      "Tout traitement de plus d'une seconde passe par la file et le worker.",
+      "Le cache n'est jamais la source de vérité : il se reconstruit depuis la base."
+    ]
+  },
+  {
+    "id": "systeme-microservices",
+    "name": "Microservices avec passerelle",
+    "scope": "system",
+    "description": "Une passerelle d'API devant des services indépendants, chacun avec sa base, qui communiquent par événements.",
+    "services": [
+      { "id": "gateway", "name": "Passerelle API", "kind": "proxy", "tech": "Nginx / Kong", "path": "deploy/gateway", "description": "Authentification, routage, limitation de débit." },
+      { "id": "web", "name": "Front-end", "kind": "frontend", "tech": "Next.js", "path": "apps/web", "description": "Application web." },
+      { "id": "comptes", "name": "Service comptes", "kind": "backend", "tech": "NestJS", "path": "services/comptes", "description": "Utilisateurs et droits." },
+      { "id": "commandes", "name": "Service commandes", "kind": "backend", "tech": "NestJS", "path": "services/commandes", "description": "Commandes et paiements." },
+      { "id": "bus", "name": "Bus d'événements", "kind": "queue", "tech": "Kafka", "path": "", "description": "Événements métier entre services." },
+      { "id": "db-comptes", "name": "Base comptes", "kind": "database", "tech": "PostgreSQL", "path": "", "description": "Propriété du service comptes." },
+      { "id": "db-commandes", "name": "Base commandes", "kind": "database", "tech": "PostgreSQL", "path": "", "description": "Propriété du service commandes." }
+    ],
+    "links": [
+      { "from": "web", "to": "gateway", "label": "HTTPS" },
+      { "from": "gateway", "to": "comptes", "label": "REST" },
+      { "from": "gateway", "to": "commandes", "label": "REST" },
+      { "from": "comptes", "to": "db-comptes", "label": "SQL" },
+      { "from": "commandes", "to": "db-commandes", "label": "SQL" },
+      { "from": "comptes", "to": "bus", "label": "événements" },
+      { "from": "commandes", "to": "bus", "label": "événements" }
+    ],
+    "rules": [
+      "Un service ne lit jamais la base d'un autre service.",
+      "Entre services : événements sur le bus, ou appel REST via la passerelle."
+    ]
+  },
+  {
+    "id": "rest-couches",
+    "name": "API REST en couches",
+    "scope": "service",
+    "description": "Controller → Service → Repository, avec DTO aux frontières et entités pour la persistance. Le modèle le plus courant.",
+    "kind": "backend",
+    "tech": "",
+    "layers": [
+      { "id": "controller", "name": "Controller", "path": "src/**/controllers/", "role": "Reçoit la requête HTTP, valide le DTO d'entrée, appelle un service, renvoie un DTO de sortie.", "uses": ["service", "dto"] },
+      { "id": "service", "name": "Service", "path": "src/**/services/", "role": "Logique métier et transactions ; orchestre les repositories.", "uses": ["repository", "entity", "dto", "mapper"] },
+      { "id": "repository", "name": "Repository", "path": "src/**/repositories/", "role": "Accès aux données (requêtes, persistance) ; aucune règle métier.", "uses": ["entity"] },
+      { "id": "dto", "name": "DTO", "path": "src/**/dto/", "role": "Objets d'entrée et de sortie de l'API, validés ; sans logique.", "uses": [] },
+      { "id": "entity", "name": "Entité", "path": "src/**/entities/", "role": "Modèle persistant (tables, relations).", "uses": [] },
+      { "id": "mapper", "name": "Mapper", "path": "src/**/mappers/", "role": "Conversion entité ↔ DTO.", "uses": ["entity", "dto"] }
+    ],
+    "rules": [
+      "Un controller n'appelle jamais un repository.",
+      "Aucune logique métier dans les controllers ni les repositories.",
+      "Les entités ne sortent jamais de l'API : on renvoie des DTO."
+    ],
+    "conventions": [
+      "Un dossier par domaine (users/, orders/), avec ses couches dedans.",
+      "Noms : UserController, UserService, UserRepository, CreateUserDto."
+    ]
+  },
+  {
+    "id": "hexagonale",
+    "name": "Hexagonale (ports et adaptateurs)",
+    "scope": "service",
+    "description": "Le domaine au centre, sans dépendance technique ; les cas d'usage passent par des ports, implémentés par des adaptateurs.",
+    "kind": "backend",
+    "tech": "",
+    "layers": [
+      { "id": "adapters-in", "name": "Adaptateurs entrants", "path": "src/adapters/in/", "role": "HTTP, CLI, consommateurs de messages : traduisent l'entrée en appel de cas d'usage.", "uses": ["application", "domain"] },
+      { "id": "application", "name": "Application (cas d'usage)", "path": "src/application/", "role": "Un cas d'usage par classe ; orchestre le domaine via les ports.", "uses": ["domain", "ports"] },
+      { "id": "domain", "name": "Domaine", "path": "src/domain/", "role": "Entités, valeurs, règles métier ; aucune dépendance à un framework.", "uses": [] },
+      { "id": "ports", "name": "Ports", "path": "src/application/ports/", "role": "Interfaces des dépendances sortantes (persistance, e-mail, paiement).", "uses": ["domain"] },
+      { "id": "adapters-out", "name": "Adaptateurs sortants", "path": "src/adapters/out/", "role": "Implémentent les ports : base de données, API externes, files.", "uses": ["ports", "domain"] }
+    ],
+    "rules": [
+      "Le domaine n'importe rien d'autre que lui-même.",
+      "Les dépendances pointent vers le centre : adaptateurs → application → domaine.",
+      "Un adaptateur sortant n'est connu que par son port."
+    ],
+    "conventions": [
+      "Cas d'usage nommés par l'intention : CreerCommande, AnnulerAbonnement.",
+      "Ports nommés par le besoin : CommandeRepository, Notifieur."
+    ]
+  },
+  {
+    "id": "nestjs",
+    "name": "NestJS",
+    "scope": "service",
+    "description": "Modules NestJS par domaine : controller, service, DTO validés (class-validator), entités et repositories (TypeORM ou Prisma).",
+    "kind": "backend",
+    "tech": "NestJS",
+    "layers": [
+      { "id": "module", "name": "Module", "path": "src/<domaine>/<domaine>.module.ts", "role": "Déclare controllers et providers du domaine ; exporte ce que les autres modules utilisent.", "uses": ["controller", "service", "repository"] },
+      { "id": "controller", "name": "Controller", "path": "src/<domaine>/*.controller.ts", "role": "Routes HTTP, guards, pipes de validation ; délègue au service.", "uses": ["service", "dto"] },
+      { "id": "service", "name": "Service", "path": "src/<domaine>/*.service.ts", "role": "Logique métier, transactions.", "uses": ["repository", "entity", "dto"] },
+      { "id": "repository", "name": "Repository", "path": "src/<domaine>/*.repository.ts", "role": "Accès aux données via l'ORM.", "uses": ["entity"] },
+      { "id": "dto", "name": "DTO", "path": "src/<domaine>/dto/*.dto.ts", "role": "Classes validées par class-validator, documentées pour Swagger.", "uses": [] },
+      { "id": "entity", "name": "Entité", "path": "src/<domaine>/entities/*.entity.ts", "role": "Modèle persistant.", "uses": [] }
+    ],
+    "rules": [
+      "Injection de dépendances partout : jamais de new sur un service.",
+      "Un module n'importe un autre module que pour ce qu'il exporte.",
+      "Validation globale (ValidationPipe whitelist) : les DTO font foi."
+    ],
+    "conventions": ["Fichiers en kebab-case avec suffixe : users.controller.ts, create-user.dto.ts."]
+  },
+  {
+    "id": "spring-boot",
+    "name": "Spring Boot",
+    "scope": "service",
+    "description": "Application Spring Boot en couches web / service / repository, avec DTO, entités JPA et mappers.",
+    "kind": "backend",
+    "tech": "Spring Boot",
+    "layers": [
+      { "id": "controller", "name": "Controller", "path": "src/main/java/**/web/", "role": "@RestController : mapping HTTP, validation (@Valid), codes de retour.", "uses": ["service", "dto"] },
+      { "id": "service", "name": "Service", "path": "src/main/java/**/service/", "role": "@Service : logique métier, @Transactional.", "uses": ["repository", "entity", "dto", "mapper"] },
+      { "id": "repository", "name": "Repository", "path": "src/main/java/**/repository/", "role": "Interfaces Spring Data JPA.", "uses": ["entity"] },
+      { "id": "dto", "name": "DTO", "path": "src/main/java/**/dto/", "role": "Records d'entrée et de sortie, validés (jakarta.validation).", "uses": [] },
+      { "id": "entity", "name": "Entité", "path": "src/main/java/**/domain/", "role": "@Entity JPA.", "uses": [] },
+      { "id": "mapper", "name": "Mapper", "path": "src/main/java/**/mapper/", "role": "MapStruct : entité ↔ DTO.", "uses": ["entity", "dto"] },
+      { "id": "config", "name": "Configuration", "path": "src/main/java/**/config/", "role": "@Configuration, sécurité, beans techniques.", "uses": [] }
+    ],
+    "rules": [
+      "Les entités JPA ne sont jamais renvoyées par un controller.",
+      "@Transactional sur les services, jamais sur les controllers.",
+      "Injection par constructeur uniquement."
+    ],
+    "conventions": ["Paquets par fonctionnalité (com.app.orders.web, …) plutôt que par couche globale."]
+  },
+  {
+    "id": "express",
+    "name": "Express / Fastify (TypeScript)",
+    "scope": "service",
+    "description": "API Node.js en TypeScript : routes, controllers, services, schémas zod, repositories.",
+    "kind": "backend",
+    "tech": "Express + TypeScript",
+    "layers": [
+      { "id": "routes", "name": "Routes", "path": "src/routes/", "role": "Déclare les routes et leurs middlewares.", "uses": ["controller", "schema"] },
+      { "id": "controller", "name": "Controller", "path": "src/controllers/", "role": "Lit la requête validée, appelle le service, formate la réponse.", "uses": ["service", "schema"] },
+      { "id": "service", "name": "Service", "path": "src/services/", "role": "Logique métier.", "uses": ["repository", "schema"] },
+      { "id": "repository", "name": "Repository", "path": "src/repositories/", "role": "Requêtes (Prisma, Knex, Drizzle).", "uses": [] },
+      { "id": "schema", "name": "Schémas", "path": "src/schemas/", "role": "Schémas zod : validation des entrées et types partagés.", "uses": [] }
+    ],
+    "rules": [
+      "Toute entrée est validée par un schéma zod avant le controller.",
+      "Erreurs métier levées comme erreurs typées, traduites en HTTP par un middleware unique."
+    ],
+    "conventions": ["Un fichier par ressource dans chaque couche : users.routes.ts, users.service.ts."]
+  },
+  {
+    "id": "fastapi",
+    "name": "FastAPI",
+    "scope": "service",
+    "description": "API Python FastAPI : routers, schémas Pydantic, services, repositories SQLAlchemy.",
+    "kind": "backend",
+    "tech": "FastAPI",
+    "layers": [
+      { "id": "router", "name": "Router", "path": "app/api/routers/", "role": "Endpoints, dépendances (Depends), codes HTTP.", "uses": ["service", "schema"] },
+      { "id": "service", "name": "Service", "path": "app/services/", "role": "Logique métier.", "uses": ["repository", "schema", "model"] },
+      { "id": "repository", "name": "Repository", "path": "app/repositories/", "role": "Requêtes SQLAlchemy.", "uses": ["model"] },
+      { "id": "schema", "name": "Schémas", "path": "app/schemas/", "role": "Modèles Pydantic d'entrée et de sortie.", "uses": [] },
+      { "id": "model", "name": "Modèles ORM", "path": "app/models/", "role": "Tables SQLAlchemy.", "uses": [] }
+    ],
+    "rules": ["Les routers ne touchent jamais la session SQLAlchemy.", "Réponses typées par response_model."],
+    "conventions": ["snake_case partout ; un module par ressource."]
+  },
+  {
+    "id": "django",
+    "name": "Django + DRF",
+    "scope": "service",
+    "description": "Applications Django par domaine : vues DRF, serializers, services, modèles.",
+    "kind": "backend",
+    "tech": "Django REST Framework",
+    "layers": [
+      { "id": "views", "name": "Vues / ViewSets", "path": "<app>/views.py", "role": "Endpoints DRF, permissions, pagination.", "uses": ["serializers", "services"] },
+      { "id": "serializers", "name": "Serializers", "path": "<app>/serializers.py", "role": "Validation et représentation.", "uses": ["models"] },
+      { "id": "services", "name": "Services", "path": "<app>/services.py", "role": "Logique métier hors des vues et des modèles.", "uses": ["models"] },
+      { "id": "models", "name": "Modèles", "path": "<app>/models.py", "role": "Modèles Django.", "uses": [] }
+    ],
+    "rules": ["Pas de logique métier dans les vues ni les serializers : elle va dans services.py."],
+    "conventions": ["Une application Django par domaine métier."]
+  },
+  {
+    "id": "react-fonctionnalites",
+    "name": "React par fonctionnalités",
+    "scope": "service",
+    "description": "Front React organisé par fonctionnalité : chaque feature regroupe composants, hooks et appels d'API ; un socle partagé pour l'UI.",
+    "kind": "frontend",
+    "tech": "React + TypeScript",
+    "layers": [
+      { "id": "app", "name": "App (routes, providers)", "path": "src/app/", "role": "Routage, providers globaux, mise en page.", "uses": ["features", "shared"] },
+      { "id": "features", "name": "Fonctionnalités", "path": "src/features/<feature>/", "role": "Écrans, composants, hooks et API d'une fonctionnalité.", "uses": ["shared", "api"] },
+      { "id": "api", "name": "Client d'API", "path": "src/api/", "role": "Appels HTTP typés, cache de requêtes (TanStack Query).", "uses": ["shared"] },
+      { "id": "shared", "name": "Partagé (UI, utilitaires)", "path": "src/shared/", "role": "Composants d'interface, hooks et fonctions génériques ; sans métier.", "uses": [] }
+    ],
+    "rules": [
+      "Une fonctionnalité n'importe jamais le code interne d'une autre (seulement son index public).",
+      "Pas d'appel réseau dans un composant : passer par un hook de l'API."
+    ],
+    "conventions": ["Composants en PascalCase, hooks en useXxx, un index.ts public par fonctionnalité."]
+  },
+  {
+    "id": "nextjs",
+    "name": "Next.js (App Router)",
+    "scope": "service",
+    "description": "Next.js App Router : routes et layouts, composants serveur par défaut, actions serveur, accès aux données isolé.",
+    "kind": "frontend",
+    "tech": "Next.js",
+    "layers": [
+      { "id": "app", "name": "Routes (app/)", "path": "app/", "role": "Pages, layouts, loading et error ; composants serveur par défaut.", "uses": ["components", "actions", "data"] },
+      { "id": "components", "name": "Composants", "path": "components/", "role": "Composants d'interface ; 'use client' seulement si nécessaire.", "uses": ["lib"] },
+      { "id": "actions", "name": "Actions serveur", "path": "app/**/actions.ts", "role": "Mutations ('use server'), validées par zod.", "uses": ["data", "lib"] },
+      { "id": "data", "name": "Accès aux données", "path": "lib/data/", "role": "Requêtes base ou API, côté serveur uniquement.", "uses": ["lib"] },
+      { "id": "lib", "name": "Utilitaires", "path": "lib/", "role": "Fonctions partagées.", "uses": [] }
+    ],
+    "rules": ["Aucun accès aux données depuis un composant client.", "Secrets lus côté serveur uniquement."],
+    "conventions": ["Dossiers de route en kebab-case ; colocaliser les composants propres à une route."]
+  },
+  {
+    "id": "tauri",
+    "name": "Tauri (Rust + React)",
+    "scope": "service",
+    "description": "Application de bureau Tauri : commandes Rust fines, services Rust pour la logique, contrat IPC typé, vues React qui passent par des hooks.",
+    "kind": "frontend",
+    "tech": "Tauri 2 + React",
+    "layers": [
+      { "id": "views", "name": "Vues React", "path": "src/views/", "role": "Écrans ; données par des hooks, jamais d'appel IPC direct.", "uses": ["hooks", "components"] },
+      { "id": "components", "name": "Composants", "path": "src/components/", "role": "Composants d'interface réutilisables.", "uses": [] },
+      { "id": "hooks", "name": "Hooks de données", "path": "src/lib/query/", "role": "Appels IPC typés et cache.", "uses": ["ipc"] },
+      { "id": "ipc", "name": "Contrat IPC", "path": "src/lib/ipc/", "role": "Types partagés et noms des commandes (générés depuis Rust).", "uses": [] },
+      { "id": "commands", "name": "Commandes Rust", "path": "src-tauri/src/commands/", "role": "#[tauri::command] fines : valident et délèguent.", "uses": ["services"] },
+      { "id": "services", "name": "Services Rust", "path": "src-tauri/src/", "role": "Logique, accès système, réseau, stockage.", "uses": [] }
+    ],
+    "rules": ["Le webview ne voit jamais de secret.", "Toute commande a son contrat TS, son mock et son hook."],
+    "conventions": ["Types partagés générés (ts-rs), jamais réécrits à la main."]
+  }
+]

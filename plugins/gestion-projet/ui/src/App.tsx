@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { cadence, isCadenceError, type Route } from "@cadence/plugin-sdk";
 import { Callout, Spinner } from "@cadence/ui";
 import { isViewId } from "./domain";
+import { ArchitectureView } from "./views/ArchitectureView";
 import { DesignsView } from "./views/DesignsView";
 import { IssuesView } from "./views/IssuesView";
 import { PlanningView } from "./views/PlanningView";
@@ -51,6 +52,8 @@ export function App() {
       return <VersionsView params={route.params ?? {}} />;
     case "planning":
       return <PlanningView />;
+    case "architecture":
+      return <ArchitectureView />;
     case "designs":
       return <DesignsView />;
     case "pull-requests":
