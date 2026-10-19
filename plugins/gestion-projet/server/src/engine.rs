@@ -339,7 +339,23 @@ impl GestionProjet {
         self.ensure_branch(repo, &record.branch(), &from).await?;
 
         if !record.filled {
-            let issues = self.milestone_issues(repo, number).await?;
+            let mut issues = self.milestone_issues(repo, number).await?;
+            // Les issues reportées comptent même si la liste du milestone ne les montre pas encore
+            // (GitHub met quelques secondes à refléter un changement de milestone).
+            if record
+                .carried
+                .iter()
+                .any(|n| !issues.iter().any(|i| i.number == *n))
+            {
+                let missing: Vec<Issue> = self
+                    .open_issues(repo)
+                    .await?
+                    .into_iter()
+                    .filter(|i| record.carried.contains(&i.number))
+                    .filter(|i| !issues.iter().any(|x| x.number == i.number))
+                    .collect();
+                issues.extend(missing);
+            }
             let load: u32 = issues.iter().map(projet::weight).sum();
             let budget = record.capacity.saturating_sub(load);
             let added = self
