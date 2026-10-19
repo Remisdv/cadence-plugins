@@ -19,6 +19,8 @@ const issue = (repo: string, n: number, title: string, extra: Partial<Issue>): I
   status: "todo",
   type: "feat",
   estimate: null,
+  points: null,
+  priority: null,
   labels: [],
   milestone: "0.1.2",
   assignees: [],
@@ -33,15 +35,17 @@ const issues: Issue[] = [
   issue("RemiSDV/cadence", 156, "Message d'erreur quand le quota de l'API est épuisé", {
     type: "fix",
     status: "doing",
-    estimate: "M",
-    labels: ["type/fix", "status/doing", "estimate/M", "area/api"],
+    points: 3,
+    priority: 1,
+    labels: ["type/fix", "status/doing", "sp/3", "priority/1", "area/api"],
     assignees: ["RemiSDV"],
     updated_at: "2026-10-15T16:00:00Z",
   }),
   issue("RemiSDV/cadence", 149, "Connexion GitHub par device flow", {
     status: "review",
-    estimate: "L",
-    labels: ["type/feat", "status/review", "area/auth"],
+    points: 8,
+    priority: 0,
+    labels: ["type/feat", "status/review", "sp/8", "priority/0", "area/auth"],
   }),
   issue("RemiSDV/cadence-plugins", 12, "Vue Roadmap du plugin Gestion de projet", {
     milestone: "0.3.0",
@@ -152,7 +156,11 @@ const closedIssue = (n: number, title: string, daysAgo: number, extra: Partial<I
 
 const sprintIssues: Issue[] = [
   closedIssue(141, "Écran de connexion GitHub", 7),
-  closedIssue(142, "Device flow GitHub", 5, { estimate: "L" }),
+  closedIssue(142, "Device flow GitHub", 5, {
+    points: 5,
+    priority: 0,
+    labels: ["sp/5", "priority/0"],
+  }),
   closedIssue(143, "Jeton au trousseau", 5, { type: "chore" }),
   closedIssue(145, "Code d'appairage", 2),
   closedIssue(147, "Jeton personnel en repli", 1, { type: "fix" }),
@@ -215,6 +223,11 @@ function sprintSummary(repo: string, title?: string) {
         review: count(list, "review"),
         done: closed,
       },
+      points_total: list.reduce((sum, i) => sum + (i.points ?? 0), 0),
+      points_done: list
+        .filter((i) => i.state === "closed")
+        .reduce((sum, i) => sum + (i.points ?? 0), 0),
+      unestimated: list.filter((i) => i.points === null).length,
       velocity: 0.6,
       delay_days: 1.4,
       burndown,

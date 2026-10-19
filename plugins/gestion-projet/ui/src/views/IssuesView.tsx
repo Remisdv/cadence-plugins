@@ -17,10 +17,12 @@ import {
 } from "@cadence/ui";
 import {
   displayLabels,
+  estimateLabel,
   issueContext,
   issueKey,
   issueStatuses,
   issueTypeTone,
+  priorityInfo,
   repoShortName,
   statusOrder,
   type Issue,
@@ -64,6 +66,11 @@ export function IssuesView() {
     cadence
       .runAction("completer-issue", issueContext(issue))
       .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
+  // Ouvre le chat : l'IA demande le document (texte collé ou fichiers joints), puis crée les issues.
+  const fromDocument = () =>
+    cadence
+      .runAction("extraire-issues", repo ? { repo } : { repos: repos ?? [] })
+      .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
 
   // Une réponse d'une autre sélection (le temps du rechargement) n'est pas affichée.
   const current = data && (repo ? data.repo === repo : data.repo === null) ? data : null;
@@ -98,6 +105,15 @@ export function IssuesView() {
             </button>
           ))}
         </div>
+        <Button
+          size="sm"
+          icon="file"
+          onClick={() => void fromDocument()}
+          disabled={!ready}
+          title="Décrire une fonctionnalité (texte, PDF, artefact…) : l'IA vérifie le code et les issues existantes, puis crée les issues chiffrées en story points"
+        >
+          Depuis un document
+        </Button>
         <Button
           size="sm"
           variant="ghost"
@@ -199,6 +215,13 @@ function IssueRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
+        {issue.priority !== null && issue.priority !== undefined && (
+          <span title={priorityInfo(issue.priority).title}>
+            <Badge tone={priorityInfo(issue.priority).tone}>
+              {priorityInfo(issue.priority).label}
+            </Badge>
+          </span>
+        )}
         {issue.type && <Badge tone={issueTypeTone[issue.type]}>{issue.type}</Badge>}
         {displayLabels(issue.labels)
           .slice(0, 2)
@@ -207,7 +230,7 @@ function IssueRow({
               {l}
             </Badge>
           ))}
-        {issue.estimate && <Badge mono>{issue.estimate}</Badge>}
+        {estimateLabel(issue) && <Badge mono>{estimateLabel(issue)}</Badge>}
         {issue.milestone && (
           <Badge mono tone="clay" icon="tag">
             {issue.milestone}

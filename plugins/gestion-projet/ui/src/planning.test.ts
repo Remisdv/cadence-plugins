@@ -28,6 +28,8 @@ const issue = (number: number, extra: Partial<Issue> = {}): Issue => ({
   status: "todo",
   type: "feat",
   estimate: null,
+  points: null,
+  priority: null,
   labels: [],
   milestone: "0.1.2",
   assignees: [],

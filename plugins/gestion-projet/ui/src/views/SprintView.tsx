@@ -136,7 +136,11 @@ function Sprint({ summary }: { summary: SprintSummary }) {
         <StatCard
           label="Portée"
           value={pace.total}
-          hint={`issues · ${plural(pace.closed, "fermée")}`}
+          hint={
+            pace.points_total > 0
+              ? `issues · ${plural(pace.closed, "fermée")} · ${pace.points_done}/${pace.points_total} SP`
+              : `issues · ${plural(pace.closed, "fermée")}`
+          }
         />
         <StatCard
           label="Avancement"

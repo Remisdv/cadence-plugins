@@ -19,8 +19,10 @@ import {
   type ProgressTone,
 } from "@cadence/ui";
 import {
+  estimateLabel,
   issueStatuses,
   issueTypeTone,
+  priorityInfo,
   repoShortName,
   type Issue,
   type PrState,
@@ -385,15 +387,22 @@ export function IssueCard({ issue, showRepo }: { issue: Issue; showRepo?: boolea
         {issue.type && <Badge tone={issueTypeTone[issue.type]}>type/{issue.type}</Badge>}
       </div>
       <div className="mt-1.5 text-body-sm leading-[1.45] text-tx">{issue.title}</div>
-      {(issue.assignees.length > 0 || issue.estimate) && (
+      {(issue.assignees.length > 0 || estimateLabel(issue) || issue.priority !== null) && (
         <div className="mt-[9px] flex items-center gap-[7px] text-tiny text-tx3">
+          {issue.priority !== null && issue.priority !== undefined && (
+            <span title={priorityInfo(issue.priority).title}>
+              <Badge tone={priorityInfo(issue.priority).tone}>
+                {priorityInfo(issue.priority).label}
+              </Badge>
+            </span>
+          )}
           {issue.assignees.length > 0 && (
             <span className="inline-flex items-center gap-1">
               <Icon name="user" size={12} />
               {issue.assignees.join(", ")}
             </span>
           )}
-          {issue.estimate && <span className="mono">{issue.estimate}</span>}
+          {estimateLabel(issue) && <span className="mono">{estimateLabel(issue)}</span>}
         </div>
       )}
     </button>

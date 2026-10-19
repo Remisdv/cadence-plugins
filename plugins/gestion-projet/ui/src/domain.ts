@@ -13,7 +13,12 @@ export interface Issue {
   state: "open" | "closed";
   status: IssueStatus;
   type: IssueType | null;
+  /** Ancienne estimation en tailles (`estimate/S|M|L|XL`), lue seulement. */
   estimate: string | null;
+  /** Story points (`sp/<n>`, suite de Fibonacci). */
+  points: number | null;
+  /** Priorité (`priority/<n>`) : 0 = socle, puis 1 (la plus urgente) à 5. */
+  priority: number | null;
   labels: string[];
   milestone: string | null;
   assignees: string[];
@@ -89,9 +94,27 @@ export const issueStatuses: Record<IssueStatus, { label: string; dot: DotTone }>
 
 export const statusOrder: IssueStatus[] = ["todo", "doing", "review", "done"];
 
-/** Labels affichés à côté du titre : ni type, ni état, ni estimation (montrés à part). */
+/** Labels affichés à côté du titre : ni type, ni état, ni estimation, ni priorité (montrés à part). */
 export function displayLabels(labels: string[]): string[] {
-  return labels.filter((l) => !/^(type|status|estimate)\//.test(l));
+  return labels.filter((l) => !/^(type|status|estimate|sp|priority)\//.test(l));
+}
+
+/** Priorité d'une issue : 0 = socle, 1 la plus urgente → 5 la moins urgente. */
+export function priorityInfo(priority: number): { label: string; title: string; tone: BadgeTone } {
+  if (priority === 0)
+    return {
+      label: "P0 · socle",
+      title: "Socle : à faire avant tout, d'autres issues en dépendent",
+      tone: "purple",
+    };
+  const tone: BadgeTone = priority === 1 ? "red" : priority === 2 ? "amber" : "muted";
+  return { label: `P${priority}`, title: `Priorité ${priority} sur 5 (1 = la plus urgente)`, tone };
+}
+
+/** Estimation affichée : story points, sinon l'ancienne taille. */
+export function estimateLabel(issue: Pick<Issue, "points" | "estimate">): string | null {
+  if (issue.points !== null && issue.points !== undefined) return `${issue.points} SP`;
+  return issue.estimate;
 }
 
 /** Vues du plugin : celles de la barre du plugin (plugin.toml) et l'étape de setup. */
@@ -157,6 +180,11 @@ export interface Pace {
   /** 0 → 100 */
   progress: number;
   counts: Record<IssueStatus, number>;
+  /** Story points des issues estimées, et des issues fermées. */
+  points_total: number;
+  points_done: number;
+  /** Issues sans story points. */
+  unestimated: number;
   velocity: number;
   /** Retard (positif) ou avance (négatif) sur la droite idéale, en jours. */
   delay_days: number;
