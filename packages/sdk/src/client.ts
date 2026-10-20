@@ -5,6 +5,10 @@ import {
   isMessage,
   type BackendEvent,
   type CheckoutOptions,
+  type ConversationChange,
+  type ConversationDetail,
+  type ConversationInfo,
+  type ConversationQuery,
   type ExternalToolId,
   type ExternalToolStatus,
   type HelloResult,
@@ -26,10 +30,13 @@ import {
 } from "./protocol";
 import type { Port } from "./port";
 
-export const SDK_VERSION = "0.2.0";
+export const SDK_VERSION = "0.3.0";
 
 /** `owner/name` d'un dépôt GitHub. */
 export const REPO_FULL_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/** Identifiant d'un groupe de conversations (`sprint:me/app:3`), sans le préfixe du plugin. */
+export const GROUP_ID = /^[A-Za-z0-9:/._-]{1,120}$/;
 
 /** Identifiant d'un outil du registre de Cadence (`git`, `gh`, `claude`…). */
 export const EXTERNAL_TOOL_ID = /^[a-z][a-z0-9-]*$/;
@@ -128,6 +135,21 @@ export interface Cadence {
      */
     ensure(id: ExternalToolId): Promise<ExternalToolStatus>;
   };
+  /**
+   * Conversations lancées par les actions du plugin courant (jamais celles d'un autre plugin).
+   * Une action dont le contexte porte `group: { id, label }` rattache sa conversation à ce
+   * groupe ; elle est alors masquée du chat global et se liste avec `list({ group: id })`.
+   */
+  conversations: {
+    /** Sans `group` : les conversations visibles du plugin ; avec : celles du groupe (cachées comprises). */
+    list(query?: ConversationQuery): Promise<ConversationInfo[]>;
+    /** Messages (texte complet), appels d'outils (sans leurs sorties) et consommation. */
+    get(id: string): Promise<ConversationDetail>;
+    /** Ouvre la vue Chat de Cadence sur la conversation. */
+    open(id: string): Promise<void>;
+    /** Création ou changement d'état d'une conversation du plugin (événement `conversations`). */
+    onChange(listener: (change: ConversationChange) => void): Unsubscribe;
+  };
   navigate(viewId: string, params?: Record<string, string>): Promise<void>;
   notify(message: string, kind?: NotifyKind): Promise<void>;
   openExternal(url: string): Promise<void>;
@@ -185,6 +207,7 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
   const routeListeners = new Set<(r: Route) => void>();
   const themeListeners = new Set<(t: ThemeTokens) => void>();
   const repoListeners = new Set<(c: ReposChange) => void>();
+  const conversationListeners = new Set<(c: ConversationChange) => void>();
 
   const setTheme = (next: ThemeTokens) => {
     theme = Object.freeze({ ...next });
@@ -232,6 +255,11 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       case "repos": {
         const change = raw.data as ReposChange;
         repoListeners.forEach((l) => l(change));
+        break;
+      }
+      case "conversations": {
+        const change = raw.data as ConversationChange;
+        conversationListeners.forEach((l) => l(change));
         break;
       }
     }
@@ -325,6 +353,16 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       ? Promise.resolve(id)
       : Promise.reject(new CadenceError("invalid_params", `Outil externe invalide : « ${String(id)} ».`));
 
+  const groupId = (id: unknown): Promise<string> =>
+    typeof id === "string" && GROUP_ID.test(id)
+      ? Promise.resolve(id)
+      : Promise.reject(new CadenceError("invalid_params", `Groupe invalide : « ${String(id)} ».`));
+
+  const conversationId = (id: unknown): Promise<string> =>
+    typeof id === "string" && id.trim() !== ""
+      ? Promise.resolve(id)
+      : Promise.reject(new CadenceError("invalid_params", "Identifiant de conversation vide."));
+
   const callRaw = (tool: string, args: Record<string, unknown> = {}, opts?: CallOptions) =>
     request("tool.call", { tool, args }, { timeoutMs: 120_000, ...opts });
 
@@ -404,6 +442,22 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       status: async (id) => request("tools.status", { tool: await toolId(id) }),
       // L'utilisateur lit la commande, installe, se connecte : pas de délai.
       ensure: async (id) => request("tools.ensure", { tool: await toolId(id) }, { timeoutMs: 0 }),
+    },
+    conversations: {
+      async list(query = {}) {
+        const params = query.group === undefined ? {} : { group: await groupId(query.group) };
+        return request("conversations.list", params);
+      },
+      get: async (id) => request("conversations.get", { id: await conversationId(id) }),
+      async open(id) {
+        await request("conversations.open", { id: await conversationId(id) });
+      },
+      onChange(listener) {
+        conversationListeners.add(listener);
+        return () => {
+          conversationListeners.delete(listener);
+        };
+      },
     },
     async navigate(view, params = {}) {
       await request("navigate", { view, params });

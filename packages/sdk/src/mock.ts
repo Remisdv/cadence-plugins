@@ -2,14 +2,22 @@
  * Hôte Cadence simulé, pour développer un écran de plugin hors de l'app (`vite dev`) et pour
  * les tests. Il répond au protocole comme Cadence, avec des outils écrits à la main.
  */
-import { createCadence, type Cadence, type CadenceOptions } from "./client";
+import { createCadence, GROUP_ID, type Cadence, type CadenceOptions } from "./client";
 import { CadenceError } from "./errors";
 import { memoryChannel, type Port } from "./port";
 import {
   API_VERSION,
   CHANNEL,
   isMessage,
+  type AiId,
   type BackendEvent,
+  type ConversationDetail,
+  type ConversationGroup,
+  type ConversationInfo,
+  type ConversationMessage,
+  type ConversationMode,
+  type ConversationState,
+  type ConversationToolUse,
   type EventMessage,
   type ExternalToolStatus,
   type Method,
@@ -57,6 +65,27 @@ export interface MockExternalTool {
   onEnsure?: "install" | "dismiss";
 }
 
+/** Conversation simulée : les champs absents prennent une valeur par défaut. */
+export interface MockConversation extends Partial<Omit<ConversationInfo, "group">> {
+  group?: ConversationGroup;
+  /** Masquée du chat global : vrai par défaut quand `group` est présent, comme dans Cadence. */
+  hidden?: boolean;
+  messages?: ConversationMessage[];
+  tools?: ConversationToolUse[];
+  usage?: ConversationDetail["usage"];
+}
+
+/** Conversations simulées ; `action.run` en crée une à chaque action déclenchée. */
+export interface MockConversationsOptions {
+  /** Conversations déjà présentes (plugin courant). */
+  conversations?: MockConversation[];
+  /** Mode des actions (`[[actions]] mode`), par identifiant : `chat` par défaut. */
+  modes?: Record<string, ConversationMode>;
+  /** IA et modèle des conversations créées par `action.run`. */
+  ai?: AiId;
+  model?: string;
+}
+
 export interface MockHostOptions {
   plugin?: PluginInfo;
   theme?: ThemeTokens;
@@ -75,6 +104,8 @@ export interface MockHostOptions {
    * outil du registre absent d'ici rejette en `denied`, un identifiant inconnu en `not_found`.
    */
   externalTools?: Record<string, MockExternalTool>;
+  /** Conversations du plugin (`conversations.*`). */
+  conversations?: MockConversationsOptions;
   /** Version d'API annoncée (pour tester le refus de version). */
   api?: number;
 }
@@ -99,8 +130,41 @@ export interface MockHost {
   readonly externalTools: Readonly<Record<string, ExternalToolStatus>>;
   /** Simule une nouvelle détection (installation faite hors de Cadence, chemin personnalisé…). */
   setExternalTool(id: string, status: ExternalToolStatus): void;
+  /** Conversations du plugin, groupes cachés compris (`hidden`). */
+  readonly conversations: readonly (ConversationInfo & { hidden: boolean })[];
+  /** Conversations ouvertes par `conversations.open`, dans l'ordre. */
+  readonly opened: readonly string[];
+  /** Ajoute une conversation (lancée hors de l'écran) et émet l'événement `conversations`. */
+  addConversation(conversation: MockConversation): ConversationInfo;
+  /** Change l'état d'une conversation et émet l'événement `conversations`. */
+  setConversationState(id: string, state: ConversationState): void;
   dispose(): void;
 }
+
+interface StoredConversation {
+  info: ConversationInfo;
+  hidden: boolean;
+  messages: ConversationMessage[];
+  tools: ConversationToolUse[];
+  usage?: ConversationDetail["usage"];
+}
+
+/** Groupe du champ réservé `group` d'un contexte d'action (`invalid_params` s'il est mal formé). */
+function actionGroup(context: unknown): { group: ConversationGroup; hidden: boolean } | null {
+  if (typeof context !== "object" || context === null) return null;
+  const raw = (context as { group?: unknown }).group;
+  if (raw === undefined || raw === null) return null;
+  const g = raw as { id?: unknown; label?: unknown; hidden?: unknown };
+  if (typeof g !== "object" || typeof g.id !== "string" || !GROUP_ID.test(g.id)) {
+    throw new CadenceError("invalid_params", "Groupe invalide : id attendu [A-Za-z0-9:/._-]{1,120}.");
+  }
+  if (typeof g.label !== "string" || !g.label.trim()) {
+    throw new CadenceError("invalid_params", "Groupe sans libellé (label).");
+  }
+  return { group: { id: g.id, label: g.label }, hidden: g.hidden !== false };
+}
+
+let conversationSeq = 0;
 
 /** Fiche d'un dépôt à partir de `owner/name`. */
 export function repoInfo(repo: string | RepoInfo): RepoInfo {
@@ -143,6 +207,46 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
     throw new CadenceError("not_found", `Outil externe inconnu de Cadence : ${id}.`);
   };
 
+  const conversationOptions = options.conversations ?? {};
+  const conversations: StoredConversation[] = [];
+  const opened: string[] = [];
+  const store = (c: MockConversation): StoredConversation => {
+    const now = new Date().toISOString();
+    const { hidden, messages, tools, usage, group, ...info } = c;
+    const stored: StoredConversation = {
+      info: {
+        id: info.id ?? `conv-${++conversationSeq}`,
+        title: info.title ?? "Conversation",
+        ai: info.ai ?? conversationOptions.ai ?? "claude-code",
+        model: info.model ?? conversationOptions.model ?? "claude-sonnet",
+        state: info.state ?? "idle",
+        mode: info.mode ?? "chat",
+        createdAt: info.createdAt ?? now,
+        updatedAt: info.updatedAt ?? info.createdAt ?? now,
+        turns: info.turns ?? messages?.length ?? 0,
+        ...(info.action !== undefined ? { action: info.action } : {}),
+        ...(info.context !== undefined ? { context: info.context } : {}),
+        ...(group ? { group } : {}),
+      },
+      hidden: hidden ?? !!group,
+      messages: messages ?? [],
+      tools: tools ?? [],
+      ...(usage ? { usage } : {}),
+    };
+    conversations.push(stored);
+    return stored;
+  };
+  (conversationOptions.conversations ?? []).forEach(store);
+  const conversation = (id: string): StoredConversation => {
+    const c = conversations.find((x) => x.info.id === id);
+    if (!c) throw new CadenceError("not_found", `Conversation inconnue : ${id}.`);
+    return c;
+  };
+  const conversationChanged = (c: StoredConversation) => {
+    const { id, group, state } = c.info;
+    queueMicrotask(() => send("conversations", { id, state, ...(group ? { group } : {}) }));
+  };
+
   const send = <T extends Topic>(topic: T, data: Topics[T]) => {
     const message: EventMessage<T> = { channel: CHANNEL, api: API_VERSION, kind: "event", topic, data };
     port.post(message);
@@ -182,6 +286,18 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
         }
       }
       case "action.run": {
+        const grouped = actionGroup(params.context);
+        const hasContext = typeof params.context === "object" && params.context !== null;
+        const { group: _group, ...context } = hasContext ? params.context : {};
+        const created = store({
+          title: String(params.action),
+          action: String(params.action),
+          mode: conversationOptions.modes?.[params.action] ?? "chat",
+          state: "running",
+          ...(hasContext ? { context } : {}),
+          ...(grouped ?? {}),
+        });
+        conversationChanged(created);
         const runId = `run-${++runSeq}`;
         queueMicrotask(() => send("run", { runId, status: "queued", message: `Action ${params.action}` }));
         return { runId };
@@ -238,6 +354,26 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
         externalTools[params.tool] = next;
         return { ...next };
       }
+      case "conversations.list": {
+        const group: unknown = params.group;
+        if (group !== undefined && (typeof group !== "string" || !GROUP_ID.test(group))) {
+          throw new CadenceError("invalid_params", `Groupe invalide : « ${String(group)} ».`);
+        }
+        const list =
+          group === undefined
+            ? conversations.filter((c) => !c.hidden)
+            : conversations.filter((c) => c.info.group?.id === group);
+        // Les plus récentes d'abord, comme la liste du chat.
+        return list.map((c) => c.info).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      }
+      case "conversations.get": {
+        const c = conversation(params.id);
+        return { info: c.info, messages: c.messages, tools: c.tools, ...(c.usage ? { usage: c.usage } : {}) };
+      }
+      case "conversations.open":
+        conversation(params.id);
+        opened.push(params.id);
+        return null;
       case "navigate":
         route = { view: params.view, params: params.params ?? {} };
         queueMicrotask(() => send("route", route));
@@ -314,6 +450,22 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
     },
     setExternalTool(id, status) {
       externalTools[id] = { ...status };
+    },
+    get conversations() {
+      return conversations.map((c) => ({ ...c.info, hidden: c.hidden }));
+    },
+    get opened() {
+      return opened;
+    },
+    addConversation(c) {
+      const stored = store(c);
+      conversationChanged(stored);
+      return stored.info;
+    },
+    setConversationState(id, state) {
+      const c = conversation(id);
+      c.info = { ...c.info, state, updatedAt: new Date().toISOString() };
+      conversationChanged(c);
     },
     dispose: stop,
   };

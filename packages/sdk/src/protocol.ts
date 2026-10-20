@@ -10,7 +10,8 @@
  * Le premier appel est toujours `hello` : il négocie la version d'API et renvoie le contexte
  * (plugin, thème, route affichée). Il n'y a pas d'espace de travail (révision 1.1) : un plugin
  * est global et gère son propre contexte, par exemple les dépôts suivis du service `repos`.
- * Les outils externes dont il dépend (`[[requires]]`, révision 1.2) se consultent par `tools.*`.
+ * Les outils externes dont il dépend (`[[requires]]`, révision 1.2) se consultent par `tools.*`,
+ * les conversations lancées par ses actions par `conversations.*`.
  */
 
 export const API_VERSION = 1 as const;
@@ -144,6 +145,91 @@ export interface ExternalToolStatus {
   authenticated: boolean | null;
 }
 
+/* ---------- Conversations (sessions de chat lancées par les actions du plugin) ---------- */
+
+/** État d'une conversation dans Cadence. */
+export type ConversationState = "idle" | "running" | "waiting-approval" | "failed" | "interrupted";
+
+/** Mode de l'action qui a lancé la conversation (`[[actions]] mode`). */
+export type ConversationMode = "chat" | "background";
+
+/**
+ * Groupe de conversations, propre au plugin (`sprint:me/app:3`) : Cadence le préfixe par l'id du
+ * plugin, un plugin ne voit donc que ses propres groupes.
+ */
+export interface ConversationGroup {
+  /** `[A-Za-z0-9:/._-]{1,120}` (voir `GROUP_ID`). */
+  id: string;
+  /** Libellé de la puce affichée dans le chat (« Sprint 3 · me/app »). */
+  label: string;
+}
+
+/**
+ * Champ réservé `group` du contexte d'une action : la conversation lancée est rattachée au groupe.
+ * `hidden` (vrai par défaut) la retire du chat global et de « Conversations » de la barre du
+ * plugin : on la retrouve par `conversations.list({ group })`.
+ */
+export interface ActionGroup extends ConversationGroup {
+  hidden?: boolean;
+}
+
+/** Conversation lancée par une action du plugin courant (dates ISO 8601). */
+export interface ConversationInfo {
+  id: string;
+  title: string;
+  /** IA qui répond (`claude-code`, `codex`, `opencode`…). */
+  ai: AiId;
+  model: string;
+  state: ConversationState;
+  mode: ConversationMode;
+  /** Identifiant de l'action du manifeste, si la conversation vient d'une action. */
+  action?: string;
+  /** Contexte passé à l'action. */
+  context?: Record<string, unknown>;
+  group?: ConversationGroup;
+  createdAt: string;
+  updatedAt: string;
+  /** Nombre de tours (messages de l'utilisateur et réponses). */
+  turns: number;
+}
+
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  /** Texte complet du message. */
+  text: string;
+  at: string;
+}
+
+/** Appel d'outil de la conversation (sa sortie n'est pas transmise). */
+export interface ConversationToolUse {
+  name: string;
+  ok: boolean;
+  at: string;
+}
+
+/** Conversation complète (`conversations.get`), par exemple pour exporter un sprint. */
+export interface ConversationDetail {
+  info: ConversationInfo;
+  messages: ConversationMessage[];
+  tools: ConversationToolUse[];
+  usage?: { inputTokens: number; outputTokens: number };
+}
+
+/** Événement `conversations` : création ou changement d'état d'une conversation du plugin. */
+export interface ConversationChange {
+  id: string;
+  group?: ConversationGroup;
+  state: ConversationState;
+}
+
+export interface ConversationQuery {
+  /**
+   * Identifiant de groupe (sans le préfixe du plugin). Absent : les conversations visibles du
+   * plugin, sans celles des groupes cachés.
+   */
+  group?: string;
+}
+
 /** Événement émis par le backend du plugin (`notifications/cadence/event`). */
 export interface BackendEvent {
   name: string;
@@ -167,6 +253,9 @@ export interface Methods {
   "repos.checkout": { params: { repo: string; task?: string }; result: { path: string } };
   "tools.status": { params: { tool: string }; result: ExternalToolStatus };
   "tools.ensure": { params: { tool: string }; result: ExternalToolStatus };
+  "conversations.list": { params: ConversationQuery; result: ConversationInfo[] };
+  "conversations.get": { params: { id: string }; result: ConversationDetail };
+  "conversations.open": { params: { id: string }; result: null };
   navigate: { params: Route; result: null };
   notify: { params: { message: string; kind: NotifyKind }; result: null };
   openExternal: { params: { url: string }; result: null };
@@ -183,6 +272,7 @@ export interface Topics {
   theme: ThemeTokens;
   route: Route;
   repos: ReposChange;
+  conversations: ConversationChange;
 }
 
 export type Topic = keyof Topics;

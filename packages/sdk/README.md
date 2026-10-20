@@ -32,6 +32,7 @@ const files = await cadence.pickFiles({ multiple: true, filters: [{ name: "Cours
 | `settings.get / set` | réglages globaux du plugin (`[settings]`) |
 | `repos.*` | service `repos` de Cadence (voir plus bas) |
 | `tools.status / ensure` | outils externes déclarés par `[[requires]]` (voir plus bas) |
+| `conversations.*` | conversations lancées par les actions du plugin, groupes (voir plus bas) |
 | `navigate(view, params?)`, `notify(message, kind?)` | navigation et notifications de Cadence |
 | `openExternal(url)`, `pickFiles(options)` | navigateur par défaut, sélecteur de fichiers natif |
 | `theme`, `onTheme` | variables CSS injectées (`--color-*`, `--text-*`…) |
@@ -92,6 +93,40 @@ n'est installé sans clic de l'utilisateur, et l'écran ne voit jamais les ident
 Le serveur du plugin, lui, trouve leurs exécutables dans `CADENCE_TOOLS` (JSON : id → chemin
 absolu).
 
+## Conversations
+
+Chaque action du manifeste lancée par `runAction` ouvre une conversation dans Cadence (mode chat
+ou fond). L'écran retrouve celles **de son plugin** (jamais celles d'un autre) :
+
+```ts
+// Rattacher la conversation à un groupe : champ réservé `group` du contexte.
+await cadence.runAction("implementer-issue", {
+  type: "issue",
+  repo: "me/app",
+  issue: 42,
+  group: { id: "sprint:me/app:3", label: "Sprint 3 · me/app" }, // hidden: true par défaut
+});
+
+const list = await cadence.conversations.list({ group: "sprint:me/app:3" });
+// [{ id, title, ai, model, state, mode, action, context, group, createdAt, updatedAt, turns }]
+cadence.conversations.onChange(({ id, group, state }) => refetch());
+await cadence.conversations.open(list[0].id); // vue Chat de Cadence sur cette conversation
+const { info, messages, tools, usage } = await cadence.conversations.get(list[0].id);
+```
+
+| API | Rôle |
+| --- | --- |
+| `conversations.list({ group? })` | sans `group` : les conversations visibles du plugin ; avec : celles du groupe, cachées comprises (`ConversationInfo[]`, plus récentes d'abord) |
+| `conversations.get(id)` | `{ info, messages: [{ role, text, at }], tools: [{ name, ok, at }], usage? }` : texte complet des messages, appels d'outils sans leurs sorties (export) |
+| `conversations.open(id)` | ouvre la vue Chat sur la conversation (avec la puce du groupe et « Retour ») |
+| `conversations.onChange(listener)` | événement `conversations` `{ id, group?, state }` à chaque création ou changement d'état |
+
+`group.id` suit `[A-Za-z0-9:/._-]{1,120}` (`GROUP_ID`) et reste propre au plugin : Cadence le
+préfixe par l'id du plugin. `hidden` (vrai par défaut dès que `group` est présent) retire la
+conversation du chat global et de « Conversations » de la barre du plugin : on la voit depuis
+l'écran du plugin, qui l'ouvre avec `open`. États : `idle`, `running`, `waiting-approval`,
+`failed`, `interrupted` ; modes : `chat`, `background`. Dates ISO 8601.
+
 ## Erreurs
 
 Toutes les promesses rejettent avec une `CadenceError` dont le `code` vaut `not_connected`,
@@ -120,12 +155,16 @@ setCadence(
       tools: { list_issues: () => ({ issues: [{ number: 1, title: "Exemple" }] }) },
       repos: { repos: ["me/app", "me/site"] }, // service repos simulé
       externalTools: { git: { installed: true, version: "2.45.1" }, gh: { authenticated: false } },
+      // Conversations simulées ; chaque runAction en crée une (groupe du contexte compris).
+      conversations: { conversations: [{ title: "Question libre", state: "idle" }] },
     },
   }),
 );
 ```
 
-`connectMock` et `createMockHost` servent aussi dans les tests.
+`connectMock` et `createMockHost` servent aussi dans les tests : `host.addConversation`,
+`host.setConversationState` (émettent l'événement `conversations`) et `host.opened` simulent le
+chat de Cadence.
 
 ## Protocole
 
@@ -134,8 +173,10 @@ Messages `{ channel: "cadence", api: 1, kind, … }` :
 - `request` (plugin → Cadence) : `{ id, method, params }`, méthodes `hello`, `tool.call`,
   `action.run`, `secrets.set`, `secrets.has`, `settings.get`, `settings.set`, `repos.list`,
   `repos.selection`, `repos.follow`, `repos.unfollow`, `repos.checkout`, `tools.status`,
-  `tools.ensure`, `navigate`, `notify`, `openExternal`, `pickFiles` ;
+  `tools.ensure`, `conversations.list`, `conversations.get`, `conversations.open`, `navigate`,
+  `notify`, `openExternal`, `pickFiles` ;
 - `response` (Cadence → plugin) : `{ id, ok: true, result }` ou `{ id, ok: false, error: { code, message, data? } }` ;
-- `event` (Cadence → plugin) : `{ topic, data }`, sujets `event`, `run`, `theme`, `route`, `repos`.
+- `event` (Cadence → plugin) : `{ topic, data }`, sujets `event`, `run`, `theme`, `route`, `repos`,
+  `conversations`.
 
 Les types sont dans `src/protocol.ts`.

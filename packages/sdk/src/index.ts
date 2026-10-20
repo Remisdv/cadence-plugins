@@ -7,6 +7,9 @@
  * const issues = await cadence.call("list_issues", { state: "open" });
  * const runId = await cadence.runAction("implementer-issue", { repo: "me/app", issue: 42 });
  * cadence.onRun(runId, (u) => console.log(u.status, u.message));
+ *
+ * const sprint = await cadence.conversations.list({ group: "sprint:me/app:3" });
+ * cadence.conversations.onChange(() => refetch());
  * ```
  */
 import { createCadence, type Cadence, type CadenceOptions } from "./client";
@@ -15,13 +18,22 @@ import { windowPort } from "./port";
 
 export * from "./protocol";
 export * from "./errors";
-export { createCadence, toolValue, SDK_VERSION, REPO_FULL_NAME, EXTERNAL_TOOL_ID } from "./client";
+export {
+  createCadence,
+  toolValue,
+  SDK_VERSION,
+  REPO_FULL_NAME,
+  EXTERNAL_TOOL_ID,
+  GROUP_ID,
+} from "./client";
 export type { Cadence, CadenceOptions, CallOptions, Unsubscribe } from "./client";
 export { windowPort, memoryChannel, type Port } from "./port";
 export {
   createMockHost,
   connectMock,
   repoInfo,
+  type MockConversation,
+  type MockConversationsOptions,
   type MockHost,
   type MockExternalTool,
   type MockHostOptions,

@@ -9,6 +9,7 @@ import {
   isMessage,
   memoryChannel,
   toolValue,
+  type ConversationChange,
   type ReposChange,
   type RunUpdate,
 } from "./index";
@@ -259,6 +260,108 @@ describe("outils externes", () => {
     await expect(cadence.tools.ensure("docker")).rejects.toMatchObject({ code: "not_found" });
     await expect(cadence.tools.status("Git CLI")).rejects.toMatchObject({ code: "invalid_params" });
     expect(host.requests.some((r) => (r.params as { tool?: string }).tool === "Git CLI")).toBe(false);
+  });
+});
+
+describe("conversations", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const sprint = { id: "sprint:me/app:3", label: "Sprint 0.3.0 · me/app" };
+
+  it("rattache la conversation d'une action à son groupe, masquée du chat global", async () => {
+    const { cadence, host } = connectMock({
+      conversations: {
+        modes: { "implementer-issue": "background" },
+        conversations: [{ id: "c-libre", title: "Question libre", updatedAt: "2026-10-01T09:00:00Z" }],
+      },
+    });
+    await cadence.ready();
+    const changes: ConversationChange[] = [];
+    const off = cadence.conversations.onChange((c) => changes.push(c));
+
+    await cadence.runAction("developper-sprint", { repo: "me/app", group: sprint });
+    await cadence.runAction("implementer-issue", { type: "issue", repo: "me/app", issue: 42, group: sprint });
+    await cadence.runAction("completer-issue", { type: "issue", repo: "me/app", issue: 7 });
+    await tick();
+
+    // Sans groupe : les conversations visibles seulement.
+    const visible = await cadence.conversations.list();
+    expect(visible.map((c) => c.action ?? c.id).sort()).toEqual(["c-libre", "completer-issue"]);
+    // Avec le groupe : celles du sprint, cachées comprises, contexte sans le champ réservé.
+    const grouped = await cadence.conversations.list({ group: sprint.id });
+    expect(grouped.map((c) => c.action).sort()).toEqual(["developper-sprint", "implementer-issue"]);
+    const implement = grouped.find((c) => c.action === "implementer-issue")!;
+    expect(implement).toMatchObject({
+      mode: "background",
+      state: "running",
+      group: sprint,
+      context: { type: "issue", repo: "me/app", issue: 42 },
+    });
+    expect(implement.context).not.toHaveProperty("group");
+    expect(await cadence.conversations.list({ group: "sprint:me/app:4" })).toEqual([]);
+
+    // Un événement par création, puis par changement d'état.
+    host.setConversationState(implement.id, "waiting-approval");
+    await tick();
+    off();
+    host.setConversationState(implement.id, "idle");
+    await tick();
+    expect(changes).toHaveLength(4);
+    expect(changes.at(-1)).toEqual({ id: implement.id, group: sprint, state: "waiting-approval" });
+    expect(changes.find((c) => !c.group)?.state).toBe("running");
+  });
+
+  it("un groupe non caché reste dans le chat global", async () => {
+    const { cadence } = connectMock();
+    await cadence.runAction("relire-valider", { type: "review", group: { ...sprint, hidden: false } });
+    expect((await cadence.conversations.list()).map((c) => c.group)).toEqual([sprint]);
+  });
+
+  it("lit une conversation complète et l'ouvre dans le chat", async () => {
+    const { cadence, host } = connectMock({
+      conversations: {
+        conversations: [
+          {
+            id: "c1",
+            title: "Développer l'issue #42",
+            group: sprint,
+            messages: [
+              { role: "user", text: "Développe #42", at: "2026-10-20T08:00:00Z" },
+              { role: "assistant", text: "PR #51 ouverte.", at: "2026-10-20T08:20:00Z" },
+            ],
+            tools: [{ name: "gestion-projet__create_pull_request", ok: true, at: "2026-10-20T08:19:00Z" }],
+            usage: { inputTokens: 1200, outputTokens: 300 },
+          },
+        ],
+      },
+    });
+    const detail = await cadence.conversations.get("c1");
+    expect(detail.info).toMatchObject({ id: "c1", turns: 2, group: sprint });
+    expect(detail.messages[1]?.text).toBe("PR #51 ouverte.");
+    expect(detail.tools).toEqual([{ name: "gestion-projet__create_pull_request", ok: true, at: "2026-10-20T08:19:00Z" }]);
+    expect(detail.usage).toEqual({ inputTokens: 1200, outputTokens: 300 });
+    await cadence.conversations.open("c1");
+    expect(host.opened).toEqual(["c1"]);
+    expect(host.requests.at(-1)).toEqual({ method: "conversations.open", params: { id: "c1" } });
+    await expect(cadence.conversations.get("absente")).rejects.toMatchObject({ code: "not_found" });
+    await expect(cadence.conversations.open("absente")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("refuse un groupe mal formé", async () => {
+    const { cadence, host } = connectMock();
+    await expect(cadence.conversations.list({ group: "sprint 3" })).rejects.toMatchObject({ code: "invalid_params" });
+    await expect(cadence.conversations.list({ group: "x".repeat(121) })).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    expect(host.requests.some((r) => r.method === "conversations.list")).toBe(false);
+    await expect(cadence.conversations.get("")).rejects.toMatchObject({ code: "invalid_params" });
+    // Groupe d'action invalide : refusé par l'hôte.
+    await expect(
+      cadence.runAction("developper-sprint", { group: { id: "sprint 3", label: "Sprint 3" } }),
+    ).rejects.toMatchObject({ code: "invalid_params" });
+    await expect(cadence.runAction("developper-sprint", { group: { id: "sprint:3" } })).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    expect(host.conversations).toEqual([]);
   });
 });
 
