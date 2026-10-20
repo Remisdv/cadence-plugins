@@ -409,19 +409,110 @@ export function IssueCard({ issue, showRepo }: { issue: Issue; showRepo?: boolea
   );
 }
 
-export function KanbanColumn({ column }: { column: BoardColumn }) {
+/** Colonne « En revue » sélectionnable : case par tâche, « Relire », PR liée et sa CI. */
+export interface ReviewControls {
+  selected: ReadonlySet<number>;
+  onToggle: (issue: Issue) => void;
+  /** Coche ou décoche toutes les tâches de la colonne. */
+  onToggleAll: (issues: Issue[], select: boolean) => void;
+  onReview: (issue: Issue) => void;
+  pullRequestOf: (issue: Issue) => PullRequest | null;
+  disabled?: boolean;
+}
+
+/** Carte d'une tâche en revue : case à cocher, n°, titre, PR et CI, bouton « Relire ». */
+export function ReviewCard({ issue, review }: { issue: Issue; review: ReviewControls }) {
+  const pr = review.pullRequestOf(issue);
+  const checked = review.selected.has(issue.number);
+  return (
+    <div
+      className={cn(
+        "rounded-field border bg-p2 px-[11px] py-2.5 transition-colors",
+        checked ? "border-blue-line" : "border-line hover:border-line2",
+      )}
+    >
+      <div className="flex items-center gap-[7px]">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={review.disabled}
+          onChange={() => review.onToggle(issue)}
+          aria-label={`Sélectionner #${issue.number} pour la revue`}
+        />
+        <span className="mono text-tiny text-tx3">#{issue.number}</span>
+        <div className="grow" />
+        {issue.type && <Badge tone={issueTypeTone[issue.type]}>type/{issue.type}</Badge>}
+      </div>
+      <button
+        type="button"
+        onClick={() => void cadence.openExternal(issue.url)}
+        title="Ouvrir sur GitHub"
+        className="mt-1.5 block text-left text-body-sm leading-[1.45] text-tx hover:text-clay"
+      >
+        {issue.title}
+      </button>
+      <div className="mt-[9px] flex flex-wrap items-center gap-x-[7px] gap-y-1.5 text-tiny text-tx3">
+        {pr ? (
+          <button
+            type="button"
+            className="mono inline-flex items-center gap-1 hover:text-tx"
+            onClick={() => void cadence.openExternal(pr.url)}
+            title={`${pr.title} (${prStateMeta[pr.state].label})`}
+          >
+            <Icon name="pullRequest" size={12} />#{pr.number}
+          </button>
+        ) : (
+          <span title="Aucune PR ouverte ne déclare fermer cette issue">sans PR</span>
+        )}
+        {pr && <CiStatus ci={pr.ci} />}
+        <div className="grow" />
+        <Button
+          size="xs"
+          variant="ghost"
+          icon="review"
+          disabled={review.disabled}
+          onClick={() => review.onReview(issue)}
+          title="L'IA relit la PR (diff, CI, critères), puis, après votre accord, approuve, fusionne et ferme l'issue"
+        >
+          Relire
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function KanbanColumn({ column, review }: { column: BoardColumn; review?: ReviewControls }) {
   const meta = issueStatuses[column.status];
+  const allSelected =
+    !!review && column.issues.length > 0 && column.issues.every((i) => review.selected.has(i.number));
   return (
     <div className="flex min-w-[150px] flex-1 flex-col gap-[9px]">
       <div className="flex items-center gap-[7px] px-0.5">
         <StatusDot tone={meta.dot} size={7} />
         <span className="text-small font-semibold">{meta.label}</span>
         <span className="mono text-tiny text-tx3">{column.total}</span>
+        {review && column.issues.length > 1 && (
+          <>
+            <div className="grow" />
+            <input
+              type="checkbox"
+              checked={allSelected}
+              disabled={review.disabled}
+              onChange={() => review.onToggleAll(column.issues, !allSelected)}
+              aria-label="Sélectionner toutes les tâches en revue"
+              title="Tout sélectionner"
+            />
+          </>
+        )}
       </div>
       <div className="flex flex-col gap-2">
-        {column.issues.map((issue) => (
-          <IssueCard key={`${issue.repo}#${issue.number}`} issue={issue} />
-        ))}
+        {column.issues.map((issue) =>
+          review ? (
+            <ReviewCard key={`${issue.repo}#${issue.number}`} issue={issue} review={review} />
+          ) : (
+            <IssueCard key={`${issue.repo}#${issue.number}`} issue={issue} />
+          ),
+        )}
         {column.total > column.issues.length && (
           <span className="px-0.5 text-tiny text-tx3">
             + {column.total - column.issues.length} autre

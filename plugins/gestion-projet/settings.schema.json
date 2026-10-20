@@ -18,6 +18,13 @@
       "default": 14,
       "minimum": 1,
       "maximum": 90
+    },
+    "merge_method": {
+      "type": "string",
+      "title": "Fusion des pull requests",
+      "description": "Méthode utilisée quand l'IA fusionne une PR validée (« Relire et valider ») : squash (un seul commit), merge (commit de fusion) ou rebase.",
+      "enum": ["squash", "merge", "rebase"],
+      "default": "squash"
     }
   }
 }

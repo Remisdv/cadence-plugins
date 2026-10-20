@@ -18,10 +18,11 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
 - **Réglages globaux** (`settings.schema.json`, reçus en `CADENCE_SETTINGS` puis
   `notifications/cadence/settings`) :
 
-  | Clé                  | Défaut | Rôle                                   |
-  | -------------------- | ------ | -------------------------------------- |
-  | `tag_prefix`         | `v`    | préfixe des tags de version (`v0.1.2`) |
-  | `sprint_length_days` | `14`   | durée d'un nouveau sprint              |
+  | Clé                  | Défaut   | Rôle                                                              |
+  | -------------------- | -------- | ----------------------------------------------------------------- |
+  | `tag_prefix`         | `v`      | préfixe des tags de version (`v0.1.2`)                            |
+  | `sprint_length_days` | `14`     | durée d'un nouveau sprint                                         |
+  | `merge_method`       | `squash` | fusion des PR par l'IA (`squash`, `merge` ou `rebase`), « Relire et valider » compris |
 
 - **Dépendances externes** : celles du service `repos`, que le plugin ne redéclare pas — `git`
   (requis, pour cloner et préparer les worktrees) et `gh` (optionnel, connecté, pour réutiliser
@@ -43,7 +44,7 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 
 | Vue                             | Section        | État                                                                                                                                                                                                   |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; un sprint par dépôt en mode « Tous les dépôts » |
+| Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; colonne « En revue » sélectionnable (« Relire », « Relire la sélection (n) ») ; **Conversations du sprint** ; un sprint par dépôt en mode « Tous les dépôts » |
 | Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
 | Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
 | Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
@@ -77,11 +78,38 @@ version) et, pour une action qui déclare un type de contexte, `type` égal à c
 | Proposer des issues | `proposer-issues`   | chat | `{ "type": "jalon", "repo", "jalon": "mvp" }` | CEO      |
 | Importer un design  | `importer-design`   | chat | `{ "type": "design", "repo", "design", "url", "name" }` | — |
 | Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
-| Développer le sprint | `developper-sprint` | chat | `{ "repo": "me/app" }` (ou `issues`)       | développeur |
+| Développer le sprint | `developper-sprint` | chat | `{ "repo": "me/app", "group" }` (ou `issues`) | développeur |
 | Relire les PR       | `relire-pr`         | chat | `{ "repo", "number" }` (`number` facultatif : tout le sprint) | relecteur |
+| Relire et valider   | `relire-valider`    | chat | `{ "type": "review", "repo", "items": [{ "issue": 42, "pr": 51 }], "group" }` | relecteur |
 | Créer un design     | `creer-design`      | chat | `{ "repo", "design" }` (`design` pour modifier) | —      |
 | Adapter le code à l'architecture | `adapter-architecture` | chat | `{ "repo", "service" }` (service facultatif) | — |
 | Préparer la release | `preparer-release`  | fond | `{ "type": "version", "repo", "version" }` | déploiement |
+
+### Conversations du sprint
+
+« Développer le sprint », « Implémenter » sur une issue d'un sprint (milestone daté) et la revue
+groupée ajoutent au contexte le champ réservé de Cadence
+`group: { "id": "sprint:<repo>:<n° du milestone>", "label": "Sprint <version> · <repo>" }`
+(`sprintGroup`, `issueGroup` de `ui/src/domain.ts`) ; sans sprint, pas de groupe (conversation
+normale). Cadence masque ces conversations du chat global et de « Conversations » de la barre du
+plugin : l'écran « Sprint en cours » les liste dans **Conversations du sprint**
+(`cadence.conversations.list({ group })`, rafraîchie à chaque événement `conversations`) avec leur
+état, l'action, l'IA, les issues concernées et la date, et les ouvre dans le chat
+(`conversations.open`). Le numéro du milestone sert de clé : renommer la version ne sépare pas les
+conversations.
+
+### Revue groupée : « Relire et valider »
+
+Dans la colonne « En revue » du sprint, chaque tâche a une case à cocher, sa PR (celle qui déclare
+fermer l'issue, avec sa CI) et un bouton **Relire** ; la barre **Relire la sélection (n)** lance la
+même action pour toutes les tâches cochées, dans **une seule conversation**. Le skill
+`relire-valider` relit chaque PR (diff, CI, critères d'acceptation, architecture), rend un verdict
+par tâche et **demande la confirmation explicite** de l'utilisateur ; ensuite seulement, pour chaque
+tâche validée : `review_pull_request` (APPROVE), sortie du brouillon, `merge_pull_request` (méthode
+du réglage `merge_method`, squash par défaut ; `delete_branch`, `close_issues`), issue fermée et
+passée en terminé ; une tâche refusée reçoit une revue « changes requested » et repasse en cours.
+Une PR à la CI rouge n'est jamais fusionnée. L'écran Pull requests liste des PR, pas des tâches :
+il garde « Relire les PR » (`relire-pr`).
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
 ou modifient le code demandent d'abord un worktree avec l'outil du cœur `cadence__repo_checkout`
@@ -99,7 +127,7 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `get_account`, `list_account_repos` (réservés à l'UI) | ✓ compte connecté, dépôts du compte à suivre                                                                                                                 |
 | `get_repository`                                      | ✓ branche par défaut, préfixe de tag                                                                                                                         |
 | `list_issues`                                         | ✓ `repo` absent : tous les dépôts suivis (chaque issue porte `repo`, erreurs par dépôt dans `errors`)                                                        |
-| `get_issue`, `create_issue`, `update_issue`           | ✓ API REST GitHub                                                                                                                                            |
+| `get_issue`, `create_issue`, `update_issue`           | ✓ API REST GitHub ; une issue porte `sprint` (n° du milestone daté, sinon `null`) ; `update_issue` avec `state: closed` retire le label `status/*` (terminé) |
 | `add_comment`                                         | ✓                                                                                                                                                            |
 | `list_milestones`                                     | ✓ versions (sprint / palier), nom (`# Nom`) et thèmes (éléments de liste) lus dans la description                                                            |
 | `create_milestone`                                    | ✓ échéance `AAAA-MM-JJ` (sprint) ou aucune (palier) ; refuse un titre existant                                                                               |
@@ -108,6 +136,9 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `get_pull_request`                                    | ✓ description, checks détaillés, revues, fichiers (sans patchs)                                                                                              |
 | `create_pull_request`                                 | ✓ brouillon par défaut, `base` = branche par défaut ; refuse la branche par défaut comme `head`                                                              |
 | `mark_pull_request_ready`                             | ✓ mutation GraphQL `markPullRequestReadyForReview`                                                                                                           |
+| `get_pull_request_diff`                               | ✓ patchs par fichier (60 000 caractères au plus, ou un fichier)                                                                                              |
+| `review_pull_request`                                 | ✓ `APPROVE`, `REQUEST_CHANGES` ou `COMMENT`, synthèse et remarques sur des lignes ; PR du même compte : verdict publié en commentaire                       |
+| `merge_pull_request`                                  | ✓ PR prête et sans conflit ; `method` (absente : réglage `merge_method`, squash), `delete_branch` (jamais la branche par défaut, `release/*` ou un fork), `close_issues` ; issues déclarées (« Ferme #12 ») et demandées fermées comme terminées, label `status/*` retiré |
 | `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
 | `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
 | `sprint_summary`                                      | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; l'échéance est le dernier jour du sprint, début = échéance − (`sprint_length_days` − 1) ; `started`, `start_defaults` tant que les sprints ne sont pas démarrés |
@@ -208,8 +239,9 @@ planning, architecture, fusion) ne servent qu'à la demande explicite de l'utili
 
 Revue des PR : `get_pull_request_diff` (patchs), `review_pull_request` (APPROVE /
 REQUEST_CHANGES / COMMENT, remarques sur des lignes ; sur une PR du même compte GitHub, le verdict
-est publié en commentaire) et `merge_pull_request` (ferme les issues liées quand la base est une
-branche de release, ce que GitHub ne fait que pour la branche par défaut).
+est publié en commentaire) et `merge_pull_request` (méthode du réglage, squash par défaut ; ferme
+comme terminées les issues liées, y compris quand la base est une branche de release, ce que
+GitHub ne fait que pour la branche par défaut ; supprime la branche à la demande).
 
 ## Planning (Gantt)
 

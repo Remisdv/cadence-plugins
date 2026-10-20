@@ -1,4 +1,9 @@
 /** Données rendues par le serveur `cadence-gestion-projet` et leur vocabulaire d'affichage. */
+import type {
+  ActionGroup,
+  ConversationInfo,
+  ConversationState,
+} from "@cadence/plugin-sdk";
 import type { BadgeTone, DotTone, IconName } from "@cadence/ui";
 
 export type IssueType = "feat" | "fix" | "chore" | "perf" | "docs";
@@ -21,6 +26,8 @@ export interface Issue {
   priority: number | null;
   labels: string[];
   milestone: string | null;
+  /** Numéro du milestone quand c'est un sprint (milestone daté) : clé du groupe de conversations. */
+  sprint?: number | null;
   assignees: string[];
   author: string | null;
   comments: number;
@@ -73,6 +80,108 @@ export function issueContext(issue: Pick<Issue, "repo" | "number">): {
   issue: number;
 } {
   return { type: "issue", repo: issue.repo, issue: issue.number };
+}
+
+/* ---------- Conversations du sprint et revue groupée ---------- */
+
+/**
+ * Groupe des conversations d'un sprint (champ réservé `group` du contexte d'action) : Cadence les
+ * masque du chat global, l'écran « Sprint en cours » les liste. La clé est le numéro du
+ * milestone, stable même si la version est renommée ; le libellé reprend le titre du sprint.
+ */
+export function sprintGroup(repo: string, sprint: { number: number; title: string }): ActionGroup {
+  return { id: `sprint:${repo}:${sprint.number}`, label: `Sprint ${sprint.title} · ${repo}` };
+}
+
+/** Groupe d'une issue rattachée à un sprint ; `null` sans sprint (conversation normale). */
+export function issueGroup(
+  issue: Pick<Issue, "repo" | "sprint" | "milestone">,
+): ActionGroup | null {
+  if (issue.sprint === null || issue.sprint === undefined || !issue.milestone) return null;
+  return sprintGroup(issue.repo, { number: issue.sprint, title: issue.milestone });
+}
+
+/** `{ group }` à étaler dans un contexte d'action, ou rien. */
+export function withGroup(group: ActionGroup | null | undefined): { group?: ActionGroup } {
+  return group ? { group } : {};
+}
+
+/** Tâche à relire : l'issue et sa PR (`null` si l'écran ne l'a pas trouvée, le skill la cherche). */
+export interface ReviewItem {
+  issue: number;
+  pr: number | null;
+}
+
+/** Contexte de l'action `relire-valider` (`context = "review"` dans le manifeste). */
+export function reviewContext(
+  repo: string,
+  items: ReviewItem[],
+  group?: ActionGroup | null,
+): { type: "review"; repo: string; items: ReviewItem[]; group?: ActionGroup } {
+  return { type: "review", repo, items, ...withGroup(group) };
+}
+
+/** PR ouverte (brouillon compris) qui ferme l'issue ; la plus récente s'il y en a plusieurs. */
+export function pullRequestFor(
+  pulls: PullRequest[],
+  issue: Pick<Issue, "repo" | "number">,
+): PullRequest | null {
+  const candidates = pulls.filter(
+    (p) =>
+      p.repo === issue.repo &&
+      (p.state === "open" || p.state === "draft") &&
+      p.closes.includes(issue.number),
+  );
+  candidates.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+  return candidates[0] ?? null;
+}
+
+export const conversationStates: Record<
+  ConversationState,
+  { label: string; dot: DotTone; tone: BadgeTone }
+> = {
+  running: { label: "En cours", dot: "clay", tone: "clay" },
+  "waiting-approval": { label: "Attend votre accord", dot: "amber", tone: "amber" },
+  idle: { label: "Terminée", dot: "green", tone: "green" },
+  failed: { label: "Échec", dot: "red", tone: "red" },
+  interrupted: { label: "Interrompue", dot: "neutral", tone: "muted" },
+};
+
+const aiNames: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+};
+
+/** « Claude Code », « Codex », « OpenCode » ; un identifiant inconnu est rendu tel quel. */
+export function aiLabel(ai: string): string {
+  return aiNames[ai] ?? ai;
+}
+
+/** Libellés des actions qui ouvrent une conversation de sprint. */
+const actionLabels: Record<string, string> = {
+  "developper-sprint": "Développer le sprint",
+  "implementer-issue": "Implémenter",
+  "relire-valider": "Relire et valider",
+};
+
+export function actionLabel(action: string | undefined): string | null {
+  return action ? (actionLabels[action] ?? action) : null;
+}
+
+/** Issues concernées par une conversation, lues dans le contexte de son action. */
+export function conversationIssues(c: Pick<ConversationInfo, "context">): number[] {
+  const ctx = c.context ?? {};
+  const out: number[] = [];
+  const add = (n: unknown) => {
+    if (typeof n === "number" && Number.isInteger(n) && !out.includes(n)) out.push(n);
+  };
+  add(ctx.issue);
+  if (Array.isArray(ctx.issues)) ctx.issues.forEach(add);
+  if (Array.isArray(ctx.items)) {
+    for (const item of ctx.items) add((item as { issue?: unknown } | null)?.issue);
+  }
+  return out;
 }
 
 /** Nom court d'un dépôt (`owner/name` → `name`) pour la colonne dépôt. */

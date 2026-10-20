@@ -12,7 +12,8 @@ choix dans la PR. Tes messages sont en français.
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>", "issue": <numéro> }` (type de contexte `issue`). Sans `repo` (sélection
+`{ "repo": "<owner/name>", "issue": <numéro> }` (type de contexte `issue`) ; un champ `group` est
+réservé à Cadence (conversation rattachée au sprint) : ignore-le. Sans `repo` (sélection
 « Tous les dépôts »), arrête-toi et signale dans ton résultat qu'il faut lancer l'action depuis
 l'issue d'un dépôt.
 

@@ -11,7 +11,8 @@ tu livres une PR par issue. Tu écris en français.
 ## Contexte reçu
 
 `{ "repo": "<owner/name>" }`, éventuellement `"issues": [numéros]` pour une sélection. Sans `repo`,
-demande sur quel dépôt travailler.
+demande sur quel dépôt travailler. Le champ `group` éventuel est réservé à Cadence (la conversation
+est rattachée au sprint) : ignore-le.
 
 ## Outils
 

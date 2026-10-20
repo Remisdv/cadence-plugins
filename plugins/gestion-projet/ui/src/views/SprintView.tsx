@@ -7,9 +7,20 @@
  * durée (`project_*`), et liste la livraison des sprints terminés (release/x → branche par
  * défaut). Sans sprints automatiques : milestone daté ouvert le plus proche. En mode « Tous les
  * dépôts », un sprint par dépôt suivi.
+ *
+ * Les conversations lancées depuis le sprint (« Développer le sprint », « Implémenter », « Relire »)
+ * portent le groupe `sprint:<repo>:<n° du milestone>` : Cadence les masque du chat global, la
+ * section « Conversations du sprint » les liste (`conversations.list`) et les ouvre. La colonne
+ * « En revue » se sélectionne : « Relire » une tâche ou « Relire la sélection » ouvre une seule
+ * conversation `relire-valider` (revue, accord de l'utilisateur, puis fusion et clôture).
  */
-import { useState } from "react";
-import { cadence, isCadenceError } from "@cadence/plugin-sdk";
+import { useCallback, useEffect, useState } from "react";
+import {
+  cadence,
+  isCadenceError,
+  type ActionGroup,
+  type ConversationInfo,
+} from "@cadence/plugin-sdk";
 import {
   Badge,
   Button,
@@ -20,9 +31,27 @@ import {
   Icon,
   Input,
   Select,
+  Spinner,
+  StatusDot,
   cn,
 } from "@cadence/ui";
-import { isStarted, type ProjectView, type SprintSummary, type StartDefaults } from "../domain";
+import {
+  actionLabel,
+  aiLabel,
+  conversationIssues,
+  conversationStates,
+  isStarted,
+  pullRequestFor,
+  reviewContext,
+  sprintGroup,
+  withGroup,
+  type Issue,
+  type ProjectView,
+  type PullRequestList,
+  type SprintSummary,
+  type StartDefaults,
+  type Version,
+} from "../domain";
 import {
   Burndown,
   EmptyCard,
@@ -42,6 +71,7 @@ import {
   delayLabel,
   durationLabel,
   durationOptions,
+  formatAgo,
   formatDay,
   formatDecimal,
   formatPercent,
@@ -53,12 +83,27 @@ import {
   sprintBoard,
   statusMeters,
 } from "../planning";
+import { useConversations } from "../useConversations";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
+
+const notifyError = (e: unknown) =>
+  void cadence.notify(isCadenceError(e) ? e.message : String(e), "error");
 
 export function SprintView() {
   const { repos, repo, shown, ready, error } = useSelection();
   const [tick, setTick] = useState(0);
+  // Sprint affiché par dépôt : « Développer le sprint » rattache sa conversation à ce sprint.
+  const [sprints, setSprints] = useState<Record<string, Pick<Version, "number" | "title"> | null>>(
+    {},
+  );
+  const onSprint = useCallback((r: string, v: Pick<Version, "number" | "title"> | null) => {
+    setSprints((all) =>
+      all[r]?.number === v?.number && all[r]?.title === v?.title ? all : { ...all, [r]: v },
+    );
+  }, []);
+  const sprint = repo ? sprints[repo] : null;
+  const group = repo && sprint ? sprintGroup(repo, sprint) : null;
   return (
     <div className="flex h-full flex-col">
       <PageHeader
@@ -77,10 +122,8 @@ export function SprintView() {
           }
           onClick={() =>
             void cadence
-              .runAction("developper-sprint", { repo })
-              .catch((e: unknown) =>
-                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
-              )
+              .runAction("developper-sprint", { repo, ...withGroup(group) })
+              .catch(notifyError)
           }
         >
           Développer le sprint
@@ -100,7 +143,13 @@ export function SprintView() {
         {repos && repos.length === 0 && <NoRepos />}
         <div className="flex flex-col gap-8">
           {shown.map((r) => (
-            <SprintPanel key={r} repo={r} heading={!repo} refreshKey={String(tick)} />
+            <SprintPanel
+              key={r}
+              repo={r}
+              heading={!repo}
+              refreshKey={String(tick)}
+              onSprint={onSprint}
+            />
           ))}
         </div>
       </main>
@@ -112,10 +161,12 @@ function SprintPanel({
   repo,
   heading,
   refreshKey,
+  onSprint,
 }: {
   repo: string;
   heading: boolean;
   refreshKey: string;
+  onSprint: (repo: string, sprint: Pick<Version, "number" | "title"> | null) => void;
 }) {
   const { data, error, loading, reload } = useTool<SprintSummary>(
     "sprint_summary",
@@ -123,6 +174,10 @@ function SprintPanel({
     refreshKey,
   );
   const current = data?.repo === repo ? data : null;
+  const shownSprint = current?.sprint && current.pace ? current.sprint : null;
+  useEffect(() => {
+    if (current) onSprint(repo, shownSprint);
+  }, [repo, current, shownSprint?.number, shownSprint?.title, onSprint]);
   // Une issue d'état « idle » (créée par les jalons de la roadmap) n'est pas un projet démarré :
   // l'écran propose alors « Démarrer le projet », pas la barre des sprints.
   const project = isStarted(current?.project) ? current.project : null;
@@ -136,7 +191,7 @@ function SprintPanel({
         {current.message}
       </EmptyCard>
     ) : null;
-  } else body = <Sprint summary={current} />;
+  } else body = <Sprint summary={current} refreshKey={refreshKey} />;
 
   return (
     <section className="flex flex-col gap-3.5">
@@ -406,10 +461,56 @@ function Deliveries({ project }: { project: ProjectView }) {
   );
 }
 
-function Sprint({ summary }: { summary: SprintSummary }) {
+function Sprint({ summary, refreshKey }: { summary: SprintSummary; refreshKey: string }) {
   const v = summary.sprint!;
   const pace = summary.pace!;
   const issues = summary.issues ?? [];
+  const repo = summary.repo;
+  const group = sprintGroup(repo, v);
+
+  // PR ouvertes du dépôt : la PR de chaque tâche en revue (celle qui déclare fermer l'issue).
+  const pulls = useTool<PullRequestList>(
+    "list_pull_requests",
+    { repo, state: "open" },
+    refreshKey,
+  );
+  const openPulls = pulls.data?.repo === repo ? pulls.data.pull_requests : [];
+  const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
+  const [launching, setLaunching] = useState(false);
+  const inReview = issues.filter((i) => i.status === "review");
+  // La sélection ne garde que les tâches encore en revue (après un rafraîchissement).
+  const selected = new Set([...picked].filter((n) => inReview.some((i) => i.number === n)));
+  const toggle = (issue: Issue) =>
+    setPicked((s) => {
+      const next = new Set(s);
+      if (!next.delete(issue.number)) next.add(issue.number);
+      return next;
+    });
+  const review = async (tasks: Issue[]) => {
+    if (tasks.length === 0) return;
+    setLaunching(true);
+    try {
+      const items = tasks.map((i) => ({
+        issue: i.number,
+        pr: pullRequestFor(openPulls, i)?.number ?? null,
+      }));
+      await cadence.runAction("relire-valider", reviewContext(repo, items, group));
+      setPicked(new Set());
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setLaunching(false);
+    }
+  };
+  const reviewControls = {
+    selected,
+    onToggle: toggle,
+    onToggleAll: (list: Issue[], select: boolean) =>
+      setPicked(select ? new Set(list.map((i) => i.number)) : new Set()),
+    onReview: (issue: Issue) => void review([issue]),
+    pullRequestOf: (issue: Issue) => pullRequestFor(openPulls, issue),
+    disabled: launching,
+  };
   const remaining = pace.total - pace.closed;
   const required = requiredPace(remaining, pace.days_left);
   const delay = delayLabel(pace.delay_days);
@@ -490,6 +591,35 @@ function Sprint({ summary }: { summary: SprintSummary }) {
               </>
             }
           />
+          {selected.size > 0 && (
+            <div className="mt-[11px] flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-field border border-blue-line bg-blue-d px-3 py-2">
+              <Icon name="review" size={14} className="text-blue" />
+              <span className="text-body-sm text-tx">
+                {plural(selected.size, "tâche sélectionnée", "tâches sélectionnées")}
+              </span>
+              <span className="text-caption text-tx3">
+                une seule conversation relit tout, puis fusionne après votre accord
+              </span>
+              <div className="grow" />
+              <Button
+                size="xs"
+                variant="quiet"
+                onClick={() => setPicked(new Set())}
+                disabled={launching}
+              >
+                Désélectionner
+              </Button>
+              <Button
+                size="xs"
+                variant="primary"
+                icon="review"
+                disabled={launching}
+                onClick={() => void review(inReview.filter((i) => selected.has(i.number)))}
+              >
+                Relire la sélection ({selected.size})
+              </Button>
+            </div>
+          )}
           {issues.length === 0 ? (
             <p className="mt-4 text-body-sm leading-[1.6] text-tx3">
               Aucune issue dans ce sprint. Les issues rattachées au milestone {v.title} apparaissent
@@ -498,7 +628,11 @@ function Sprint({ summary }: { summary: SprintSummary }) {
           ) : (
             <div className="mt-[13px] flex min-h-0 grow items-start gap-[11px] overflow-x-auto">
               {sprintBoard(issues).map((col) => (
-                <KanbanColumn key={col.status} column={col} />
+                <KanbanColumn
+                  key={col.status}
+                  column={col}
+                  review={col.status === "review" ? reviewControls : undefined}
+                />
               ))}
             </div>
           )}
@@ -553,6 +687,108 @@ function Sprint({ summary }: { summary: SprintSummary }) {
           </Card>
         </div>
       </div>
+
+      <SprintConversations group={group} refreshKey={refreshKey} />
+    </div>
+  );
+}
+
+/**
+ * Conversations rattachées au sprint (masquées du chat global) : état, titre, issues, IA, date ;
+ * une ligne s'ouvre dans la vue Chat de Cadence.
+ */
+function SprintConversations({ group, refreshKey }: { group: ActionGroup; refreshKey: string }) {
+  const { conversations, error } = useConversations(group.id, refreshKey);
+  const list = conversations ?? [];
+  const running = list.filter((c) => c.state === "running").length;
+  const open = (c: ConversationInfo) => void cadence.conversations.open(c.id).catch(notifyError);
+  return (
+    <Card className="px-[15px] py-3.5">
+      <CardHeader
+        title="Conversations du sprint"
+        actions={
+          <>
+            {running > 0 && (
+              <Badge tone="clay" dot>
+                {plural(running, "en cours", "en cours")}
+              </Badge>
+            )}
+            <Badge tone="neutral">{list.length}</Badge>
+          </>
+        }
+      />
+      {error && (
+        <Callout tone="danger" className="mt-3">
+          {error.message}
+        </Callout>
+      )}
+      {!error && conversations === null && (
+        <div className="mt-3">
+          <Loading label="Lecture des conversations…" />
+        </div>
+      )}
+      {!error && conversations !== null && list.length === 0 && (
+        <p className="mt-2 text-caption leading-[1.6] text-tx3">
+          Aucune conversation pour ce sprint. « Développer le sprint », « Implémenter » une issue du
+          sprint et « Relire » une tâche en revue ouvrent ici leurs conversations, hors du chat
+          global.
+        </p>
+      )}
+      {list.length > 0 && (
+        <div className="mt-2 divide-y divide-line">
+          {list.map((c) => (
+            <ConversationRow key={c.id} conversation={c} onOpen={() => open(c)} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ConversationRow({
+  conversation: c,
+  onOpen,
+}: {
+  conversation: ConversationInfo;
+  onOpen: () => void;
+}) {
+  const meta = conversationStates[c.state] ?? conversationStates.interrupted;
+  const issues = conversationIssues(c);
+  const detail = [
+    actionLabel(c.action),
+    c.mode === "background" ? "en fond" : null,
+    aiLabel(c.ai),
+    c.turns > 0 ? plural(c.turns, "tour") : null,
+  ].filter(Boolean);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+      <span className="flex w-3.5 shrink-0 justify-center" title={meta.label}>
+        {c.state === "running" ? <Spinner size={11} /> : <StatusDot tone={meta.dot} size={7} />}
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        title="Ouvrir dans le chat"
+        className="min-w-0 flex-[1_1_220px] truncate text-left text-body-sm text-tx hover:text-clay"
+      >
+        {c.title}
+      </button>
+      {issues.length > 0 && (
+        <span className="mono shrink-0 text-tiny text-tx3">
+          {issues.slice(0, 3).map((n) => `#${n}`).join(" ")}
+          {issues.length > 3 ? ` +${issues.length - 3}` : ""}
+        </span>
+      )}
+      <span className="shrink-0 truncate text-caption text-tx3" title={c.model}>
+        {detail.join(" · ")}
+      </span>
+      <Badge tone={meta.tone}>{meta.label}</Badge>
+      <span className="w-[86px] shrink-0 text-right text-caption text-tx3" title={c.updatedAt}>
+        {formatAgo(c.updatedAt)}
+      </span>
+      <Button size="xs" variant="ghost" icon="arrowRight" onClick={onOpen}>
+        Ouvrir
+      </Button>
     </div>
   );
 }

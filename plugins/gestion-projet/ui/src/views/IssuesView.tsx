@@ -19,12 +19,14 @@ import {
   displayLabels,
   estimateLabel,
   issueContext,
+  issueGroup,
   issueKey,
   issueStatuses,
   issueTypeTone,
   priorityInfo,
   repoShortName,
   statusOrder,
+  withGroup,
   type Issue,
   type IssueList,
 } from "../domain";
@@ -56,7 +58,11 @@ export function IssuesView() {
 
   const implement = async (issue: Issue) => {
     try {
-      const runId = await cadence.runAction("implementer-issue", issueContext(issue));
+      // Issue d'un sprint : la conversation est rattachée au sprint (masquée du chat global).
+      const runId = await cadence.runAction("implementer-issue", {
+        ...issueContext(issue),
+        ...withGroup(issueGroup(issue)),
+      });
       cadence.onRun(runId, (u) => setRuns((r) => ({ ...r, [issueKey(issue)]: u })));
     } catch (e) {
       await cadence.notify(isCadenceError(e) ? e.message : String(e), "error");

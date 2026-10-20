@@ -2,15 +2,24 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "smol-toml";
 import {
+  aiLabel,
+  conversationIssues,
+  conversationStates,
   displayLabels,
   estimateLabel,
   issueContext,
+  issueGroup,
   issueKey,
   isStarted,
   isViewId,
   priorityInfo,
+  pullRequestFor,
   repoShortName,
+  reviewContext,
+  sprintGroup,
   views,
+  withGroup,
+  type PullRequest,
 } from "./domain";
 
 describe("vues", () => {
@@ -35,6 +44,83 @@ describe("manifeste", () => {
     expect(manifest.category).toBe("projet");
     expect(manifest.services).toEqual(["repos"]);
     expect(manifest.secrets).toBeUndefined();
+  });
+});
+
+describe("manifeste : actions de sprint", () => {
+  it("déclare « Relire et valider » en chat, contexte review, avec son skill", () => {
+    const manifest = parse(
+      readFileSync(new URL("../../plugin.toml", import.meta.url), "utf8"),
+    ) as any;
+    const action = manifest.actions.find((a: { id: string }) => a.id === "relire-valider");
+    expect(action).toMatchObject({ skill: "relire-valider", mode: "chat", context: "review" });
+    const skill = readFileSync(
+      new URL("../../skills/relire-valider/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    expect(skill).toMatch(/^---\r?\nname: relire-valider\r?\n/);
+  });
+});
+
+describe("groupes de conversations", () => {
+  it("rattache les conversations au sprint de l'issue", () => {
+    const group = sprintGroup("me/app", { number: 3, title: "0.3.0" });
+    expect(group).toEqual({ id: "sprint:me/app:3", label: "Sprint 0.3.0 · me/app" });
+    // Même règle que Cadence pour l'id de groupe.
+    expect(group.id).toMatch(/^[A-Za-z0-9:/._-]{1,120}$/);
+    expect(issueGroup({ repo: "me/app", sprint: 3, milestone: "0.3.0" })).toEqual(group);
+    // Sans sprint (pas de version, ou palier sans date) : conversation normale.
+    expect(issueGroup({ repo: "me/app", sprint: null, milestone: "1.0.0" })).toBeNull();
+    expect(issueGroup({ repo: "me/app", milestone: null })).toBeNull();
+    expect(withGroup(null)).toEqual({});
+    expect({ ...issueContext({ repo: "me/app", number: 4 }), ...withGroup(group) }).toEqual({
+      type: "issue",
+      repo: "me/app",
+      issue: 4,
+      group,
+    });
+  });
+
+  it("construit le contexte de la revue groupée", () => {
+    const group = sprintGroup("me/app", { number: 3, title: "0.3.0" });
+    expect(reviewContext("me/app", [{ issue: 42, pr: 51 }, { issue: 43, pr: null }], group)).toEqual(
+      {
+        type: "review",
+        repo: "me/app",
+        items: [
+          { issue: 42, pr: 51 },
+          { issue: 43, pr: null },
+        ],
+        group,
+      },
+    );
+    expect(reviewContext("me/app", [])).not.toHaveProperty("group");
+  });
+
+  it("trouve la PR ouverte d'une tâche en revue", () => {
+    const pr = (number: number, state: PullRequest["state"], closes: number[], updated: string) =>
+      ({ repo: "me/app", number, state, closes, updated_at: updated }) as PullRequest;
+    const pulls = [
+      pr(50, "merged", [42], "2026-10-19T10:00:00Z"),
+      pr(51, "draft", [42], "2026-10-18T10:00:00Z"),
+      pr(52, "open", [42, 43], "2026-10-20T10:00:00Z"),
+      { ...pr(53, "open", [44], "2026-10-20T10:00:00Z"), repo: "me/site" },
+    ];
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 42 })?.number).toBe(52);
+    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 42 })?.number).toBe(51);
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 44 })).toBeNull();
+  });
+
+  it("décrit une conversation : issues, état, IA", () => {
+    expect(conversationIssues({ context: { type: "issue", issue: 42 } })).toEqual([42]);
+    expect(
+      conversationIssues({ context: { items: [{ issue: 42, pr: 51 }, { issue: 43 }], issue: 42 } }),
+    ).toEqual([42, 43]);
+    expect(conversationIssues({ context: { issues: [7, 8] } })).toEqual([7, 8]);
+    expect(conversationIssues({})).toEqual([]);
+    expect(conversationStates["waiting-approval"].label).toBe("Attend votre accord");
+    expect(aiLabel("claude-code")).toBe("Claude Code");
+    expect(aiLabel("autre-ia")).toBe("autre-ia");
   });
 });
 

@@ -1,7 +1,7 @@
 api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
-version = "0.5.0"
+version = "0.6.0"
 description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
@@ -77,6 +77,10 @@ schema = "settings.schema.json"
 
 # Boutons liés aux skills (ex-agents CTO, développeur, CEO et déploiement). Le contexte porte
 # toujours le dépôt concerné : { "repo": "owner/name", "issue": 42 } ou { "repo", "version" }.
+# Lancées depuis un sprint (« Développer le sprint », « Implémenter » une issue du sprint,
+# « Relire et valider »), les conversations portent le champ réservé
+# group = { id = "sprint:<repo>:<n° du milestone>", label = "Sprint <version> · <repo>" } :
+# Cadence les masque du chat global, l'écran « Sprint en cours » les liste.
 
 [[actions]]
 id = "extraire-issues"
@@ -108,6 +112,13 @@ id = "relire-pr"
 label = "Relire les PR"
 skill = "relire-pr"
 mode = "chat"
+
+[[actions]]
+id = "relire-valider"
+label = "Relire et valider"
+skill = "relire-valider"
+mode = "chat"
+context = "review"
 
 [[actions]]
 id = "creer-design"

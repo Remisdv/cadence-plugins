@@ -26,25 +26,33 @@ import archiTemplates from "../../server/src/templates.json";
 
 const params = new URLSearchParams(location.search);
 
-const issue = (repo: string, n: number, title: string, extra: Partial<Issue>): Issue => ({
-  repo,
-  number: n,
-  title,
-  state: "open",
-  status: "todo",
-  type: "feat",
-  estimate: null,
-  points: null,
-  priority: null,
-  labels: [],
-  milestone: "0.1.2",
-  assignees: [],
-  author: "RemiSDV",
-  comments: 0,
-  url: `https://github.com/${repo}/issues/${n}`,
-  updated_at: "2026-10-14T09:00:00Z",
-  ...extra,
-});
+/** Sprint 0.1.2 de RemiSDV/cadence : milestone n° 3 (clé du groupe de ses conversations). */
+const SPRINT = { number: 3, title: "0.1.2" };
+const SPRINT_GROUP = { id: `sprint:RemiSDV/cadence:${SPRINT.number}`, label: "Sprint 0.1.2 · RemiSDV/cadence" };
+
+const issue = (repo: string, n: number, title: string, extra: Partial<Issue>): Issue => {
+  const i: Issue = {
+    repo,
+    number: n,
+    title,
+    state: "open",
+    status: "todo",
+    type: "feat",
+    estimate: null,
+    points: null,
+    priority: null,
+    labels: [],
+    milestone: "0.1.2",
+    assignees: [],
+    author: "RemiSDV",
+    comments: 0,
+    url: `https://github.com/${repo}/issues/${n}`,
+    updated_at: "2026-10-14T09:00:00Z",
+    ...extra,
+  };
+  const inSprint = i.repo === "RemiSDV/cadence" && i.milestone === SPRINT.title;
+  return { ...i, sprint: inSprint ? SPRINT.number : null };
+};
 
 const issues: Issue[] = [
   issue("RemiSDV/cadence", 156, "Message d'erreur quand le quota de l'API est épuisé", {
@@ -61,6 +69,13 @@ const issues: Issue[] = [
     points: 8,
     priority: 0,
     labels: ["type/feat", "status/review", "sp/8", "priority/0", "area/auth"],
+  }),
+  issue("RemiSDV/cadence", 157, "Pagination des issues au-delà de 100", {
+    type: "fix",
+    status: "review",
+    points: 2,
+    priority: 2,
+    labels: ["type/fix", "status/review", "sp/2", "priority/2", "area/api"],
   }),
   issue("RemiSDV/cadence-plugins", 12, "Vue Roadmap du plugin Gestion de projet", {
     milestone: "0.3.0",
@@ -607,6 +622,12 @@ const pulls: PullRequest[] = [
     closes: [149],
     ci: { state: "pending", passed: 1, total: 3 },
   }),
+  pr("RemiSDV/cadence", 162, "fix(api) : pagination des issues au-delà de 100", {
+    head: "fix/157-pagination",
+    base: "release/0.1.2",
+    closes: [157],
+    review: "pending",
+  }),
   pr("RemiSDV/cadence-plugins", 14, "feat(gestion-projet) : vue Roadmap", {
     head: "feat/12-roadmap",
     milestone: "0.3.0",
@@ -843,6 +864,45 @@ const planningTools: MockHostOptions["tools"] = {
   },
 };
 
+/** Conversations simulées du sprint 0.1.2 (masquées du chat global) et une conversation libre. */
+const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+const sprintConversations: NonNullable<MockHostOptions["conversations"]>["conversations"] = [
+  {
+    title: "Développer le sprint 0.1.2",
+    action: "developper-sprint",
+    state: "idle",
+    group: SPRINT_GROUP,
+    context: { repo: "RemiSDV/cadence" },
+    createdAt: at(30),
+    updatedAt: at(26),
+    turns: 14,
+  },
+  {
+    title: "Implémenter #156 — quota de l'API",
+    action: "implementer-issue",
+    mode: "background",
+    state: "running",
+    group: SPRINT_GROUP,
+    context: { type: "issue", repo: "RemiSDV/cadence", issue: 156 },
+    createdAt: at(2),
+    updatedAt: at(0.2),
+    turns: 3,
+  },
+  {
+    title: "Relire et valider #149",
+    action: "relire-valider",
+    state: "waiting-approval",
+    ai: "codex",
+    model: "gpt-5-codex",
+    group: SPRINT_GROUP,
+    context: { type: "review", repo: "RemiSDV/cadence", items: [{ issue: 149, pr: 161 }] },
+    createdAt: at(5),
+    updatedAt: at(4),
+    turns: 4,
+  },
+  { title: "Question sur les labels", state: "idle", createdAt: at(50), updatedAt: at(48), turns: 2 },
+];
+
 export const devHost: MockHostOptions = {
   plugin: { id: "gestion-projet", version: "0.3.0" },
   route: {
@@ -851,7 +911,11 @@ export const devHost: MockHostOptions = {
       ? { repo: "RemiSDV/cadence", version: params.get("version")! }
       : {},
   },
-  settings: { tag_prefix: "v", sprint_length_days: 14 },
+  settings: { tag_prefix: "v", sprint_length_days: 14, merge_method: "squash" },
+  conversations: {
+    modes: { "implementer-issue": "background", "preparer-release": "background" },
+    conversations: sprintConversations,
+  },
   repos: {
     repos: ["RemiSDV/cadence", "RemiSDV/cadence-plugins"],
     selection:

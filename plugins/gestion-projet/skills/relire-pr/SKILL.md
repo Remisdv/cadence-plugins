@@ -31,7 +31,7 @@ fusionnes rien.
 | `cadence__repo_checkout` | worktree (`{ "repo", "task": "revue-<numéro>" }`) pour lancer build et tests |
 | `gestion-projet__review_pull_request` | publier la revue (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`, `comments` sur des lignes) |
 | `gestion-projet__mark_pull_request_ready` | sortir une PR approuvée du brouillon (avant fusion) |
-| `gestion-projet__merge_pull_request` | fusionner (seulement si demandé) ; ferme les issues liées vers une release |
+| `gestion-projet__merge_pull_request` | fusionner (seulement si demandé ; méthode du réglage, squash par défaut) ; ferme les issues liées comme terminées |
 | `gestion-projet__update_issue` | repasser l'issue en `status: "doing"` si des changements sont demandés |
 
 ## Démarche, PR par PR

@@ -28,7 +28,7 @@ Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'
 
 | Plugin | Dossier | Ce qu'il apporte |
 | --- | --- | --- |
-| **Gestion de projet** | [`plugins/gestion-projet`](plugins/gestion-projet) | issues GitHub, kanban, roadmap, sprints, versions, pull requests ; skills « Compléter l'issue », « Implémenter », « Proposer des issues », « Préparer la release » |
+| **Gestion de projet** | [`plugins/gestion-projet`](plugins/gestion-projet) | issues GitHub, kanban, roadmap, sprints, versions, pull requests ; skills « Compléter l'issue », « Implémenter », « Proposer des issues », « Relire et valider », « Préparer la release » |
 | **Documents** | [`plugins/documents`](plugins/documents) | cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre ; notes par blocs façon Notion (Markdown) ; réponses citées (document + page), QCM, questions ouvertes corrigées, flashcards |
 | **Exemple** | [`plugins/exemple`](plugins/exemple) | plugin de référence pour les auteurs : un compteur qui utilise chaque brique de l'API (manifeste complet, serveur MCP, écran React, réglages, étape de configuration, action et skill, dépendance externe) |
 
