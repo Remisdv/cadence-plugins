@@ -1,7 +1,7 @@
 {
   "name": "@cadence-plugins/documents-ui",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,15 @@
   "dependencies": {
     "@cadence/plugin-sdk": "workspace:*",
     "@cadence/ui": "workspace:*",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/extension-list": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/extensions": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/react": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
+    "@tiptap/suggestion": "3.31.4",
+    "marked": "18.0.14",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

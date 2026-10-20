@@ -1,6 +1,6 @@
 /** Hôte simulé pour `pnpm dev` hors de Cadence (bibliothèque en mémoire). */
 import type { MockHostOptions } from "@cadence/plugin-sdk";
-import { fileName, qcmItems, type DocumentInfo, type HistoryEntry, type Quiz } from "./domain";
+import { fileName, qcmItems, type DocumentInfo, type HistoryEntry, type NoteDoc, type Quiz } from "./domain";
 
 const docs: DocumentInfo[] = [
   {
@@ -32,6 +32,91 @@ const docs: DocumentInfo[] = [
     page_unit: "diapositive",
   },
 ];
+
+/** Notes simulées : Markdown en mémoire, découpé par titres comme le serveur. */
+const notes = new Map<string, string>([
+  [
+    "fiche-atome",
+    [
+      "Résumé du cours, à compléter.",
+      "",
+      "# Le noyau",
+      "",
+      "> **Numéro atomique Z** : nombre de protons du noyau ([Cours 1 — L'atome, p. 3](cadence:documents/document?doc=atomes&page=3)).",
+      "",
+      "- Protons : charge +e",
+      "- Neutrons : charge nulle",
+      "",
+      "# Les électrons",
+      "",
+      "1. Règle de Klechkowski",
+      "2. Principe de Pauli",
+      "",
+      "| Couche | Électrons max |",
+      "| --- | --- |",
+      "| K | 2 |",
+      "| L | 8 |",
+      "",
+      "- [x] Relire le TD 1",
+      "- [ ] Refaire l'exercice 4",
+      "",
+    ].join("\n"),
+  ],
+]);
+
+docs.push({
+  id: "fiche-atome",
+  title: "Fiche — l'atome",
+  kind: "note",
+  source: "C:/etudes/l3/cours/Notes/Chimie/Atomistique/Fiche — l'atome.md",
+  pages: 3,
+  chars: 400,
+  imported_at: "2026-10-16T08:00:00Z",
+  updated_at: "2026-10-18T17:20:00Z",
+  revision: 1,
+  subject: "chimie",
+  subject_name: "Chimie",
+  chapter: "atomistique",
+  chapter_name: "Atomistique",
+  page_unit: "section",
+});
+
+function sections(markdown: string) {
+  const pages: string[] = [];
+  let current = "";
+  let code = false;
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) code = !code;
+    else if (!code && /^#{1,3}\s+\S/.test(line) && current.trim()) {
+      pages.push(current.trim());
+      current = "";
+    }
+    current += `${line}\n`;
+  }
+  if (current.trim() || !pages.length) pages.push(current.trim());
+  return pages.map((text, i) => ({
+    page: i + 1,
+    title: /^#{1,3}\s+(.+)$/.exec(text.split("\n")[0] ?? "")?.[1] ?? null,
+    text,
+  }));
+}
+
+function noteDoc(id: string): NoteDoc {
+  const d = docs.find((x) => x.id === id && x.kind === "note");
+  if (!d) throw new Error(`Note « ${id} » introuvable.`);
+  const markdown = notes.get(id) ?? "";
+  const s = sections(markdown);
+  return {
+    ...d,
+    kind: "note",
+    revision: d.revision ?? 1,
+    pages: s.length,
+    markdown,
+    sections: s.map(({ page, title }) => ({ page, title })),
+    missing_file: false,
+    link: `cadence:documents/document?doc=${id}`,
+  };
+}
 
 const quizzes: Quiz[] = [
   {
@@ -108,9 +193,12 @@ function record(quiz: string, score: number, total: number, feedback: string) {
 }
 
 export const devHost: MockHostOptions = {
-  plugin: { id: "documents", version: "0.3.0" },
+  plugin: { id: "documents", version: "0.4.0" },
   settings: { dossier_cours: "C:/etudes/l3/cours", questions_par_qcm: 10, cartes_par_paquet: 20 },
-  route: { view: new URLSearchParams(location.search).get("view") ?? "bibliotheque", params: {} },
+  route: {
+    view: new URLSearchParams(location.search).get("view") ?? "bibliotheque",
+    params: Object.fromEntries([...new URLSearchParams(location.search)].filter(([k]) => k !== "view")),
+  },
   pickFiles: () => ["C:/etudes/l3/cours/reseaux/tcp.pdf"],
   tools: {
     list_documents: () => ({ documents: docs }),
@@ -146,6 +234,87 @@ export const devHost: MockHostOptions = {
       result: record(String(quiz), Number(score), Number(total), String(feedback ?? "")),
     }),
     list_results: () => ({ results }),
+    read_pages: ({ document, from }) => {
+      const d = docs.find((x) => x.id === document);
+      if (!d) throw new Error(`Document « ${String(document)} » introuvable.`);
+      const page = Number(from ?? 1);
+      const text =
+        d.kind === "note"
+          ? (sections(notes.get(d.id) ?? "")[page - 1]?.text ?? "")
+          : `Texte simulé de « ${d.title} », ${d.page_unit} ${page}.\n\nLe noyau atomique contient Z protons et N neutrons ; A = Z + N.`;
+      return {
+        document: d.id,
+        title: d.title,
+        kind: d.kind,
+        subject: d.subject_name,
+        chapter: d.chapter_name,
+        page_unit: d.page_unit,
+        total_pages: d.pages,
+        pages: [{ page, text, link: `cadence:documents/document?doc=${d.id}&page=${page}` }],
+        next_page: page < d.pages ? page + 1 : null,
+      };
+    },
+    list_notes: () => ({
+      notes_dir: "C:/etudes/l3/cours/Notes",
+      notes: docs
+        .filter((d) => d.kind === "note")
+        .map((d) => {
+          const n = noteDoc(d.id);
+          return { ...n, path: n.source, updated_at: n.updated_at ?? null };
+        }),
+    }),
+    get_note: ({ note }) => ({ note: noteDoc(String(note)) }),
+    create_note: ({ subject, chapter, title, content }) => {
+      const name = String(title ?? "").trim() || "Sans titre";
+      let id = name
+        .normalize("NFD")
+        .replace(/\p{M}/gu, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "") || "sans-titre";
+      while (docs.some((d) => d.id === id)) id += "-2";
+      const ref = docs.find((d) => d.subject === subject || d.subject_name === subject);
+      const now = new Date().toISOString();
+      docs.push({
+        ...docs[0]!,
+        id,
+        title: name,
+        kind: "note",
+        source: `C:/etudes/l3/cours/Notes/${String(subject)}/${String(chapter)}/${name}.md`,
+        pages: 1,
+        chars: 0,
+        imported_at: now,
+        updated_at: now,
+        revision: 1,
+        subject: ref?.subject ?? String(subject).toLowerCase(),
+        subject_name: ref?.subject_name ?? String(subject),
+        chapter: String(chapter).toLowerCase(),
+        chapter_name: docs.find((d) => d.chapter === chapter)?.chapter_name ?? String(chapter),
+        page_unit: "section",
+      });
+      notes.set(id, String(content ?? ""));
+      return { note: noteDoc(id) };
+    },
+    update_note: ({ note, content, title, append, revision }) => {
+      const d = docs.find((x) => x.id === note && x.kind === "note");
+      if (!d) throw new Error(`Note « ${String(note)} » introuvable.`);
+      if (revision != null && revision !== d.revision) {
+        throw new Error(`La note a été enregistrée depuis la révision ${String(revision)} (révision actuelle : ${d.revision}).`);
+      }
+      if (typeof content === "string") notes.set(d.id, append ? `${notes.get(d.id) ?? ""}\n\n${content}` : content);
+      if (typeof title === "string" && title.trim()) d.title = title.trim();
+      d.revision = (d.revision ?? 1) + 1;
+      d.updated_at = new Date().toISOString();
+      d.pages = sections(notes.get(d.id) ?? "").length;
+      return { note: noteDoc(d.id) };
+    },
+    delete_note: ({ note }) => {
+      const i = docs.findIndex((x) => x.id === note && x.kind === "note");
+      if (i < 0) throw new Error(`Note « ${String(note)} » introuvable.`);
+      const [d] = docs.splice(i, 1);
+      notes.delete(String(note));
+      return { deleted: d };
+    },
     import_document: ({ path, subject, chapter }) => {
       const id = fileName(String(path)).replace(/\.[^.]+$/, "");
       const d: DocumentInfo = {

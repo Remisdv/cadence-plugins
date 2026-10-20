@@ -1,5 +1,8 @@
-/** Vue « Bibliothèque » : Matière → Chapitre → Documents, import de fichiers. */
-import { useState } from "react";
+/**
+ * Vue « Bibliothèque » : Matière → Chapitre → Documents (cours importés et notes), import de
+ * fichiers, « Nouvelle note » par chapitre. Un clic ouvre le document (vue `document`).
+ */
+import { useEffect, useState } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
 import {
   Badge,
@@ -17,13 +20,31 @@ import {
   SectionLabel,
   Spinner,
 } from "@cadence/ui";
-import { ACCEPTED_EXTENSIONS, groupDocuments, kindMeta, quizMeta, type DocumentInfo, type QuizKind } from "../domain";
+import {
+  ACCEPTED_EXTENSIONS,
+  formatDate,
+  groupDocuments,
+  kindMeta,
+  pagesLabel,
+  quizMeta,
+  type DocumentInfo,
+  type QuizKind,
+} from "../domain";
+import { createNote } from "../notes/actions";
+import { NewNoteCard } from "./DocumentView";
 import { useTool } from "../useTool";
 
 export function LibraryView() {
   const { data, error, loading, reload } = useTool<{ documents: DocumentInfo[] }>("list_documents");
   const [importing, setImporting] = useState(false);
+  const [writing, setWriting] = useState(false);
   const groups = groupDocuments(data?.documents ?? []);
+
+  // Notes créées, modifiées ou supprimées (ici, dans l'éditeur ou par l'IA).
+  useEffect(() => {
+    const offs = [cadence.on("note-saved", reload), cadence.on("note-deleted", reload)];
+    return () => offs.forEach((off) => off());
+  }, [reload]);
 
   return (
     <div className="flex h-full flex-col">
@@ -33,12 +54,20 @@ export function LibraryView() {
         <span className="text-caption text-tx3">{data ? `${data.documents.length} document(s)` : ""}</span>
         <div className="grow" />
         <Button size="sm" variant="ghost" icon="refresh" iconOnly aria-label="Rafraîchir" onClick={reload} />
+        <Button size="sm" variant="secondary" icon="pen" onClick={() => setWriting(true)}>
+          Nouvelle note
+        </Button>
         <Button size="sm" variant="primary" icon="plus" onClick={() => setImporting(true)}>
           Importer
         </Button>
       </header>
 
       <main className="min-h-0 grow overflow-y-auto p-5">
+        {writing && (
+          <div className="mb-5">
+            <NewNoteCard onCancel={() => setWriting(false)} />
+          </div>
+        )}
         {importing && (
           <ImportCard
             onDone={() => {
@@ -59,11 +88,16 @@ export function LibraryView() {
             <Icon name="folder" size={19} className="text-tx3" />
             <p className="text-body-sm text-tx2">
               Aucun cours pour l'instant. Importez des PDF, Word, PowerPoint ou Markdown et rangez-les par
-              matière et chapitre.
+              matière et chapitre, ou commencez par prendre des notes.
             </p>
-            <Button variant="secondary" icon="plus" onClick={() => setImporting(true)}>
-              Importer des cours
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" icon="plus" onClick={() => setImporting(true)}>
+                Importer des cours
+              </Button>
+              <Button variant="ghost" icon="pen" onClick={() => setWriting(true)}>
+                Nouvelle note
+              </Button>
+            </div>
           </Card>
         )}
 
@@ -79,6 +113,14 @@ export function LibraryView() {
                     <Button
                       size="xs"
                       variant="ghost"
+                      icon="pen"
+                      onClick={() => void createNote({ subject: subjectId, chapter: chapterId })}
+                    >
+                      Nouvelle note
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
                       icon="sparkle"
                       onClick={() => void cadence.runAction("poser-question", { subject: subjectId, chapter: chapterId })}
                     >
@@ -88,17 +130,29 @@ export function LibraryView() {
                   </div>
                   <Card className="divide-y divide-line">
                     {chapter.docs.map((d) => (
-                      <div key={d.id} className="flex min-h-[42px] items-center gap-3 px-3.5 py-2">
-                        <Icon name="file" size={15} className="text-tx3" />
+                      <button
+                        key={d.id}
+                        type="button"
+                        className="flex min-h-[42px] w-full items-center gap-3 px-3.5 py-2 text-left hover:bg-p2"
+                        onClick={() => void cadence.navigate("document", { doc: d.id })}
+                      >
+                        <Icon
+                          name={d.kind === "note" ? "pen" : "file"}
+                          size={15}
+                          className={d.kind === "note" ? "text-green" : "text-tx3"}
+                        />
                         <div className="min-w-0 grow">
                           <div className="truncate text-body">{d.title}</div>
-                          <div className="mono truncate text-tiny text-tx3">{d.source}</div>
+                          <div className="mono truncate text-tiny text-tx3">
+                            {d.kind === "note" && d.updated_at ? `modifiée ${formatDate(d.updated_at)} · ` : ""}
+                            {d.source}
+                          </div>
                         </div>
                         <Badge tone={kindMeta[d.kind].tone}>{kindMeta[d.kind].label}</Badge>
                         <span className="mono w-[90px] shrink-0 text-right text-caption text-tx3">
-                          {d.pages} {d.kind === "pptx" ? "diapo." : d.kind === "pdf" ? "p." : "blocs"}
+                          {pagesLabel(d.kind, d.pages)}
                         </span>
-                      </div>
+                      </button>
                     ))}
                   </Card>
                 </div>
