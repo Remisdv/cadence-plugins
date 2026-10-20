@@ -6,6 +6,7 @@ import {
   estimateLabel,
   issueContext,
   issueKey,
+  isStarted,
   isViewId,
   priorityInfo,
   repoShortName,
@@ -61,5 +62,38 @@ describe("labels", () => {
     expect(priorityInfo(0).label).toBe("P0 · socle");
     expect(priorityInfo(1)).toMatchObject({ label: "P1", tone: "red" });
     expect(priorityInfo(5)).toMatchObject({ label: "P5", tone: "muted" });
+  });
+});
+
+describe("sprints automatiques", () => {
+  const project = {
+    issue: 24,
+    url: "https://github.com/Remisdv/Go-Alternance-CRM-POC/issues/24",
+    paused_since: null,
+    duration_days: 7,
+    points_per_day: 1.4,
+    capacity: null,
+    next_capacity: 10,
+    current: null,
+    release_branch: null,
+    carried: [],
+  };
+
+  it("ne prend pas une issue d'état « idle » (jalons seuls) pour des sprints démarrés", () => {
+    expect(isStarted(null)).toBe(false);
+    expect(isStarted(undefined)).toBe(false);
+    // Issue #24 de Remisdv/Go-Alternance-CRM-POC : jalons créés, sprints jamais démarrés.
+    expect(isStarted({ ...project, status: "idle", sprints: [] })).toBe(false);
+    const sprint = {
+      version: "0.1.0",
+      branch: "release/0.1.0",
+      start_on: "2026-10-20",
+      due_on: "2026-10-20",
+      paused_days: 0,
+      capacity: 1,
+      filled: true,
+    };
+    expect(isStarted({ ...project, status: "running", sprints: [sprint] })).toBe(true);
+    expect(isStarted({ ...project, status: "paused", sprints: [sprint] })).toBe(true);
   });
 });

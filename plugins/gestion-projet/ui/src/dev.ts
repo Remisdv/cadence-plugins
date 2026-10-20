@@ -513,11 +513,12 @@ function sprintSummary(repo: string, title?: string) {
   const closed = count(list, "done");
   const start = v.kind === "sprint" && v.due_on ? sprintStart(v.due_on, 14) : null;
   const elapsed = start
-    ? Math.min(14, Math.max(0, Math.round((Date.parse(day(0)) - Date.parse(start)) / 86_400_000)))
+    ? Math.min(13, Math.max(0, Math.round((Date.parse(day(0)) - Date.parse(start)) / 86_400_000)))
     : 0;
+  // Comme le serveur : l'origine (fin de la veille), puis un point par jour écoulé.
   const burndown = start
-    ? Array.from({ length: elapsed + 1 }, (_, i) => {
-        const date = new Date(Date.parse(start) + i * 86_400_000).toISOString().slice(0, 10);
+    ? Array.from({ length: elapsed + 2 }, (_, i) => {
+        const date = new Date(Date.parse(start) + (i - 1) * 86_400_000).toISOString().slice(0, 10);
         return {
           date,
           remaining: list.filter((x) => !x.closed_at || x.closed_at.slice(0, 10) > date).length,
@@ -759,7 +760,8 @@ const planningTools: MockHostOptions["tools"] = {
           version,
           branch: `release/${version}`,
           start_on: day(0),
-          due_on: day(Number(duration_days)),
+          // Échéance = dernier jour du sprint : le jour même pour un sprint d'un jour.
+          due_on: day(Number(duration_days) - 1),
           paused_days: 0,
           capacity: Number(capacity),
           filled: true,

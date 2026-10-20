@@ -14,10 +14,10 @@
     "sprint_length_days": {
       "type": "integer",
       "title": "Durée de sprint (jours)",
-      "description": "Durée par défaut d'un nouveau sprint (milestone daté).",
+      "description": "Durée par défaut d'un nouveau sprint (milestone daté), échéance comprise : 1 = un sprint par jour.",
       "default": 14,
       "minimum": 1,
-      "maximum": 60
+      "maximum": 90
     }
   }
 }

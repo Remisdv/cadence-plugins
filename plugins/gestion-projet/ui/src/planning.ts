@@ -100,15 +100,15 @@ export function jalonSpan(
   return { from: Math.min(...idx), to: Math.max(...idx) };
 }
 
-/** Durées de sprint proposées, en jours (semaines entières). */
-export const sprintDurations = [7, 14, 21, 28];
+/** Durées de sprint proposées, en jours : sprints courts (dès un jour), puis semaines entières. */
+export const sprintDurations = [1, 2, 3, 4, 5, 7, 10, 14, 21, 28];
 
-/** `14` → « 2 semaines », `10` → « 10 jours ». */
+/** `14` → « 2 semaines », `10` → « 10 jours », `1` → « 1 jour ». */
 export function durationLabel(days: number): string {
   return days % 7 === 0 ? plural(days / 7, "semaine") : plural(days, "jour");
 }
 
-/** Durées du sélecteur : les semaines entières, plus la durée actuelle si elle est différente. */
+/** Durées du sélecteur : les durées proposées, plus la durée actuelle si elle est différente. */
 export function durationOptions(current: number): number[] {
   return [...new Set([...sprintDurations, current])].sort((a, b) => a - b);
 }
@@ -230,10 +230,13 @@ export function daysLeftLabel(days: number | null): string {
   return `${plural(days, "jour")} restant${days > 1 ? "s" : ""}`;
 }
 
-/** Issues à fermer par jour pour finir à l'échéance ; `null` sans échéance à venir. */
+/**
+ * Issues à fermer par jour pour finir à l'échéance, aujourd'hui compris (l'échéance est le dernier
+ * jour du sprint : `daysLeft` = 0 le dernier jour) ; `null` sans échéance ou une fois dépassée.
+ */
 export function requiredPace(remaining: number, daysLeft: number | null): number | null {
-  if (daysLeft === null || daysLeft <= 0) return null;
-  return Math.round((remaining / daysLeft) * 10) / 10;
+  if (daysLeft === null || daysLeft < 0) return null;
+  return Math.round((remaining / (daysLeft + 1)) * 10) / 10;
 }
 
 /** Points d'avancement gagnés depuis la veille (« +3 aujourd'hui »). */
@@ -342,10 +345,13 @@ export function versionProgress(v: Pick<Version, "open_issues" | "closed_issues"
   return total === 0 ? 0 : (v.closed_issues / total) * 100;
 }
 
-/** Début d'un sprint : échéance moins la durée réglée (même règle que le serveur). */
+/**
+ * Début d'un sprint de `days` jours qui finit à `due` (dernier jour inclus, même règle que le
+ * serveur) : un sprint d'un jour commence le jour de son échéance.
+ */
 export function sprintStart(due: string, days: number): string {
   const d = new Date(`${due.slice(0, 10)}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() - days);
+  d.setUTCDate(d.getUTCDate() - Math.max(1, days) + 1);
   return d.toISOString().slice(0, 10);
 }
 

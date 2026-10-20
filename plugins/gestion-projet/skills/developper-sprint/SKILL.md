@@ -21,14 +21,28 @@ Ceux du skill « Implémenter » (`cadence__repo_checkout`, `gestion-projet__get
 
 | Outil | Usage |
 | --- | --- |
-| `gestion-projet__sprint_summary` | sprint en cours : version, échéance, issues et leur état |
-| `gestion-projet__list_issues` | issues du sprint (`milestone` = version du sprint) |
+| `gestion-projet__sprint_summary` | sprint en cours : version, échéance, issues et leur état ; `started`, `start_defaults` |
+| `gestion-projet__list_issues` | issues du sprint (`milestone` = version du sprint), ou sans version (`milestone: "none"`) |
+| `gestion-projet__project_start` | démarre les sprints automatiques (seulement après accord explicite) |
 
 ## Démarche
 
+0. **Sprints pas encore démarrés.** Si `sprint_summary` répond `started: false` (ou
+   `get_repository` → `sprints.started: false`, ou aucun `sprints.current_version`), il n'y a
+   pas de sprint à développer : l'issue d'état `cadence/sprints` (souvent créée par les jalons de
+   la roadmap, `status: idle`) n'est **pas** un sprint. Ne réponds jamais seulement par son lien.
+   Dis-le en une phrase et propose, au choix :
+   - **démarrer les sprints** avec `project_start` (`repo`, `duration_days`, `capacity`,
+     `first_version` de `start_defaults`, que l'utilisateur peut changer ; un sprint peut durer
+     un seul jour) — seulement après son « oui » explicite. Le premier sprint est rempli par
+     priorité ; relis ensuite `sprint_summary` et poursuis à l'étape 1 ;
+   - ou **développer des issues sans sprint** : `list_issues` avec `milestone: "none"` (issues
+     ouvertes sans version), même ordre (étape 2), branches depuis la branche par défaut.
+   Attends sa réponse avant tout le reste.
 1. **Le sprint.** `get_repository` (version et branche de release du sprint) puis `sprint_summary`
    ou `list_issues` avec `milestone`. Garde les issues ouvertes à l'état « à faire » (ou la
-   sélection demandée), sans PR ouverte déjà liée.
+   sélection demandée), sans PR ouverte déjà liée. Sprint vide (rien « à faire ») : dis-le et
+   propose les issues suivantes sans version, par priorité.
 2. **L'ordre.** Priorité 0 (socle) d'abord, puis 1 à 5 ; une issue dont une dépendance
    (« Dépend de #n ») n'est pas encore fermée ni livrée dans cette passe attend son tour. Présente
    le plan dans le chat (ordre, SP, dépendances) et **attends le feu vert** — l'utilisateur peut

@@ -931,7 +931,7 @@ impl GestionProjet {
             let issues = self.milestone_issues(repo, number).await?;
             let load: u32 = issues.iter().map(projet::weight).sum();
             if load < target {
-                self.pull_into_sprint(repo, number, &issues, target - load, false)
+                self.pull_into_sprint(repo, number, &issues, target - load, issues.is_empty())
                     .await?;
             } else {
                 for n in projet::trim(&issues, &cur.carried, target) {
@@ -1202,7 +1202,7 @@ impl GestionProjet {
                         .settings()
                         .sprint_length_days
                         .clamp(projet::MIN_DAYS, projet::MAX_DAYS),
-                    initial_points_per_day: 10.0 / 7.0,
+                    initial_points_per_day: projet::START_POINTS_PER_DAY,
                     paused_since: None,
                     sprints: vec![],
                     jalons: vec![],
@@ -1285,6 +1285,8 @@ impl GestionProjet {
                 .filter(|v| v != &cur.version)
                 .collect();
             let (low, avg, high) = state.rate_range();
+            // Environ un an de sprints, au moins 52 : des sprints d'un jour vont plus loin en nombre.
+            let horizon = (365 / state.duration_days.max(1) as usize).clamp(52, 366);
             [avg, high, low].map(|rate| {
                 projet::forecast(
                     cur,
@@ -1295,7 +1297,7 @@ impl GestionProjet {
                     state.duration_days,
                     &taken,
                     &prefix,
-                    52,
+                    horizon,
                 )
             })
         });

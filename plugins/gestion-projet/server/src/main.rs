@@ -6,6 +6,8 @@
 mod architecture;
 mod config;
 mod engine;
+#[cfg(test)]
+mod fake_github;
 mod github;
 mod model;
 mod planning;

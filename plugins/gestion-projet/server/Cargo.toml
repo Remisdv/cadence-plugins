@@ -1,6 +1,6 @@
 [package]
 name = "cadence-gestion-projet"
-version = "0.4.0"
+version = "0.5.0"
 description = "Serveur MCP du plugin Cadence « Gestion de projet » (issues, sprints, versions, PR GitHub)."
 edition.workspace = true
 license.workspace = true
@@ -19,3 +19,7 @@ base64 = "0.23"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "http2"] }
+
+[dev-dependencies]
+# Faux GitHub des tests (serveur HTTP local).
+tokio = { workspace = true, features = ["net", "io-util"] }

@@ -3,7 +3,9 @@
 //! Fonctions pures sur des jours civils `AAAA-MM-JJ` (les instants ISO sont tronqués au jour),
 //! reprises de Cadence 1 (`domain/burndown.rs`). La portée est celle d'aujourd'hui : une issue
 //! ajoutée en cours de sprint compte dès le premier jour (GitHub ne date pas l'entrée d'une issue
-//! dans un milestone). Le début d'un sprint est son échéance moins la durée de sprint réglée.
+//! dans un milestone). Un sprint de N jours couvre N jours civils, du début à l'échéance
+//! incluse (un sprint d'un jour commence et finit le même jour) ; sans début connu, il commence
+//! N − 1 jours avant l'échéance (durée de sprint réglée).
 
 use serde::Serialize;
 use serde_json::Value;
@@ -138,14 +140,16 @@ pub fn remaining_on(closed_on: &[Option<&str>], on: &str) -> u32 {
     closed_on.iter().filter(|c| c.is_none_or(|c| day(c) > on)).count() as u32
 }
 
-/// Burndown du début du sprint jusqu'à aujourd'hui (ou l'échéance si elle est passée), un point
-/// par jour. Vide si le sprint n'a pas commencé.
+/// Burndown jusqu'à aujourd'hui (ou l'échéance si elle est passée) : un point d'origine, le reste
+/// au début du sprint (fin de la veille), puis un point par jour écoulé, en fin de journée. Un
+/// sprint de N jours a donc N + 1 points une fois fini ; un sprint d'un jour en a deux. Vide si le
+/// sprint n'a pas commencé.
 pub fn burndown(closed_on: &[Option<&str>], start: &str, end: &str, today: &str) -> Vec<BurndownPoint> {
     let Some((start, _, last)) = window(start, end, today) else {
         return vec![];
     };
     let days = days_between(start, last).unwrap_or(0).min(MAX_POINTS);
-    (0..=days)
+    (-1..=days)
         .filter_map(|i| add_days(start, i))
         .map(|date| BurndownPoint {
             remaining: remaining_on(closed_on, &date),
@@ -154,7 +158,7 @@ pub fn burndown(closed_on: &[Option<&str>], start: &str, end: &str, today: &str)
         .collect()
 }
 
-/// Issues fermées par jour écoulé depuis le début du sprint (le jour même compte pour un).
+/// Issues fermées par jour écoulé depuis le début du sprint, aujourd'hui compris.
 pub fn velocity(closed_on: &[Option<&str>], start: &str, end: &str, today: &str) -> f32 {
     let Some((start, _, last)) = window(start, end, today) else {
         return 0.0;
@@ -165,22 +169,23 @@ pub fn velocity(closed_on: &[Option<&str>], start: &str, end: &str, today: &str)
         .map(|c| day(c))
         .filter(|c| *c >= start && *c <= last)
         .count();
-    let elapsed = days_between(start, last).unwrap_or(0).max(1);
-    round1(closed as f32 / elapsed as f32)
+    let elapsed = days_between(start, last).unwrap_or(0) + 1;
+    round1(closed as f32 / elapsed.max(1) as f32)
 }
 
 /// Retard (positif) ou avance (négatif) en jours sur la droite idéale, qui va de `scope` issues
-/// au début à zéro à l'échéance : écart entre aujourd'hui et le jour où la droite passe par le
-/// reste actuel.
+/// au début du premier jour à zéro à la fin de l'échéance : écart entre le temps écoulé (jours
+/// finis avant aujourd'hui ; toute la durée une fois l'échéance passée) et le moment où la droite
+/// passe par le reste actuel.
 pub fn delay_days(scope: u32, remaining: u32, start: &str, end: &str, today: &str) -> f32 {
-    let Some((start, end, last)) = window(start, end, today) else {
+    let Some((start, end, _)) = window(start, end, today) else {
         return 0.0;
     };
-    let length = days_between(start, end).unwrap_or(0);
-    if scope == 0 || length == 0 {
+    let length = days_between(start, end).unwrap_or(0) + 1;
+    if scope == 0 {
         return 0.0;
     }
-    let elapsed = days_between(start, last).unwrap_or(0) as f32;
+    let elapsed = days_between(start, day(today)).unwrap_or(0).min(length) as f32;
     let on_track_at = length as f32 * (1.0 - remaining.min(scope) as f32 / scope as f32);
     round1(elapsed - on_track_at)
 }
@@ -223,13 +228,13 @@ impl StatusCounts {
 /// Rythme d'un sprint, calculé sur ses issues.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Pace {
-    /// Début (`AAAA-MM-JJ`) : échéance moins la durée de sprint réglée.
+    /// Début (`AAAA-MM-JJ`) : premier jour du sprint.
     pub start_on: Option<String>,
-    /// Échéance (`AAAA-MM-JJ`).
+    /// Échéance (`AAAA-MM-JJ`) : dernier jour du sprint, inclus.
     pub due_on: Option<String>,
-    /// Jours restants avant l'échéance (négatif si dépassée) ; `None` pour un palier.
+    /// Jours restants après aujourd'hui (0 : dernier jour ; négatif si dépassée) ; `None` pour un palier.
     pub days_left: Option<i64>,
-    /// Jours du sprint (début → échéance).
+    /// Jours du sprint, début et échéance compris (1 pour un sprint d'un jour).
     pub length_days: Option<i64>,
     pub total: u32,
     pub closed: u32,
@@ -250,7 +255,7 @@ pub struct Pace {
 
 /// Rythme d'une version à partir de ses issues (toutes, ouvertes et fermées). Sans échéance
 /// (palier), seuls l'avancement et les compteurs sont renseignés. Le début est `start_on` (sprint
-/// automatique) ou, à défaut, l'échéance moins la durée de sprint réglée.
+/// automatique) ou, à défaut, `sprint_length_days − 1` jours avant l'échéance (dernier jour inclus).
 pub fn pace(
     issues: &[Issue],
     start_on: Option<&str>,
@@ -296,14 +301,14 @@ pub fn pace(
     };
     let start = match start_on.filter(|d| is_date(d)) {
         Some(start) => day(start).to_string(),
-        None => match add_days(&due, -i64::from(sprint_length_days.max(1))) {
+        None => match add_days(&due, 1 - i64::from(sprint_length_days.max(1))) {
             Some(start) => start,
             None => return out,
         },
     };
     let today = day(today);
     out.days_left = days_between(today, &due);
-    out.length_days = days_between(&start, &due);
+    out.length_days = days_between(&start, &due).map(|d| d + 1);
     out.burndown = burndown(&closed_on, &start, &due, today);
     out.velocity = velocity(&closed_on, &start, &due, today);
     let last = if today < due.as_str() { today } else { due.as_str() };
@@ -375,6 +380,8 @@ mod tests {
         assert_eq!(
             remaining,
             [
+                // Origine : le reste au début du sprint (fin de la veille).
+                ("2026-09-08".to_string(), 5),
                 ("2026-09-09".to_string(), 5),
                 ("2026-09-10".to_string(), 3),
                 ("2026-09-11".to_string(), 3),
@@ -382,9 +389,10 @@ mod tests {
                 ("2026-09-13".to_string(), 2),
             ]
         );
+        // Sprint fini : 15 jours (09 → 23 inclus) et l'origine.
         assert_eq!(
             burndown(&SCOPE, "2026-09-09", "2026-09-23", "2026-10-15").len(),
-            15
+            16
         );
         assert!(burndown(&SCOPE, "2026-09-09", "2026-09-23", "2026-09-01").is_empty());
         assert!(burndown(&SCOPE, "2026-09-23", "2026-09-09", "2026-09-15").is_empty());
@@ -392,18 +400,41 @@ mod tests {
     }
 
     #[test]
+    fn burns_down_a_one_day_sprint() {
+        let scope = [Some("2026-09-09T10:00:00Z"), None];
+        let points = |today: &str| -> Vec<(String, u32)> {
+            burndown(&scope, "2026-09-09", "2026-09-09", today)
+                .into_iter()
+                .map(|p| (p.date, p.remaining))
+                .collect()
+        };
+        let expected = [("2026-09-08".to_string(), 2), ("2026-09-09".to_string(), 1)];
+        // Le jour même et après : l'origine et le seul jour du sprint.
+        assert_eq!(points("2026-09-09"), expected);
+        assert_eq!(points("2026-09-12"), expected);
+        assert!(points("2026-09-08").is_empty());
+        assert_eq!(velocity(&scope, "2026-09-09", "2026-09-09", "2026-09-09"), 1.0);
+        // Rien de fermé le matin du seul jour : dans les temps ; tout fermé : un jour d'avance.
+        assert_eq!(delay_days(4, 4, "2026-09-09", "2026-09-09", "2026-09-09"), 0.0);
+        assert_eq!(delay_days(4, 0, "2026-09-09", "2026-09-09", "2026-09-09"), -1.0);
+        // Le lendemain, la moitié restante : une demi-journée de retard.
+        assert_eq!(delay_days(4, 2, "2026-09-09", "2026-09-09", "2026-09-10"), 0.5);
+    }
+
+    #[test]
     fn measures_velocity_and_delay() {
-        assert_eq!(velocity(&SCOPE, "2026-09-09", "2026-09-23", "2026-09-13"), 0.8);
+        // 3 issues fermées en 5 jours (09 → 13).
+        assert_eq!(velocity(&SCOPE, "2026-09-09", "2026-09-23", "2026-09-13"), 0.6);
         assert_eq!(
             velocity(&[Some("2026-09-09")], "2026-09-09", "2026-09-23", "2026-09-09"),
             1.0
         );
-        // 14 jours, 14 issues : la droite perd une issue par jour.
-        assert_eq!(delay_days(14, 7, "2026-09-09", "2026-09-23", "2026-09-16"), 0.0);
-        assert_eq!(delay_days(14, 9, "2026-09-09", "2026-09-23", "2026-09-16"), 2.0);
-        assert_eq!(delay_days(14, 4, "2026-09-09", "2026-09-23", "2026-09-16"), -3.0);
-        assert_eq!(delay_days(14, 2, "2026-09-09", "2026-09-23", "2026-10-15"), 2.0);
-        assert_eq!(delay_days(0, 0, "2026-09-09", "2026-09-23", "2026-09-16"), 0.0);
+        // 14 jours (09 → 22 inclus), 14 issues : la droite perd une issue par jour.
+        assert_eq!(delay_days(14, 7, "2026-09-09", "2026-09-22", "2026-09-16"), 0.0);
+        assert_eq!(delay_days(14, 9, "2026-09-09", "2026-09-22", "2026-09-16"), 2.0);
+        assert_eq!(delay_days(14, 4, "2026-09-09", "2026-09-22", "2026-09-16"), -3.0);
+        assert_eq!(delay_days(14, 2, "2026-09-09", "2026-09-22", "2026-10-15"), 2.0);
+        assert_eq!(delay_days(0, 0, "2026-09-09", "2026-09-22", "2026-09-16"), 0.0);
         assert_eq!((progress(11, 18), progress(0, 0), progress(5, 3)), (61, 0, 100));
     }
 
@@ -425,12 +456,13 @@ mod tests {
             issue("open", &[], None),
             issue("open", &["status/todo"], None),
         ];
-        let p = pace(&issues, None, Some("2026-09-23T07:00:00Z"), 14, "2026-09-13");
+        // 14 jours, échéance (dernier jour) le 22 : début le 09.
+        let p = pace(&issues, None, Some("2026-09-22T07:00:00Z"), 14, "2026-09-13");
         assert_eq!(
             (p.start_on.as_deref(), p.due_on.as_deref()),
-            (Some("2026-09-09"), Some("2026-09-23"))
+            (Some("2026-09-09"), Some("2026-09-22"))
         );
-        assert_eq!((p.days_left, p.length_days), (Some(10), Some(14)));
+        assert_eq!((p.days_left, p.length_days), (Some(9), Some(14)));
         assert_eq!((p.total, p.closed, p.progress), (6, 2, 33));
         assert_eq!(
             p.counts,
@@ -441,18 +473,30 @@ mod tests {
                 done: 2
             }
         );
-        assert_eq!(p.burndown.len(), 5);
+        // L'origine (le 08) et cinq jours écoulés.
+        assert_eq!(p.burndown.len(), 6);
         assert_eq!(p.burndown.last().map(|b| b.remaining), Some(4));
-        assert_eq!(p.velocity, 0.5);
-        // 14 j, 6 issues, 4 restantes au jour 4 : la droite y passe au jour 4,7.
+        assert_eq!(p.velocity, 0.4);
+        // 14 j, 6 issues, 4 restantes après 4 jours : la droite y passe au jour 4,7.
         assert_eq!(p.delay_days, -0.7);
 
-        // Sprint de 7 jours réglé : début une semaine avant l'échéance.
+        // Sprint de 7 jours réglé : début six jours avant l'échéance.
         assert_eq!(
             pace(&issues, None, Some("2026-09-23"), 7, "2026-09-13")
                 .start_on
                 .as_deref(),
-            Some("2026-09-16")
+            Some("2026-09-17")
+        );
+        // Sprint d'un jour : début et échéance le même jour.
+        let one = pace(&issues, None, Some("2026-09-13"), 1, "2026-09-13");
+        assert_eq!(
+            (
+                one.start_on.as_deref(),
+                one.length_days,
+                one.days_left,
+                one.burndown.len()
+            ),
+            (Some("2026-09-13"), Some(1), Some(0), 2)
         );
         // Palier : avancement seulement.
         let palier = pace(&issues, None, None, 14, "2026-09-13");
@@ -460,7 +504,7 @@ mod tests {
         let auto = pace(&issues, Some("2026-09-05"), Some("2026-09-23"), 14, "2026-09-13");
         assert_eq!(
             (auto.start_on.as_deref(), auto.length_days),
-            (Some("2026-09-05"), Some(18))
+            (Some("2026-09-05"), Some(19))
         );
         assert_eq!(
             (palier.progress, palier.days_left, palier.burndown.len()),

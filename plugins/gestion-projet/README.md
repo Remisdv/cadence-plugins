@@ -110,14 +110,17 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `mark_pull_request_ready`                             | ✓ mutation GraphQL `markPullRequestReadyForReview`                                                                                                           |
 | `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
 | `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
-| `sprint_summary` (réservé à l'UI)                     | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; début du sprint = échéance − `sprint_length_days` |
-| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (réservés à l'UI) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag (voir « Sprints automatiques ») |
+| `sprint_summary`                                      | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; l'échéance est le dernier jour du sprint, début = échéance − (`sprint_length_days` − 1) ; `started`, `start_defaults` tant que les sprints ne sont pas démarrés |
+| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag (voir « Sprints automatiques ») |
 
 ## Sprints automatiques
 
-L'écran « Sprint en cours » propose **Démarrer le projet** : on saisit la durée d'un sprint (par
-exemple 2 semaines), la capacité du premier sprint en story points et sa version (`0.1.0` par
-défaut). Ensuite, Cadence fait tout seul :
+L'écran « Sprint en cours » propose **Démarrer le projet** : on saisit la durée d'un sprint (d'un
+jour à quatre semaines, par exemple 1 jour ou 2 semaines), la capacité du premier sprint en story
+points et sa version (`0.1.0` par défaut). Un sprint de N jours couvre N jours civils, échéance
+comprise : un sprint d'un jour commence et finit le même jour, le suivant part le lendemain. Le
+bouton reste proposé tant que l'issue d'état n'a que des jalons (`status: idle`, créée par la
+Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
 
 - **Un sprint = une version** : milestone daté `0.2.0` et branche `release/0.2.0` (créée depuis la
   branche par défaut, ou depuis la release précédente si elle n'est pas encore fusionnée). Les
@@ -125,7 +128,8 @@ défaut). Ensuite, Cadence fait tout seul :
 - **Remplissage par priorité** : les issues ouvertes sans version, `priority/0` (socle) d'abord
   puis 1 à 5, sans priorité en dernier, tant qu'elles tiennent dans la capacité ; une issue dont une
   dépendance (« Dépend de #12 ») est ouverte hors du sprint attend ; une issue sans story points
-  compte pour 3.
+  compte pour 3. Un sprint vide prend au moins une issue, même plus grosse que sa capacité
+  (sprints courts), et une durée réduite n'en retire jamais la dernière.
 - **Adaptation** : la capacité suit le rythme réel (story points fermés par jour sur les trois
   derniers sprints, pauses déduites). Un sprint fini en avance tire les issues suivantes. À
   l'échéance, les issues ouvertes passent en tête du sprint suivant et leurs PR visent la nouvelle
@@ -139,8 +143,9 @@ défaut). Ensuite, Cadence fait tout seul :
 L'état est partagé par toute l'équipe dans une issue du dépôt, label `cadence/sprints`, masquée
 dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait avancer les sprints :
 à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
-Outils réservés à l'UI : `project_start`, `project_pause`, `project_resume`,
-`project_set_duration` ; `sprint_summary` porte l'état (`project`).
+Outils `project_start`, `project_pause`, `project_resume`, `project_set_duration` (l'IA ne s'en
+sert qu'à la demande explicite de l'utilisateur) ; `sprint_summary` porte l'état : `started`,
+`project` une fois démarrés, sinon `start_defaults` (durée, capacité, version proposées).
 
 ## Roadmap par jalons
 

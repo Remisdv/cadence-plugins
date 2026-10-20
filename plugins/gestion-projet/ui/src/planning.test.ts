@@ -112,13 +112,19 @@ describe("sprint", () => {
     expect(daysLeftLabel(0)).toBe("dernier jour");
     expect(daysLeftLabel(-2)).toBe("échéance dépassée de 2 j");
     expect(daysLeftLabel(null)).toBe("sans échéance");
-    expect(requiredPace(7, 5)).toBe(1.4);
-    expect(requiredPace(7, 0)).toBeNull();
+    // 5 jours après aujourd'hui : 6 jours pour fermer 7 issues.
+    expect(requiredPace(7, 5)).toBe(1.2);
+    // Dernier jour (sprint d'un jour compris) : tout aujourd'hui.
+    expect(requiredPace(3, 0)).toBe(3);
+    expect(requiredPace(7, -1)).toBeNull();
+    expect(requiredPace(7, null)).toBeNull();
     expect(gainedToday([{ remaining: 8 }, { remaining: 6 }], 10)).toBe(20);
   });
 
   it("calcule le début du sprint et les jauges", () => {
-    expect(sprintStart("2026-10-20T07:00:00Z", 14)).toBe("2026-10-06");
+    expect(sprintStart("2026-10-20T07:00:00Z", 14)).toBe("2026-10-07");
+    expect(sprintStart("2026-10-20", 1)).toBe("2026-10-20");
+    expect(sprintStart("2026-10-20", 2)).toBe("2026-10-19");
     expect(formatRange("2026-10-06", "2026-10-20")).toMatch(/^6 oct\. → 20 oct\.$/);
     const meters = statusMeters({ todo: 1, doing: 1, review: 0, done: 2 });
     expect(meters.map((m) => [m.label, m.value, m.percent])).toEqual([
@@ -231,8 +237,12 @@ describe("sprints automatiques", () => {
     expect(durationLabel(7)).toBe("1 semaine");
     expect(durationLabel(14)).toBe("2 semaines");
     expect(durationLabel(10)).toBe("10 jours");
-    expect(durationOptions(14)).toEqual([7, 14, 21, 28]);
-    expect(durationOptions(10)).toEqual([7, 10, 14, 21, 28]);
+    expect(durationLabel(1)).toBe("1 jour");
+    expect(durationLabel(2)).toBe("2 jours");
+    // Sprints courts proposés, dès un jour.
+    expect(durationOptions(14)).toEqual([1, 2, 3, 4, 5, 7, 10, 14, 21, 28]);
+    expect(durationOptions(6)).toEqual([1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 28]);
+    expect(durationOptions(1)[0]).toBe(1);
   });
 
   it("décrit la livraison d'un sprint terminé", () => {

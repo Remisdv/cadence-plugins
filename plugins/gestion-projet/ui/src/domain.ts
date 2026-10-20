@@ -229,7 +229,8 @@ export interface ProjectView {
   /** Issue d'état partagée par l'équipe. */
   issue: number;
   url: string;
-  status: "running" | "paused";
+  /** `idle` : issue d'état créée par les jalons de la roadmap, sprints pas encore démarrés. */
+  status: "idle" | "running" | "paused";
   paused_since: string | null;
   duration_days: number;
   /** Rythme : story points fermés par jour. */
@@ -241,6 +242,14 @@ export interface ProjectView {
   carried: number[];
   /** Du plus récent au plus ancien (six au plus). */
   sprints: SprintRecord[];
+}
+
+/**
+ * Sprints automatiques démarrés : une issue d'état « idle » (jalons de la roadmap seulement) ne
+ * l'est pas, l'écran Sprint doit encore proposer « Démarrer le projet ».
+ */
+export function isStarted(project: ProjectView | null | undefined): project is ProjectView {
+  return !!project && project.status !== "idle" && project.sprints.length > 0;
 }
 
 /* ---------- Roadmap par jalons (`roadmap`) ---------- */
@@ -475,10 +484,15 @@ export interface SprintSummary {
   pace?: Pace;
   issues?: Issue[];
   message?: string;
+  /** Sprints automatiques démarrés (`project` renseigné). */
+  started?: boolean;
   /** Sprints automatiques ; `null` tant que le projet n'est pas démarré. */
   project?: ProjectView | null;
   project_error?: string;
+  /** Tant que le projet n'est pas démarré : valeurs proposées par « Démarrer le projet ». */
   start_defaults?: StartDefaults;
+  /** Issue d'état déjà créée par les jalons (reprise au démarrage). */
+  state_issue?: { number: number; url: string };
 }
 
 export type PrState = "draft" | "open" | "merged" | "closed";

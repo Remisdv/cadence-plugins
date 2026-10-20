@@ -274,7 +274,7 @@ pub struct NumberParams {
 pub struct ProjectStartParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
-    /// Durée d'un sprint en jours (1 à 90), modifiable ensuite.
+    /// Durée d'un sprint en jours (1 à 90 ; 1 = un sprint par jour), modifiable ensuite.
     pub duration_days: u32,
     /// Story points du premier sprint ; ensuite, la capacité suit le rythme réel.
     pub capacity: u32,
@@ -1017,36 +1017,26 @@ impl GestionProjet {
                     .and_then(|m| model::find_milestone(&milestones, m["title"].as_str()?, ""))
             }
         };
+        let titles: Vec<String> = milestones
+            .iter()
+            .filter_map(|m| m["title"].as_str().map(str::to_string))
+            .collect();
         let mut out = json!({
             "repo": repo,
             "today": today,
             "sprint_length_days": settings.sprint_length_days,
-            "project": project.as_ref().map(project_view),
         });
+        merge(&mut out, project_summary(project.as_ref(), &settings, &titles));
         if let Some(err) = project_error {
             out["project_error"] = json!(err);
         }
-        if project.as_ref().is_none_or(|p| p.state.sprints.is_empty()) {
-            let titles: Vec<String> = milestones
-                .iter()
-                .filter_map(|m| m["title"].as_str().map(str::to_string))
-                .collect();
-            let days = settings
-                .sprint_length_days
-                .clamp(projet::MIN_DAYS, projet::MAX_DAYS);
-            out["start_defaults"] = json!({
-                "duration_days": days,
-                // 10 story points par semaine pour commencer : la capacité suit ensuite le rythme réel.
-                "capacity": ((days as f32) * 10.0 / 7.0).round().max(1.0) as u32,
-                "first_version": projet::next_version(&titles, &settings.tag_prefix),
-            });
-        }
+        let started = project.as_ref().is_some_and(|p| p.state.started());
         let Some(raw) = chosen else {
             out["sprint"] = Value::Null;
-            out["message"] = json!(if project.as_ref().is_some_and(|p| !p.state.sprints.is_empty()) {
+            out["message"] = json!(if started {
                 "Le sprint en cours n'a pas encore de milestone : il sera créé à la prochaine passe."
             } else {
-                "Aucun sprint en cours : démarrez le projet pour que Cadence crée les sprints, ou datez une version."
+                NOT_STARTED_MESSAGE
             });
             return Ok(out);
         };
@@ -1300,6 +1290,49 @@ fn state_str(s: IssueState) -> &'static str {
     }
 }
 
+/// Sprints automatiques pas encore démarrés (pas d'issue d'état, ou une issue d'état « idle » qui
+/// ne porte que les jalons et les designs).
+const NOT_STARTED_MESSAGE: &str = concat!(
+    "Sprints automatiques pas encore démarrés : « Démarrer le projet » (écran Sprint en cours, ",
+    "ou l'outil project_start à la demande de l'utilisateur) crée le premier sprint et le remplit ",
+    "avec les issues sans version, par priorité. Sans cela, datez une version."
+);
+
+/// Copie les champs de `extra` (un objet) dans `out`.
+fn merge(out: &mut Value, extra: Value) {
+    if let (Some(out), Value::Object(extra)) = (out.as_object_mut(), extra) {
+        out.extend(extra);
+    }
+}
+
+/// Partie « sprints automatiques » de `sprint_summary` : `started`, `project` (seulement une fois
+/// démarrés : l'écran Sprint propose sinon « Démarrer le projet ») et `start_defaults` tant qu'ils
+/// ne le sont pas — durée de l'issue d'état « idle » si elle existe, sinon celle des réglages.
+fn project_summary(project: Option<&Project>, settings: &Settings, milestone_titles: &[String]) -> Value {
+    let started = project.is_some_and(|p| p.state.started());
+    let mut out = json!({
+        "started": started,
+        "project": project.filter(|_| started).map(project_view),
+    });
+    if !started {
+        let days = project
+            .map(|p| p.state.duration_days)
+            .unwrap_or(settings.sprint_length_days)
+            .clamp(projet::MIN_DAYS, projet::MAX_DAYS);
+        out["start_defaults"] = json!({
+            "duration_days": days,
+            // 10 story points par semaine pour commencer : la capacité suit ensuite le rythme réel.
+            "capacity": projet::start_capacity(days),
+            "first_version": projet::next_version(milestone_titles, &settings.tag_prefix),
+        });
+        if let Some(p) = project {
+            // Issue d'état existante (jalons de la roadmap) : réutilisée au démarrage.
+            out["state_issue"] = json!({ "number": p.issue, "url": p.url });
+        }
+    }
+    out
+}
+
 /// État des sprints automatiques tel que l'écran Sprint l'affiche (six derniers sprints).
 fn project_view(project: &Project) -> Value {
     let s = &project.state;
@@ -1412,6 +1445,7 @@ impl GestionProjet {
                 // branches d'issue et de leurs PR.
                 let sprints = match self.load_project(&repo).await {
                     Ok(Some(p)) => json!({
+                        "started": p.state.started(),
                         "status": p.state.status,
                         "current_version": p.state.current().map(|c| c.version.clone()),
                         "release_branch": p.state.current().map(|c| c.branch()),
@@ -1693,14 +1727,14 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Résumé du sprint en cours (sprints automatiques : leur état, durée, capacité, rythme, sprints terminés et livraison ; sinon le milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale."
+        description = "Résumé du sprint en cours (sprints automatiques : leur état, durée, capacité, rythme, sprints terminés et livraison ; sinon le milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale. Tant que les sprints automatiques ne sont pas démarrés (`started: false`, `project: null`), `start_defaults` donne la durée, la capacité et la version proposées pour `project_start`."
     )]
     async fn sprint_summary(&self, Parameters(p): Parameters<SprintSummaryParams>) -> ToolResult {
         respond(self.do_sprint_summary(p).await)
     }
 
     #[tool(
-        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints), le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité. Seulement à la demande explicite de l'utilisateur (durée et capacité confirmées)."
+        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints) ou reprend celle des jalons, le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité. Seulement à la demande explicite de l'utilisateur (durée et capacité confirmées)."
     )]
     async fn project_start(&self, Parameters(p): Parameters<ProjectStartParams>) -> ToolResult {
         respond(
@@ -2517,5 +2551,184 @@ mod tests {
             .unwrap();
         assert_eq!(r.is_error, Some(true));
         assert!(text(&r).contains("GitHub n'est pas connecté"), "{}", text(&r));
+    }
+
+    /* ---------- Sprints automatiques sur un faux GitHub ---------- */
+
+    const CRM: &str = "Remisdv/Go-Alternance-CRM-POC";
+
+    /// Dépôt réel Remisdv/Go-Alternance-CRM-POC : 23 issues sans version (V1 et V2), une PR, et
+    /// l'issue d'état #24 « idle » créée par les jalons de la roadmap, sprints jamais démarrés.
+    async fn crm() -> (GestionProjet, Arc<Mutex<crate::fake_github::Repo>>) {
+        let mut issues: Vec<Value> =
+            serde_json::from_str(include_str!("../fixtures/go-alternance-crm-poc/issues.json")).unwrap();
+        for i in &mut issues {
+            if i["number"] == 24 {
+                i["body"] = json!(include_str!("../fixtures/go-alternance-crm-poc/issue-24.md"));
+            }
+        }
+        let (url, fake) = crate::fake_github::start(crate::fake_github::Repo::new(CRM, issues)).await;
+        let env = Env {
+            token: Some("test".into()),
+            repos: vec![CRM.into()],
+            settings: Settings::default(),
+            api_url: url,
+        };
+        (GestionProjet::new(&env).unwrap(), fake)
+    }
+
+    fn data(r: &CallToolResult) -> Value {
+        assert_ne!(r.is_error, Some(true), "{}", text(r));
+        r.structured_content.clone().expect("résultat structuré")
+    }
+
+    async fn summary(s: &GestionProjet) -> Value {
+        data(
+            &s.sprint_summary(Parameters(SprintSummaryParams {
+                repo: CRM.into(),
+                version: None,
+            }))
+            .await
+            .unwrap(),
+        )
+    }
+
+    fn sprint_issues(fake: &Mutex<crate::fake_github::Repo>, version: &str) -> Vec<u64> {
+        let f = fake.lock().unwrap();
+        let mut out: Vec<u64> = f
+            .issues
+            .iter()
+            .filter(|i| i["milestone"]["title"] == version)
+            .filter_map(|i| i["number"].as_u64())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[tokio::test]
+    async fn starts_one_day_sprints_from_an_idle_state_issue() {
+        let (s, fake) = crm().await;
+
+        // Avant : l'issue d'état ne porte que les jalons. Pas de projet affiché (l'écran Sprint
+        // propose « Démarrer le projet »), durée proposée = celle de l'issue d'état (7 jours).
+        let before = summary(&s).await;
+        assert_eq!(before["started"], false, "{before}");
+        assert!(before["project"].is_null(), "{before}");
+        assert_eq!(
+            before["start_defaults"],
+            json!({ "duration_days": 7, "capacity": 10, "first_version": "0.1.0" })
+        );
+        assert_eq!(before["state_issue"]["number"], 24);
+        assert!(before["sprint"].is_null());
+        assert!(before["message"].as_str().unwrap().contains("Démarrer le projet"));
+        let repo = data(
+            &s.get_repository(Parameters(RepoParams { repo: CRM.into() }))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(repo["sprints"]["started"], false);
+        // Les issues du dépôt sont bien listées (ni l'issue d'état, ni la PR).
+        let list = data(
+            &s.list_issues(Parameters(ListIssuesParams {
+                repo: Some(CRM.into()),
+                per_page: Some(100),
+                ..Default::default()
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(list["issues"].as_array().unwrap().len(), 23);
+
+        // Démarrage avec des sprints d'un jour.
+        let started = data(
+            &s.project_start(Parameters(ProjectStartParams {
+                repo: CRM.into(),
+                duration_days: 1,
+                capacity: 1,
+                first_version: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        let today = sprint::today();
+        let project = &started["project"];
+        assert_eq!(
+            (
+                &project["status"],
+                &project["issue"],
+                &project["current"],
+                &project["release_branch"]
+            ),
+            (
+                &json!("running"),
+                &json!(24),
+                &json!("0.1.0"),
+                &json!("release/0.1.0")
+            )
+        );
+        {
+            let f = fake.lock().unwrap();
+            // L'issue d'état #24 est reprise (aucune nouvelle issue), ses jalons gardés.
+            assert!(!f.requests.contains(&format!("POST /repos/{CRM}/issues")));
+            let state = projet::parse_body(f.issue(24).unwrap()["body"].as_str().unwrap()).unwrap();
+            assert!(state.started());
+            assert_eq!((state.duration_days, state.jalons.len()), (1, 2));
+            let first = &state.sprints[0];
+            assert_eq!(
+                (first.start_on.as_str(), first.due_on.as_str()),
+                (today.as_str(), today.as_str())
+            );
+            assert_eq!(f.milestones.len(), 1);
+            assert_eq!(f.milestones[0]["due_on"], json!(format!("{today}T12:00:00Z")));
+            assert!(f.branches.contains_key("release/0.1.0"));
+        }
+        // Remplissage : #1 (socle), même plus grosse que la capacité d'un jour.
+        assert_eq!(sprint_issues(&fake, "0.1.0"), [1]);
+
+        // Après : le sprint d'un jour et ses issues s'affichent.
+        let after = summary(&s).await;
+        assert_eq!(after["started"], true);
+        assert!(after.get("start_defaults").is_none());
+        assert_eq!(after["project"]["duration_days"], 1);
+        assert_eq!(after["sprint"]["title"], "0.1.0");
+        let numbers: Vec<u64> = after["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["number"].as_u64())
+            .collect();
+        assert_eq!(numbers, [1]);
+        let pace = &after["pace"];
+        assert_eq!((&pace["length_days"], &pace["days_left"]), (&json!(1), &json!(0)));
+        assert_eq!(pace["burndown"].as_array().unwrap().len(), 2);
+
+        // Deux jours : l'échéance passe à demain, le sprint garde son issue (au moins une).
+        let longer = data(
+            &s.project_set_duration(Parameters(ProjectDurationParams {
+                repo: CRM.into(),
+                duration_days: 2,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(longer["project"]["duration_days"], 2);
+        let tomorrow = sprint::add_days(&today, 1).unwrap();
+        assert_eq!(
+            fake.lock().unwrap().milestones[0]["due_on"],
+            json!(format!("{tomorrow}T12:00:00Z"))
+        );
+        assert_eq!(sprint_issues(&fake, "0.1.0"), [1]);
+
+        // Déjà démarrés : un second démarrage est refusé.
+        let again = s
+            .project_start(Parameters(ProjectStartParams {
+                repo: CRM.into(),
+                duration_days: 7,
+                capacity: 10,
+                first_version: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&again).contains("déjà démarrés"), "{}", text(&again));
     }
 }

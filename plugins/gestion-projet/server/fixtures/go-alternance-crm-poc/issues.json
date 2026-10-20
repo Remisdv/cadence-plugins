@@ -1,0 +1,508 @@
+[
+ {
+  "number": 1,
+  "title": "Initialiser le projet : API NestJS et front Vite/React en un seul conteneur",
+  "state": "open",
+  "labels": [
+   {
+    "name": "type/chore"
+   },
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "priority/0"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nAucune.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 0._"
+ },
+ {
+  "number": 2,
+  "title": "Poser le modèle de données V1 et ses migrations Postgres",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "priority/0"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n- `pipeline_stage` : nom, ordre, **nature** (`OPEN` / `WON` / `LOST`). Le kanban dépend de la nature, jamais du nom, pour que les étapes restent renommables.\n## Critères d'acceptation\n## Dépendances\nDépend de #1.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 0._"
+ },
+ {
+  "number": 3,
+  "title": "Mettre en place les tâches de fond avec pg-boss et les sessions en Postgres",
+  "state": "open",
+  "labels": [
+   {
+    "name": "type/chore"
+   },
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "priority/0"
+   },
+   {
+    "name": "sp/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #1 et #2.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 3 SP, priorité 0._"
+ },
+ {
+  "number": 4,
+  "title": "Connexion par email et mot de passe, avec verrouillage de compte",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/1"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #1, #2 et #3.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 1._"
+ },
+ {
+  "number": 5,
+  "title": "Second facteur TOTP, codes de récupération et chiffrement des secrets",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/1"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #4.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 1._"
+ },
+ {
+  "number": 6,
+  "title": "Fiches écoles : liste, recherche sans accents et édition",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/1"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #2 et #4.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 1._"
+ },
+ {
+  "number": 7,
+  "title": "Configurer les étapes du pipeline (nom, ordre, nature)",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/3"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\nLe pipeline kanban de la V1 a des **étapes configurables**. Le document pose la règle structurante : une étape porte un **nom**, un **ordre** et une **nature** (`OPEN` / `WON` / `LOST`), et **le kanban dépend de la nature, pas du nom** — ce qui permet de renommer librement les étapes sans rien casser.\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #2 et #4.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 3 SP, priorité 2._"
+ },
+ {
+  "number": 8,
+  "title": "Déployer le CRM sur son propre VPS",
+  "state": "open",
+  "labels": [
+   {
+    "name": "type/chore"
+   },
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #1, #2 et #3.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 2._"
+ },
+ {
+  "number": 9,
+  "title": "Contacts décideurs rattachés aux écoles",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/3"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #6.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 3 SP, priorité 2._"
+ },
+ {
+  "number": 10,
+  "title": "Pipeline kanban : deals, déplacement entre étapes et motif de perte",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #6 et #7.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 2._"
+ },
+ {
+  "number": 11,
+  "title": "Connexion des comptes Google de l'équipe (OAuth, jetons chiffrés)",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #5 et #8.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 2._"
+ },
+ {
+  "number": 12,
+  "title": "Importer l'annuaire officiel des écoles et dédoublonner sur UAI et SIRET",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #3 et #6.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 3._"
+ },
+ {
+  "number": 13,
+  "title": "Timeline des activités sur les écoles, contacts et deals",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #6, #9 et #10.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 2._"
+ },
+ {
+  "number": 14,
+  "title": "Relances : tâches à échéance, assignées et rappelées",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/3"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #3, #6 et #13.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 3 SP, priorité 3._"
+ },
+ {
+  "number": 15,
+  "title": "Envoyer des emails depuis le CRM, avec lien de désinscription signé",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #3, #9, #11 et #13.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 3._"
+ },
+ {
+  "number": 16,
+  "title": "Synchroniser Gmail avec les fiches, avec repli par adresse BCC",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #3, #11 et #13.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 3._"
+ },
+ {
+  "number": 17,
+  "title": "Recevoir les demandes du formulaire de la landing",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/2"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #8, #9, #10 et #13.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 2._"
+ },
+ {
+  "number": 18,
+  "title": "Types de rendez-vous et calcul des créneaux depuis Google Agenda",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #11.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 3._"
+ },
+ {
+  "number": 19,
+  "title": "Page publique de réservation, événement Agenda avec lien Meet, annulation et report",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/3"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #13, #15, #17 et #18.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 3._"
+ },
+ {
+  "number": 20,
+  "title": "Conformité RGPD : registre, droits des prospects et purge des données",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "sp/5"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/4"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #12, #13 et #15.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 5 SP, priorité 4._"
+ },
+ {
+  "number": 21,
+  "title": "V2 — Séquences de relance automatiques",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/5"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #14, #15 et #16.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 5._"
+ },
+ {
+  "number": 22,
+  "title": "V2 — Reporting commercial",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "sp/8"
+   },
+   {
+    "name": "priority/5"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #10, #12, #13 et #19.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 8 SP, priorité 5._"
+ },
+ {
+  "number": 23,
+  "title": "V2 — Devis et contrats",
+  "state": "open",
+  "labels": [
+   {
+    "name": "status/todo"
+   },
+   {
+    "name": "type/feat"
+   },
+   {
+    "name": "priority/5"
+   },
+   {
+    "name": "sp/13"
+   }
+  ],
+  "milestone": null,
+  "body": "## Contexte\n## Attendu\n## Critères d'acceptation\n## Dépendances\nDépend de #10 et #15.\n---\n_Créée par le skill « Créer des issues depuis un document » (Cadence) — 13 SP, priorité 5._"
+ },
+ {
+  "number": 24,
+  "title": "Sprints automatiques (Cadence)",
+  "state": "open",
+  "labels": [
+   {
+    "name": "cadence/sprints"
+   }
+  ],
+  "milestone": null,
+  "body": null
+ },
+ {
+  "number": 25,
+  "title": "architecture : mise à jour",
+  "state": "open",
+  "labels": [],
+  "milestone": null,
+  "body": "",
+  "pull_request": {
+   "url": "https://api.github.com/repos/Remisdv/Go-Alternance-CRM-POC/pulls/25"
+  }
+ }
+]

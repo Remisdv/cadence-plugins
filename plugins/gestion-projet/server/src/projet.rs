@@ -34,9 +34,11 @@ pub const STATE_LABEL: &str = "cadence/sprints";
 pub const STATE_TITLE: &str = "Sprints automatiques (Cadence)";
 /// Poids d'une issue sans story points.
 pub const DEFAULT_POINTS: u32 = 3;
-/// Bornes de la durée d'un sprint, en jours.
+/// Bornes de la durée d'un sprint, en jours (un sprint d'un jour commence et finit le même jour).
 pub const MIN_DAYS: u32 = 1;
 pub const MAX_DAYS: u32 = 90;
+/// Rythme proposé tant qu'aucun sprint n'est terminé : 10 story points par semaine.
+pub const START_POINTS_PER_DAY: f32 = 10.0 / 7.0;
 /// Sprints terminés pris en compte dans le rythme.
 const RATE_WINDOW: usize = 3;
 const MARKER: &str = "<!-- cadence:sprints -->";
@@ -116,10 +118,14 @@ impl SprintRecord {
         release_branch(&self.version)
     }
 
-    /// Jours de travail effectifs (pauses retirées), au moins un.
+    /// Jours de travail effectifs (pauses retirées), au moins un. La clôture (`ended_on`) a lieu
+    /// le lendemain du dernier jour ; sans clôture, le sprint court jusqu'à son échéance incluse.
     pub fn working_days(&self) -> u32 {
-        let end = self.ended_on.as_deref().unwrap_or(&self.due_on);
-        let days = days_between(&self.start_on, end).unwrap_or(0) - i64::from(self.paused_days);
+        let end = match &self.ended_on {
+            Some(ended) => ended.clone(),
+            None => add_days(&self.due_on, 1).unwrap_or_else(|| self.due_on.clone()),
+        };
+        let days = days_between(&self.start_on, &end).unwrap_or(0) - i64::from(self.paused_days);
         days.max(1) as u32
     }
 }
@@ -196,6 +202,12 @@ impl ProjectState {
 
     pub fn current_mut(&mut self) -> Option<&mut SprintRecord> {
         self.sprints.last_mut()
+    }
+
+    /// Sprints démarrés (« Démarrer le projet » fait) ; une issue d'état « idle » ne porte que
+    /// les jalons et les designs.
+    pub fn started(&self) -> bool {
+        self.status != RunStatus::Idle && !self.sprints.is_empty()
     }
 
     /// Story points par jour : trois derniers sprints terminés, sinon le rythme de départ.
@@ -334,9 +346,16 @@ pub fn check_duration(days: u32) -> Result<u32> {
     Ok(days)
 }
 
-/// Échéance d'un sprint : début + durée + pauses, jamais avant `today`.
+/// Capacité proposée pour un premier sprint de `days` jours (au moins un story point).
+pub fn start_capacity(days: u32) -> u32 {
+    capacity_for(START_POINTS_PER_DAY, days).max(1)
+}
+
+/// Échéance d'un sprint : son dernier jour, inclus (début + durée − 1, plus les pauses), jamais
+/// avant `today`. Un sprint d'un jour finit le jour où il commence ; le suivant part le lendemain.
 pub fn due_for(start_on: &str, duration_days: u32, paused_days: u32, today: &str) -> String {
-    let due = add_days(start_on, i64::from(duration_days + paused_days)).unwrap_or_else(|| today.into());
+    let last = i64::from(duration_days.max(1)) - 1 + i64::from(paused_days);
+    let due = add_days(start_on, last).unwrap_or_else(|| today.into());
     if due.as_str() < today {
         today.to_string()
     } else {
@@ -512,9 +531,12 @@ pub fn select(
 }
 
 /// Issues à retirer d'un sprint trop chargé (durée réduite) : celles « à faire », non reportées,
-/// de la moins prioritaire à la plus prioritaire, jusqu'à revenir sous `target`.
+/// de la moins prioritaire à la plus prioritaire, jusqu'à revenir sous `target`. Le sprint garde
+/// toujours au moins une issue ouverte, même plus grosse que la capacité (sprints courts), comme
+/// au remplissage.
 pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
     let mut load: u32 = sprint.iter().map(weight).sum();
+    let mut open_left = sprint.iter().filter(|i| i.state == "open").count();
     let mut removable: Vec<&Issue> = sprint
         .iter()
         .filter(|i| i.state == "open" && i.status == "todo" && i.assignees.is_empty())
@@ -523,10 +545,11 @@ pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
     removable.sort_by_key(|i| std::cmp::Reverse(rank(i)));
     let mut out = Vec::new();
     for issue in removable {
-        if load <= target {
+        if load <= target || open_left <= 1 {
             break;
         }
         load -= weight(issue);
+        open_left -= 1;
         out.push(issue.number);
     }
     out
@@ -589,10 +612,11 @@ pub fn forecast(
             .sum();
         scheduled.extend(picks.iter().copied());
         remaining.retain(|i| !picks.contains(&i.number));
-        let start_on = last.due_on.clone();
+        // Le sprint suivant part le lendemain de l'échéance (dernier jour inclus) du précédent.
+        let start_on = add_days(&last.due_on, 1).unwrap_or_else(|| last.due_on.clone());
         out.push(PlannedSprint {
             version: version_after(&last.version, taken, prefix),
-            due_on: add_days(&start_on, i64::from(duration)).unwrap_or_else(|| start_on.clone()),
+            due_on: due_for(&start_on, duration, 0, &start_on),
             start_on,
             issues: picks,
             points,
@@ -757,6 +781,10 @@ mod tests {
         assert_eq!(trim(&sprint, &[], 15), [3, 4]);
         // Reportée : jamais retirée.
         assert_eq!(trim(&sprint, &[3], 15), [4, 2]);
+        // Durée réduite à un jour (1 SP) : au moins une issue ouverte reste dans le sprint.
+        let todo: Vec<Issue> = sprint[1..].to_vec();
+        assert_eq!(trim(&todo, &[], 1), [3, 4]);
+        assert_eq!(trim(&todo[..1], &[], 1), Vec::<u32>::new());
     }
 
     #[test]
@@ -856,15 +884,120 @@ mod tests {
 
     #[test]
     fn computes_due_dates_and_versions() {
-        assert_eq!(due_for("2026-10-19", 14, 0, "2026-10-20"), "2026-11-02");
-        assert_eq!(due_for("2026-10-19", 14, 3, "2026-10-20"), "2026-11-05");
+        // L'échéance est le dernier jour du sprint : 14 jours du lundi 19 au dimanche 1er.
+        assert_eq!(due_for("2026-10-19", 14, 0, "2026-10-20"), "2026-11-01");
+        assert_eq!(due_for("2026-10-19", 14, 3, "2026-10-20"), "2026-11-04");
+        // Sprint d'un jour : il finit le jour où il commence.
+        assert_eq!(due_for("2026-10-20", 1, 0, "2026-10-20"), "2026-10-20");
+        assert_eq!(due_for("2026-10-20", 2, 0, "2026-10-20"), "2026-10-21");
+        assert_eq!(due_for("2026-10-20", 1, 2, "2026-10-20"), "2026-10-22");
         // Durée raccourcie sous la date du jour : fin aujourd'hui.
         assert_eq!(due_for("2026-10-01", 7, 0, "2026-10-20"), "2026-10-20");
         assert!(check_duration(0).is_err() && check_duration(91).is_err());
+        assert!(check_duration(1).is_ok() && check_duration(2).is_ok());
+        assert_eq!(
+            (start_capacity(1), start_capacity(3), start_capacity(7)),
+            (1, 4, 10)
+        );
         assert_eq!(next_version(&[], "v"), "0.1.0");
         let taken = vec!["0.2.0".to_string(), "v0.3.1".into(), "Cockpit".into()];
         assert_eq!(next_version(&taken, "v"), "0.4.0");
         assert_eq!(version_after("0.1.0", &["0.2.0".into()], "v"), "0.3.0");
         assert!(is_semver("1.2.3") && !is_semver("1.2"));
+    }
+
+    #[test]
+    fn counts_the_working_days_of_short_sprints() {
+        let mut one = state().sprints[0].clone();
+        (one.start_on, one.due_on) = ("2026-10-20".into(), "2026-10-20".into());
+        // En cours : le seul jour compte ; clos le lendemain : toujours un jour.
+        assert_eq!(one.working_days(), 1);
+        one.ended_on = Some("2026-10-21".into());
+        assert_eq!(one.working_days(), 1);
+        let mut s = state();
+        s.duration_days = 1;
+        s.initial_points_per_day = 3.0;
+        assert_eq!(s.next_capacity(), 3);
+        one.done_points = Some(5);
+        s.sprints = vec![one];
+        assert_eq!(s.points_per_day(), 5.0);
+    }
+
+    #[test]
+    fn forecasts_one_day_sprints() {
+        let mut current = state().sprints[0].clone();
+        (current.start_on, current.due_on) = ("2026-10-20".into(), "2026-10-20".into());
+        let backlog = vec![issue(2, Some(1), Some(3), ""), issue(3, Some(2), Some(3), "")];
+        let open: HashSet<u32> = [1, 2, 3].into();
+        let plan = forecast(&current, &[], &backlog, &open, 3.0, 1, &[], "v", 20);
+        let sprints: Vec<(&str, &str, &str, Vec<u32>)> = plan
+            .iter()
+            .map(|s| {
+                (
+                    s.version.as_str(),
+                    s.start_on.as_str(),
+                    s.due_on.as_str(),
+                    s.issues.clone(),
+                )
+            })
+            .collect();
+        // Un sprint par jour, chacun commence le lendemain du précédent.
+        assert_eq!(
+            sprints,
+            [
+                ("0.1.0", "2026-10-20", "2026-10-20", vec![]),
+                ("0.2.0", "2026-10-21", "2026-10-21", vec![2]),
+                ("0.3.0", "2026-10-22", "2026-10-22", vec![3]),
+            ]
+        );
+    }
+
+    /// Issue d'état réelle (Remisdv/Go-Alternance-CRM-POC#24) : créée par les jalons de la
+    /// roadmap avant tout démarrage, elle porte `status: idle` et aucun sprint.
+    const IDLE_STATE_ISSUE: &str = include_str!("../fixtures/go-alternance-crm-poc/issue-24.md");
+
+    #[test]
+    fn reads_an_idle_state_issue_as_not_started() {
+        let s = parse_body(IDLE_STATE_ISSUE).unwrap();
+        assert_eq!(
+            (s.status, s.duration_days, s.sprints.len()),
+            (RunStatus::Idle, 7, 0)
+        );
+        assert!(!s.started() && s.current().is_none());
+        let jalons: Vec<(&str, usize)> = s.jalons.iter().map(|j| (j.id.as_str(), j.issues.len())).collect();
+        assert_eq!(
+            jalons,
+            [("v1-crm-ecoles", 20), ("v2-automatisation-commerciale", 3)]
+        );
+        assert!(state().started());
+        // Relu puis réécrit à l'identique.
+        assert_eq!(parse_body(&render_body(&s)).unwrap(), s);
+    }
+
+    /// Issues réelles du même dépôt (dépendances « Dépend de #n » comprises).
+    fn fixture_issues() -> Vec<Issue> {
+        let raw: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../fixtures/go-alternance-crm-poc/issues.json")).unwrap();
+        raw.iter()
+            .filter(|r| !crate::model::is_pull_request(r) && !crate::model::is_state_issue(r))
+            .map(|r| issue_from(r, true))
+            .collect()
+    }
+
+    #[test]
+    fn fills_the_first_sprint_of_the_fixture() {
+        let backlog = fixture_issues();
+        assert_eq!(backlog.len(), 23);
+        let open: HashSet<u32> = backlog.iter().map(|i| i.number).collect();
+        let none = HashSet::new();
+        // 7 jours à 10 SP : #1 (socle, 5 SP) ; #2 (8 SP) ne tient plus, les autres en dépendent.
+        assert_eq!(select(&backlog, start_capacity(7), &open, &none, true), [1]);
+        // 14 jours à 20 SP : #1 puis #2 ; #3 (3 SP, dépend de #1 et #2) aussi.
+        assert_eq!(
+            select(&backlog, start_capacity(14), &open, &none, true),
+            [1, 2, 3]
+        );
+        // Sprint d'un jour (1 SP) : la première issue quand même, plus grosse que la capacité.
+        assert_eq!(select(&backlog, start_capacity(1), &open, &none, true), [1]);
     }
 }

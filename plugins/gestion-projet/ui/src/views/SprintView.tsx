@@ -22,7 +22,7 @@ import {
   Select,
   cn,
 } from "@cadence/ui";
-import type { ProjectView, SprintSummary, StartDefaults } from "../domain";
+import { isStarted, type ProjectView, type SprintSummary, type StartDefaults } from "../domain";
 import {
   Burndown,
   EmptyCard,
@@ -123,7 +123,9 @@ function SprintPanel({
     refreshKey,
   );
   const current = data?.repo === repo ? data : null;
-  const project = current?.project ?? null;
+  // Une issue d'état « idle » (créée par les jalons de la roadmap) n'est pas un projet démarré :
+  // l'écran propose alors « Démarrer le projet », pas la barre des sprints.
+  const project = isStarted(current?.project) ? current.project : null;
 
   let body;
   if (error) body = <ToolError message={error.message} className="mb-0" />;
@@ -142,14 +144,28 @@ function SprintPanel({
       {current?.project_error && (
         <Callout tone="warning">Sprints automatiques : {current.project_error}</Callout>
       )}
-      {current && !project && current.start_defaults && (
-        <StartProject repo={repo} defaults={current.start_defaults} onDone={reload} />
+      {current && !project && (
+        <StartProject
+          repo={repo}
+          defaults={current.start_defaults ?? startDefaults(current)}
+          onDone={reload}
+        />
       )}
       {project && <ProjectBar repo={repo} project={project} onDone={reload} />}
       {body}
       {project && project.sprints.length > 1 && <Deliveries project={project} />}
     </section>
   );
+}
+
+/** Valeurs de « Démarrer le projet » quand le serveur n'en donne pas : 10 SP par semaine. */
+function startDefaults(summary: SprintSummary): StartDefaults {
+  const days = summary.project?.duration_days ?? summary.sprint_length_days;
+  return {
+    duration_days: days,
+    capacity: Math.max(1, Math.round((days * 10) / 7)),
+    first_version: "0.1.0",
+  };
 }
 
 /** Appelle un outil `project_*` ; l'erreur est rendue en français par le serveur. */
