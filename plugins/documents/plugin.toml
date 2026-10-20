@@ -1,8 +1,8 @@
 api = 1
 id = "documents"
 name = "Documents"
-version = "0.3.0"
-description = "Cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre : réponses citées (document + page), QCM, questions ouvertes corrigées et flashcards."
+version = "0.4.0"
+description = "Cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre, et notes prises dans Cadence : réponses citées (document + page), QCM, questions ouvertes corrigées et flashcards."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
 category = "etudes"
@@ -27,6 +27,13 @@ title = "Entraînement"
 icon = "sparkle"
 section = "Cours"
 
+# Notes, et cible des liens cadence:documents/document?doc=…&page=… (note ou page d'un cours).
+[[ui.views]]
+id = "document"
+title = "Notes"
+icon = "pen"
+section = "Cours"
+
 [[setup]]
 id = "dossier"
 title = "Dossier des cours"
@@ -35,7 +42,7 @@ view = "setup-dossier"
 [settings]
 schema = "settings.schema.json"
 
-# Boutons liés aux skills. Contexte fourni par l'UI : { "subject", "chapter", "document"? }.
+# Boutons liés aux skills. Contexte fourni par l'UI : { "subject", "chapter", "document"?, "note"? }.
 
 [[actions]]
 id = "poser-question"
@@ -62,5 +69,12 @@ context = "chapitre"
 id = "flashcards"
 label = "Flashcards"
 skill = "flashcards"
+mode = "background"
+context = "chapitre"
+
+[[actions]]
+id = "prendre-des-notes"
+label = "Résumer en note"
+skill = "prendre-des-notes"
 mode = "background"
 context = "chapitre"

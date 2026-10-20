@@ -38,6 +38,7 @@ export const ICON_NAMES = [
   "key",
   "eye",
   "calendar",
+  "pen",
 ] as const;
 
 export type IconNameLiteral = (typeof ICON_NAMES)[number];

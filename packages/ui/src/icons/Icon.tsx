@@ -177,6 +177,13 @@ const paths = {
       <path d="M3.5 9.8h17M8 3.2v3.4M16 3.2v3.4" />
     </>
   ),
+  /** Note, édition (même tracé que l'icône `pen` de l'app). */
+  pen: (
+    <>
+      <path d="M4.5 19.5 5.3 15.6 15.8 5.1a2.1 2.1 0 0 1 3 3L8.3 18.6z" />
+      <path d="m13.8 7.1 3 3" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

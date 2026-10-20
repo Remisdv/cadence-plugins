@@ -39,7 +39,7 @@ import { Badge, Button, Card, Icon } from "@cadence/ui";
 
 Composants : `Avatar`, `Badge`, `Button`, `Callout`, `Card`, `Dialog`, `Field` (`Input`,
 `Select`, `Textarea`, `Label`), `Kbd`, `KeyValue`, `Menu`, `ProgressBar`, `RadioCard`,
-`SectionLabel`, `Spinner`, `StatusDot`, `Switch`, et `Icon` (34 icônes des maquettes,
+`SectionLabel`, `Spinner`, `StatusDot`, `Switch`, et `Icon` (35 icônes des maquettes,
 grille 24×24, trait 1.7). `ICON_NAMES` (`@cadence/ui/icons`) liste les noms valides pour le
 champ `icon` des vues d'un manifeste.
 

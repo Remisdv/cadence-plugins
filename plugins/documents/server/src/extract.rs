@@ -5,6 +5,8 @@
 //! - Word (.docx) : pas de pagination dans le fichier ; une page = un bloc d'environ
 //!   [`PAGE_CHARS`] caractères, coupé entre deux paragraphes.
 //! - Markdown / texte : même découpage que Word.
+//! - Note (écrite dans Cadence, en Markdown) : une page = une section, coupée avant chaque titre
+//!   de niveau 1 à 3 ; une section trop longue est redécoupée comme Word.
 
 use std::{
     io::{Cursor, Read},
@@ -26,6 +28,8 @@ pub enum DocKind {
     Pptx,
     Markdown,
     Text,
+    /// Note prise dans Cadence (fichier Markdown rangé dans le dossier des cours).
+    Note,
 }
 
 impl DocKind {
@@ -47,6 +51,7 @@ impl DocKind {
             DocKind::Pdf => "page",
             DocKind::Pptx => "diapositive",
             DocKind::Docx | DocKind::Markdown | DocKind::Text => "bloc d'environ 3000 caractères",
+            DocKind::Note => "section",
         }
     }
 }
@@ -76,6 +81,8 @@ pub fn extract_bytes(kind: DocKind, bytes: &[u8]) -> Result<Vec<String>> {
             let paragraphs: Vec<String> = text.split("\n\n").map(str::to_string).collect();
             chunk_paragraphs(&paragraphs, PAGE_CHARS)
         }
+        // Une note peut être vide : pas de « aucun texte trouvé ».
+        DocKind::Note => return Ok(note_pages(&String::from_utf8_lossy(bytes))),
     };
     let pages: Vec<String> = pages.iter().map(|p| tidy(p)).collect();
     if pages.iter().all(|p| p.is_empty()) {
@@ -244,6 +251,65 @@ pub fn chunk_paragraphs(paragraphs: &[String], target: usize) -> Vec<String> {
         pages.push(page);
     }
     pages
+}
+
+/// Titre Markdown qui ouvre une section de note (`#` à `###` suivi d'un espace) : son texte.
+fn section_heading(line: &str) -> Option<&str> {
+    let hashes = line.len() - line.trim_start_matches('#').len();
+    let rest = &line[hashes..];
+    if (1..=3).contains(&hashes) && rest.starts_with([' ', '\t']) && !rest.trim().is_empty() {
+        Some(rest.trim().trim_end_matches('#').trim_end())
+    } else {
+        None
+    }
+}
+
+/// Début ou fin d'un bloc de code (```` ``` ```` ou `~~~`).
+fn is_fence(line: &str) -> bool {
+    let l = line.trim_start();
+    l.starts_with("```") || l.starts_with("~~~")
+}
+
+/// Sections d'une note : une page avant chaque titre de niveau 1 à 3 (hors blocs de code), le
+/// texte qui précède le premier titre formant la première page. Une section de plus de
+/// [`PAGE_CHARS`] caractères est redécoupée entre deux paragraphes. Toujours au moins une page,
+/// vide pour une note vide.
+pub fn note_pages(markdown: &str) -> Vec<String> {
+    let text = markdown.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    let mut sections: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_code = false;
+    for line in text.lines() {
+        if is_fence(line) {
+            in_code = !in_code;
+        } else if !in_code && section_heading(line).is_some() && !current.trim().is_empty() {
+            sections.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.trim().is_empty() {
+        sections.push(current);
+    }
+    let mut pages = Vec::new();
+    for section in &sections {
+        let section = section.trim_matches('\n').trim_end();
+        if section.chars().count() <= PAGE_CHARS {
+            pages.push(section.to_string());
+        } else {
+            let paragraphs: Vec<String> = section.split("\n\n").map(str::to_string).collect();
+            pages.extend(chunk_paragraphs(&paragraphs, PAGE_CHARS));
+        }
+    }
+    if pages.is_empty() {
+        pages.push(String::new());
+    }
+    pages
+}
+
+/// Titre d'une section de note : sa première ligne, si c'est un titre Markdown.
+pub fn section_title(page: &str) -> Option<String> {
+    page.lines().next().and_then(section_heading).map(str::to_string)
 }
 
 /// Indice d'octet où couper `text` pour rester sous `target` caractères, sur un espace si possible.
@@ -432,6 +498,37 @@ pub mod tests {
                 .iter()
                 .all(|p| !p.ends_with(' ') && p.chars().count() <= 3000)
         );
+    }
+
+    #[test]
+    fn splits_notes_by_headings() {
+        let md = "Intro avant tout titre.\n\n# Atomes\n\nLe noyau.\n\n## Électrons\r\n\n- couche K\n\n```\n# pas un titre\n```\n\n#### Détail\nreste dans la section\n\n#mot-clé n'est pas un titre\n# Liaisons #\nCovalente.";
+        let pages = note_pages(md);
+        assert_eq!(pages.len(), 4, "{pages:#?}");
+        assert_eq!(pages[0], "Intro avant tout titre.");
+        assert_eq!(pages[1], "# Atomes\n\nLe noyau.");
+        assert!(pages[2].starts_with("## Électrons\n"), "{:?}", pages[2]);
+        assert!(pages[2].contains("# pas un titre") && pages[2].contains("#### Détail"));
+        assert!(pages[2].ends_with("#mot-clé n'est pas un titre"));
+        assert_eq!(pages[3], "# Liaisons #\nCovalente.");
+        let titles: Vec<Option<String>> = pages.iter().map(|p| section_title(p)).collect();
+        assert_eq!(
+            titles,
+            [
+                None,
+                Some("Atomes".into()),
+                Some("Électrons".into()),
+                Some("Liaisons".into())
+            ]
+        );
+
+        // Note vide : une page vide ; section trop longue : redécoupée entre deux paragraphes.
+        assert_eq!(note_pages("  \n\n"), [""]);
+        assert_eq!(extract_bytes(DocKind::Note, b"").unwrap(), [""]);
+        let long = format!("# Long\n\n{}", vec!["mot ".repeat(350); 4].join("\n\n"));
+        let pages = note_pages(&long);
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().all(|p| p.chars().count() <= PAGE_CHARS));
     }
 
     #[test]

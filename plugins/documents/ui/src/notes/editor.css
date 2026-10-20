@@ -1,0 +1,238 @@
+/*
+ * Contenu de l'éditeur de notes (ProseMirror). Uniquement les tokens du kit Cadence
+ * (var(--color-*), var(--text-*), var(--radius-*)) : thème injecté par Cadence dans l'iframe.
+ */
+.note-content {
+  min-height: 240px;
+  outline: none;
+  color: var(--color-tx);
+  font-size: var(--text-body-lg);
+  line-height: 1.7;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  caret-color: var(--color-clay);
+}
+
+.note-content > * + * {
+  margin-top: 0.55em;
+}
+
+.note-content p {
+  margin: 0;
+}
+
+.note-content h1,
+.note-content h2,
+.note-content h3,
+.note-content h4,
+.note-content h5,
+.note-content h6 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-tx);
+}
+.note-content h1 {
+  font-size: var(--text-display-sm);
+  margin-top: 1.1em;
+}
+.note-content h2 {
+  font-size: calc(var(--text-display-sm) * 0.75);
+  margin-top: 1em;
+}
+.note-content h3 {
+  font-size: var(--text-title);
+  margin-top: 0.9em;
+}
+.note-content h4,
+.note-content h5,
+.note-content h6 {
+  font-size: var(--text-title-sm);
+  color: var(--color-tx2);
+  margin-top: 0.8em;
+}
+.note-content > :first-child {
+  margin-top: 0;
+}
+
+.note-content strong {
+  font-weight: 600;
+}
+
+.note-content a {
+  color: var(--color-clay);
+  text-decoration: underline;
+  text-decoration-color: var(--color-clay-line);
+  text-underline-offset: 2px;
+  cursor: text;
+}
+.note-content a[href^="cadence:"] {
+  text-decoration-style: dotted;
+}
+
+.note-content code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-p3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-badge);
+  padding: 0.05em 0.35em;
+}
+
+.note-content pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  line-height: 1.6;
+  background: var(--color-p2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-field);
+  padding: 12px 14px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.note-content pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+.note-content blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--color-clay-line);
+  color: var(--color-tx2);
+}
+
+.note-content hr {
+  border: 0;
+  border-top: 1px solid var(--color-line2);
+  margin: 1.2em 0;
+}
+.note-content hr.ProseMirror-selectednode {
+  border-top-color: var(--color-clay);
+}
+
+/* Listes */
+.note-content ul,
+.note-content ol {
+  margin: 0;
+  padding-left: 1.5em;
+}
+/* Tailwind (preflight) retire les puces : on les remet. */
+.note-content ul {
+  list-style: disc;
+}
+.note-content ul ul {
+  list-style: circle;
+}
+.note-content ol {
+  list-style: decimal;
+}
+.note-content li > p {
+  margin: 0;
+}
+.note-content li + li {
+  margin-top: 0.15em;
+}
+.note-content ul > li::marker {
+  color: var(--color-tx3);
+}
+.note-content ol > li::marker {
+  color: var(--color-tx3);
+  font-family: var(--font-mono);
+  font-size: var(--text-body-sm);
+}
+
+/* Cases à cocher */
+.note-content ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.note-content ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+}
+.note-content ul[data-type="taskList"] li > label {
+  flex: none;
+  user-select: none;
+  margin-top: 0.3em;
+}
+.note-content ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.note-content ul[data-type="taskList"] input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-clay);
+  cursor: pointer;
+}
+.note-content ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--color-tx3);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-line2);
+}
+
+/* Tableaux */
+.note-content .tableWrapper {
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.note-content table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  overflow: hidden;
+}
+.note-content th,
+.note-content td {
+  position: relative;
+  min-width: 80px;
+  border: 1px solid var(--color-line2);
+  padding: 6px 9px;
+  vertical-align: top;
+  text-align: left;
+}
+.note-content th {
+  background: var(--color-p2);
+  font-weight: 600;
+  color: var(--color-tx);
+}
+.note-content .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--color-clay-d);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Bloc sélectionné (poignée, glisser-déposer) */
+.note-content .ProseMirror-selectednode {
+  outline: 2px solid var(--color-clay-line);
+  outline-offset: 2px;
+  border-radius: var(--radius-badge);
+}
+
+/* Texte d'invite (Placeholder) */
+.note-content .is-empty::before,
+.note-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--color-tx3);
+  pointer-events: none;
+}
+
+/* « /requête » du menu de blocs */
+.note-content .suggestion {
+  color: var(--color-clay);
+}
+
+.note-content .ProseMirror-gapcursor::after {
+  border-top-color: var(--color-tx2);
+}

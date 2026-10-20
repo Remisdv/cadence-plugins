@@ -9,6 +9,9 @@
 //! results/<résultat>.json réponses et scores
 //! ```
 //!
+//! Les notes prises dans Cadence (`notes.rs`) sont des documents de type `note` : leur Markdown
+//! vit dans le dossier des cours, le cache en garde une copie découpée par titres.
+//!
 //! Les fichiers d'origine ne sont pas copiés : le document garde leur chemin absolu. Un chemin
 //! relatif donné à l'import est lu depuis le dossier des cours (réglage global `dossier_cours`).
 //! L'IA lit le cache à la demande, sans index d'embeddings.
@@ -58,11 +61,21 @@ pub struct Document {
     pub pages: u32,
     pub chars: u32,
     pub imported_at: String,
+    /// Note : dernière modification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Note : révision, +1 à chaque enregistrement (refus d'écraser une version plus récente).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub revision: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PageCache {
-    pages: Vec<String>,
+pub(crate) struct PageCache {
+    pub(crate) pages: Vec<String>,
 }
 
 /// Document et sa place dans la bibliothèque.
@@ -198,9 +211,10 @@ pub fn check_items(kind: QuizKind, items: &Value) -> Result<()> {
 }
 
 pub struct Library {
-    data_dir: PathBuf,
-    /// Dossier des cours (réglage `dossier_cours`), base des chemins relatifs à l'import.
-    courses_dir: Option<PathBuf>,
+    pub(crate) data_dir: PathBuf,
+    /// Dossier des cours (réglage `dossier_cours`) : base des chemins relatifs à l'import, et
+    /// dossier des notes.
+    pub(crate) courses_dir: Option<PathBuf>,
 }
 
 /* ---------- Utilitaires ---------- */
@@ -256,7 +270,7 @@ pub fn fold(text: &str) -> String {
 }
 
 /// Identifiant libre : `base`, sinon `base-2`, `base-3`…
-fn unique_id(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn unique_id(base: &str, taken: impl Fn(&str) -> bool) -> String {
     if !taken(base) {
         return base.to_string();
     }
@@ -297,7 +311,7 @@ pub fn iso_from_unix(secs: u64) -> String {
 }
 
 /// Désigne une matière ou un chapitre par identifiant ou par nom (insensible à la casse et aux accents).
-fn matches(id: &str, name: &str, wanted: &str) -> bool {
+pub(crate) fn matches(id: &str, name: &str, wanted: &str) -> bool {
     let w = wanted.trim();
     id == w || fold(name) == fold(w) || id == slugify(w)
 }
@@ -323,7 +337,7 @@ impl Library {
         self.data_dir.join("library.json")
     }
 
-    fn cache_path(&self, document: &str) -> PathBuf {
+    pub(crate) fn cache_path(&self, document: &str) -> PathBuf {
         self.data_dir.join("cache").join(format!("{document}.json"))
     }
 
@@ -338,8 +352,63 @@ impl Library {
         }
     }
 
-    fn save(&self, lib: &LibraryFile) -> Result<()> {
+    pub(crate) fn save(&self, lib: &LibraryFile) -> Result<()> {
         write_json(&self.library_path(), lib)
+    }
+
+    /// Indices de la matière et du chapitre désignés (identifiant ou nom), créés s'ils n'existent pas.
+    pub(crate) fn ensure_chapter(lib: &mut LibraryFile, subject: &str, chapter: &str) -> (usize, usize) {
+        let si = match lib.subjects.iter().position(|s| matches(&s.id, &s.name, subject)) {
+            Some(i) => i,
+            None => {
+                let id = unique_id(&slugify(subject), |id| lib.subjects.iter().any(|s| s.id == id));
+                lib.subjects.push(Subject {
+                    id,
+                    name: subject.trim().into(),
+                    chapters: vec![],
+                });
+                lib.subjects.len() - 1
+            }
+        };
+        let s = &mut lib.subjects[si];
+        let ci = match s.chapters.iter().position(|c| matches(&c.id, &c.name, chapter)) {
+            Some(i) => i,
+            None => {
+                let id = unique_id(&slugify(chapter), |id| s.chapters.iter().any(|c| c.id == id));
+                s.chapters.push(Chapter {
+                    id,
+                    name: chapter.trim().into(),
+                    documents: vec![],
+                });
+                s.chapters.len() - 1
+            }
+        };
+        (si, ci)
+    }
+
+    /// Identifiants de tous les documents de la bibliothèque.
+    pub(crate) fn document_ids(lib: &LibraryFile) -> Vec<String> {
+        lib.subjects
+            .iter()
+            .flat_map(|s| &s.chapters)
+            .flat_map(|c| &c.documents)
+            .map(|d| d.id.clone())
+            .collect()
+    }
+
+    /// Texte de chaque page d'un document : le cache d'extraction ; pour une note, son fichier
+    /// Markdown relu (modifications faites hors de Cadence comprises), le cache s'il a disparu.
+    pub(crate) fn pages_of(&self, located: &Located) -> Result<Vec<String>> {
+        let id = &located.document.id;
+        if located.document.kind == DocKind::Note
+            && let Ok(markdown) = fs::read_to_string(&located.document.source)
+        {
+            return Ok(extract::note_pages(&markdown));
+        }
+        let text = fs::read_to_string(self.cache_path(id))
+            .with_context(|| format!("texte de « {id} » absent du cache : réimportez le document"))?;
+        let cache: PageCache = serde_json::from_str(&text).context("cache illisible")?;
+        Ok(cache.pages)
     }
 
     pub fn subject<'a>(&self, lib: &'a LibraryFile, wanted: &str) -> Result<&'a Subject> {
@@ -433,13 +502,7 @@ impl Library {
         let mut lib = self.load()?;
         lib.version = 1;
 
-        let all_doc_ids: Vec<String> = lib
-            .subjects
-            .iter()
-            .flat_map(|s| &s.chapters)
-            .flat_map(|c| &c.documents)
-            .map(|d| d.id.clone())
-            .collect();
+        let all_doc_ids = Self::document_ids(&lib);
         let title = title
             .map(str::trim)
             .filter(|t| !t.is_empty())
@@ -453,32 +516,8 @@ impl Library {
         let source_text = source.to_string_lossy().replace('\\', "/");
 
         // Matière et chapitre, créés s'ils n'existent pas.
-        let si = match lib.subjects.iter().position(|s| matches(&s.id, &s.name, subject)) {
-            Some(i) => i,
-            None => {
-                let id = unique_id(&slugify(subject), |id| lib.subjects.iter().any(|s| s.id == id));
-                lib.subjects.push(Subject {
-                    id,
-                    name: subject.trim().into(),
-                    chapters: vec![],
-                });
-                lib.subjects.len() - 1
-            }
-        };
-        let s = &mut lib.subjects[si];
-        let ci = match s.chapters.iter().position(|c| matches(&c.id, &c.name, chapter)) {
-            Some(i) => i,
-            None => {
-                let id = unique_id(&slugify(chapter), |id| s.chapters.iter().any(|c| c.id == id));
-                s.chapters.push(Chapter {
-                    id,
-                    name: chapter.trim().into(),
-                    documents: vec![],
-                });
-                s.chapters.len() - 1
-            }
-        };
-        let ch = &mut s.chapters[ci];
+        let (si, ci) = Self::ensure_chapter(&mut lib, subject, chapter);
+        let ch = &mut lib.subjects[si].chapters[ci];
 
         // Réimport du même fichier dans le même chapitre : on remplace.
         let existing = ch.documents.iter().position(|d| d.source == source_text);
@@ -494,6 +533,8 @@ impl Library {
             pages: pages.len() as u32,
             chars: pages.iter().map(|p| p.chars().count() as u32).sum(),
             imported_at: now_iso(),
+            updated_at: None,
+            revision: 0,
         };
         write_json(&self.cache_path(&id), &PageCache { pages })?;
         match existing {
@@ -511,12 +552,11 @@ impl Library {
         from: u32,
         to: Option<u32>,
     ) -> Result<(Located, Vec<(u32, String)>)> {
-        let located = self.find_document(document)?;
-        let id = &located.document.id;
-        let text = fs::read_to_string(self.cache_path(id))
-            .with_context(|| format!("texte de « {id} » absent du cache : réimportez le document"))?;
-        let cache: PageCache = serde_json::from_str(&text).context("cache illisible")?;
-        let total = cache.pages.len() as u32;
+        let mut located = self.find_document(document)?;
+        let pages = self.pages_of(&located)?;
+        let total = pages.len() as u32;
+        // Une note relue depuis son fichier peut avoir changé de nombre de sections.
+        located.document.pages = total;
         let from = from.max(1);
         if from > total {
             bail!("« {} » n'a que {total} page(s).", located.document.title);
@@ -526,7 +566,7 @@ impl Library {
             .clamp(from, total)
             .min(from + MAX_PAGES_PER_READ - 1);
         let pages = (from..=to)
-            .map(|n| (n, cache.pages[(n - 1) as usize].clone()))
+            .map(|n| (n, pages[(n - 1) as usize].clone()))
             .collect();
         Ok((located, pages))
     }
@@ -545,13 +585,8 @@ impl Library {
         }
         let mut hits = Vec::new();
         for l in self.documents(subject, chapter)? {
-            let Ok(text) = fs::read_to_string(self.cache_path(&l.document.id)) else {
-                continue;
-            };
-            let Ok(cache) = serde_json::from_str::<PageCache>(&text) else {
-                continue;
-            };
-            for (i, page) in cache.pages.iter().enumerate() {
+            let Ok(pages) = self.pages_of(&l) else { continue };
+            for (i, page) in pages.iter().enumerate() {
                 let folded = fold(page);
                 let Some(pos) = folded.find(&needle) else { continue };
                 // Extrait autour de la première occurrence (positions en caractères du texte replié).
@@ -561,6 +596,7 @@ impl Library {
                     "document": l.document.id,
                     "title": l.document.title,
                     "page": i + 1,
+                    "kind": l.document.kind,
                     "page_unit": l.page_unit,
                     "excerpt": excerpt.trim(),
                     "occurrences": folded.matches(&needle).count(),
@@ -765,11 +801,18 @@ impl Library {
 }
 
 /// Écriture atomique (fichier temporaire puis renommage).
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_atomic(path, &serde_json::to_vec_pretty(value)?)
+}
+
+/// Écrit `bytes` dans un fichier temporaire voisin puis le renomme : jamais de fichier à moitié écrit.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("chemin sans dossier")?;
     fs::create_dir_all(dir).with_context(|| format!("création de {}", dir.display()))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, bytes).with_context(|| format!("écriture de {}", tmp.display()))?;
     fs::rename(&tmp, path).with_context(|| format!("écriture de {}", path.display()))
 }
 

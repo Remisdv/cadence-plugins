@@ -14,8 +14,8 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolResult, ContentBlock, CustomNotification, Implementation, ServerCapabilities, ServerConfig,
-        ServerNotification,
+        CallToolResult, ContentBlock, CustomNotification, Implementation, MetaObject, ServerCapabilities,
+        ServerConfig, ServerNotification,
     },
     service::NotificationContext,
     tool, tool_handler, tool_router,
@@ -26,8 +26,9 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::{
-    extract::SUPPORTED,
+    extract::{self, DocKind, SUPPORTED},
     library::{Library, MAX_PAGES_PER_READ, QuizKind},
+    notes::{NoteContent, NoteUpdate},
 };
 
 type ToolResult = Result<CallToolResult, McpError>;
@@ -37,8 +38,9 @@ pub const SETTINGS_NOTIFICATION: &str = "notifications/cadence/settings";
 /// Notification vers Cadence, relayée aux écrans du plugin (`cadence.on(event, …)`).
 pub const EVENT_NOTIFICATION: &str = "notifications/cadence/event";
 
-/// Événement pour l'écran Entraînement : `quiz-saved` (`{ id, kind }`) ou `result-saved`
-/// (`{ quiz, score, total }`). Sans écran ouvert, Cadence l'ignore ; un échec n'est que journalisé.
+/// Événement pour les écrans : `quiz-saved` (`{ id, kind }`), `result-saved`
+/// (`{ quiz, score, total }`), `note-saved` (`{ id, revision }`) ou `note-deleted` (`{ id }`).
+/// Sans écran ouvert, Cadence l'ignore ; un échec n'est que journalisé.
 async fn emit(peer: &Peer<RoleServer>, event: &str, data: Value) {
     let params = json!({ "event": event, "data": data });
     let notification =
@@ -61,6 +63,33 @@ pub fn courses_dir_from_settings(settings: &Value) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(dir))
+}
+
+/// `_meta` d'un outil appelable seulement par l'écran du plugin (contrat Cadence).
+fn ui_only() -> MetaObject {
+    let mut meta = MetaObject::new();
+    meta.0.insert("cadence/visibility".into(), json!("ui"));
+    meta
+}
+
+/// Lien Cadence qui ouvre un document (et une page) dans l'écran du plugin.
+pub fn document_link(document: &str, page: Option<u32>) -> String {
+    match page {
+        Some(page) => format!("cadence:documents/document?doc={document}&page={page}"),
+        None => format!("cadence:documents/document?doc={document}"),
+    }
+}
+
+/// Note renvoyée aux IA et à l'écran : métadonnées, Markdown, sections et lien.
+fn note_json(note: &NoteContent) -> Value {
+    let mut value = serde_json::to_value(note).unwrap_or(Value::Null);
+    value["link"] = json!(document_link(&note.located.document.id, None));
+    json!({ "note": value })
+}
+
+/// Charge de l'événement `note-saved`.
+fn note_event(saved: &Value) -> Value {
+    json!({ "id": saved["note"]["id"], "revision": saved["note"]["revision"] })
 }
 
 fn respond(result: Result<Value>) -> ToolResult {
@@ -178,6 +207,41 @@ pub struct SaveResultParams {
     pub answers: Option<Value>,
     /// Bilan rédigé pour l'étudiant.
     pub feedback: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateNoteParams {
+    /// Matière (identifiant ou nom ; créée si elle n'existe pas).
+    pub subject: String,
+    /// Chapitre (identifiant ou nom ; créé s'il n'existe pas).
+    pub chapter: String,
+    /// Titre de la note (« Sans titre » par défaut) ; donne aussi le nom du fichier .md.
+    pub title: Option<String>,
+    /// Corps de la note en Markdown (titres #, listes, cases - [ ], citations >, code, tableaux) ;
+    /// sans le titre de la note. Vide par défaut.
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateNoteParams {
+    /// Identifiant de la note (voir list_notes) ou son titre exact.
+    pub note: String,
+    /// Nouveau corps en Markdown : remplace tout le texte, ou s'ajoute à la fin avec `append`.
+    pub content: Option<String>,
+    /// Ajoute `content` à la fin de la note au lieu de la remplacer.
+    #[serde(default)]
+    pub append: Option<bool>,
+    /// Nouveau titre (le fichier .md est renommé).
+    pub title: Option<String>,
+    /// Révision lue avec get_note : la modification est refusée si la note a été enregistrée
+    /// depuis (par l'étudiant ou une autre IA).
+    pub revision: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NoteParams {
+    /// Identifiant de la note (voir list_notes) ou son titre exact.
+    pub note: String,
 }
 
 /* ---------- Serveur ---------- */
@@ -311,14 +375,29 @@ impl Documents {
             self.with(move |lib| {
                 let (doc, pages) = lib.read_pages(&p.document, p.from.unwrap_or(1), p.to)?;
                 let last = pages.last().map(|(n, _)| *n).unwrap_or(0);
+                let note = doc.document.kind == DocKind::Note;
+                let pages: Vec<Value> = pages
+                    .into_iter()
+                    .map(|(page, text)| {
+                        let mut entry =
+                            json!({ "page": page, "link": document_link(&doc.document.id, Some(page)) });
+                        if note {
+                            // Une note est découpée par titres : la section citée a un nom.
+                            entry["section"] = json!(extract::section_title(&text));
+                        }
+                        entry["text"] = json!(text);
+                        entry
+                    })
+                    .collect();
                 Ok(json!({
                     "document": doc.document.id,
                     "title": doc.document.title,
+                    "kind": doc.document.kind,
                     "subject": doc.subject_name,
                     "chapter": doc.chapter_name,
                     "page_unit": doc.page_unit,
                     "total_pages": doc.document.pages,
-                    "pages": pages.into_iter().map(|(page, text)| json!({ "page": page, "text": text })).collect::<Vec<_>>(),
+                    "pages": pages,
                     "next_page": (last < doc.document.pages).then_some(last + 1),
                     "max_pages_per_read": MAX_PAGES_PER_READ,
                 }))
@@ -334,7 +413,12 @@ impl Documents {
         respond(
             self.with(move |lib| {
                 let limit = p.limit.unwrap_or(20).clamp(1, 50) as usize;
-                Ok(json!({ "hits": lib.search(&p.query, p.subject.as_deref(), p.chapter.as_deref(), limit)? }))
+                let mut hits = lib.search(&p.query, p.subject.as_deref(), p.chapter.as_deref(), limit)?;
+                for hit in &mut hits {
+                    let page = hit["page"].as_u64().map(|n| n as u32);
+                    hit["link"] = json!(document_link(hit["document"].as_str().unwrap_or_default(), page));
+                }
+                Ok(json!({ "hits": hits }))
             })
             .await,
         )
@@ -463,6 +547,105 @@ impl Documents {
             .await,
         )
     }
+
+    /* ---------- Notes ---------- */
+
+    #[tool(
+        description = "Crée une note de cours dans un chapitre (matière et chapitre créés au besoin) : un fichier Markdown du dossier des cours, rangé dans la bibliothèque comme les autres documents (type note) et lisible ensuite avec search et read_pages (une page par section, découpée avant chaque titre # à ###). Dans la note, citez les cours par des liens Markdown vers le `link` des pages lues (cadence:documents/document?doc=<id>&page=<n>)."
+    )]
+    async fn create_note(
+        &self,
+        Parameters(p): Parameters<CreateNoteParams>,
+        peer: Peer<RoleServer>,
+    ) -> ToolResult {
+        let saved = self
+            .with(move |lib| {
+                let note = lib.create_note(
+                    &p.subject,
+                    &p.chapter,
+                    p.title.as_deref(),
+                    p.content.as_deref().unwrap_or_default(),
+                )?;
+                Ok(note_json(&note))
+            })
+            .await;
+        if let Ok(v) = &saved {
+            emit(&peer, "note-saved", note_event(v)).await;
+        }
+        respond(saved)
+    }
+
+    #[tool(
+        description = "Modifie une note : remplace son corps Markdown (`content`), l'y ajoute à la fin (`append: true`) et/ou change son titre. Passez la `revision` lue avec get_note pour ne pas écraser une modification faite entre-temps par l'étudiant."
+    )]
+    async fn update_note(
+        &self,
+        Parameters(p): Parameters<UpdateNoteParams>,
+        peer: Peer<RoleServer>,
+    ) -> ToolResult {
+        let saved = self
+            .with(move |lib| {
+                let update = NoteUpdate {
+                    content: p.content,
+                    append: p.append.unwrap_or(false),
+                    title: p.title,
+                    revision: p.revision,
+                };
+                Ok(note_json(&lib.update_note(&p.note, update)?))
+            })
+            .await;
+        if let Ok(v) = &saved {
+            emit(&peer, "note-saved", note_event(v)).await;
+        }
+        respond(saved)
+    }
+
+    #[tool(
+        description = "Liste les notes de cours (les plus récemment modifiées d'abord), éventuellement d'une matière et d'un chapitre : identifiant, titre, matière, chapitre, révision, date de modification, fichier .md et titres des sections."
+    )]
+    async fn list_notes(&self, Parameters(p): Parameters<ListDocumentsParams>) -> ToolResult {
+        respond(
+            self.with(move |lib| {
+                let notes: Vec<Value> = lib
+                    .notes(p.subject.as_deref(), p.chapter.as_deref())?
+                    .iter()
+                    .map(|n| {
+                        let (l, d) = (&n.located, &n.located.document);
+                        json!({
+                            "id": d.id, "title": d.title, "subject": l.subject, "subject_name": l.subject_name,
+                            "chapter": l.chapter, "chapter_name": l.chapter_name, "revision": d.revision,
+                            "updated_at": d.updated_at, "path": d.source, "sections": n.sections,
+                            "chars": d.chars, "link": document_link(&d.id, None),
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "notes": notes, "notes_dir": lib.notes_root().to_string_lossy().replace('\\', "/") }))
+            })
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Lit une note en entier : Markdown, titre, matière, chapitre, révision (à repasser à update_note) et sections. Pour citer une note, read_pages donne le texte section par section."
+    )]
+    async fn get_note(&self, Parameters(p): Parameters<NoteParams>) -> ToolResult {
+        respond(self.with(move |lib| Ok(note_json(&lib.note(&p.note)?))).await)
+    }
+
+    /// Réservé à l'écran : supprimer une note efface son fichier.
+    #[tool(
+        description = "Supprime une note : retirée de la bibliothèque, fichier Markdown effacé.",
+        meta = ui_only()
+    )]
+    async fn delete_note(&self, Parameters(p): Parameters<NoteParams>, peer: Peer<RoleServer>) -> ToolResult {
+        let deleted = self
+            .with(move |lib| Ok(json!({ "deleted": lib.delete_note(&p.note)? })))
+            .await;
+        if let Ok(v) = &deleted {
+            emit(&peer, "note-deleted", json!({ "id": v["deleted"]["id"] })).await;
+        }
+        respond(deleted)
+    }
 }
 
 /// Charge de l'événement `result-saved`.
@@ -477,8 +660,12 @@ impl ServerHandler for Documents {
             .with_server_info(Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Bibliothèque de cours du plugin Cadence « Documents » : Matière → Chapitre → Documents. \
-                 Lisez les documents à la demande (search puis read_pages) et citez toujours document et page. \
-                 Les entraînements générés s'enregistrent avec save_quiz, les résultats avec save_result                  (submit_qcm corrige un QCM) ; list_results donne l'historique des scores.",
+                 Lisez les documents à la demande (search puis read_pages) et citez toujours document et page ; \
+                 le champ `link` de chaque page (cadence:documents/document?doc=…&page=…) ouvre la page dans Cadence. \
+                 Les notes de l'étudiant sont des documents de type note (une page par section) : list_notes, \
+                 get_note, create_note, update_note (Markdown). \
+                 Les entraînements générés s'enregistrent avec save_quiz, les résultats avec save_result \
+                 (submit_qcm corrige un QCM) ; list_results donne l'historique des scores.",
             )
     }
 
@@ -661,7 +848,10 @@ mod tests {
             .await
             .unwrap();
         let body = read.structured_content.unwrap();
-        assert_eq!(body["pages"][0], json!({ "page": 2, "text": "Suite" }));
+        assert_eq!(
+            body["pages"][0],
+            json!({ "page": 2, "text": "Suite", "link": "cadence:documents/document?doc=cours&page=2" })
+        );
         assert_eq!(body["page_unit"], "diapositive");
         assert_eq!(body["next_page"], Value::Null);
 
@@ -751,8 +941,107 @@ mod tests {
             "get_quiz",
             "submit_qcm",
             "list_results",
+            "create_note",
+            "update_note",
+            "list_notes",
+            "get_note",
+            "delete_note",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
+        // Supprimer une note est réservé à l'écran ; les autres outils de notes sont aux IA.
+        let tools = server.tool_router.list_all();
+        let meta = |name: &str| tools.iter().find(|t| t.name == name).and_then(|t| t.meta.clone());
+        assert_eq!(
+            meta("delete_note").and_then(|m| m.0.get("cadence/visibility").cloned()),
+            Some(json!("ui"))
+        );
+        assert!(meta("update_note").is_none() && meta("create_note").is_none());
+    }
+
+    #[tokio::test]
+    async fn takes_notes_over_mcp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let courses = tmp.path().join("cours");
+        std::fs::create_dir_all(&courses).unwrap();
+        let out = session(
+            Documents::new(tmp.path().join("data"), Some(courses.clone())),
+            &[
+                call(
+                    1,
+                    "create_note",
+                    json!({ "subject": "Chimie", "chapter": "Atomistique", "title": "Fiche atome",
+                            "content": "# Noyau\n\nProtons et neutrons.\n\n# Électrons\n\nCouches." }),
+                ),
+                call(
+                    2,
+                    "update_note",
+                    json!({ "note": "fiche-atome", "content": "# Spin\n\nDemi-entier.", "append": true, "revision": 1 }),
+                ),
+                call(
+                    3,
+                    "update_note",
+                    json!({ "note": "fiche-atome", "content": "perdu", "revision": 1 }),
+                ),
+                call(4, "list_notes", json!({ "subject": "chimie" })),
+                call(5, "search", json!({ "query": "demi-entier" })),
+                call(6, "read_pages", json!({ "document": "fiche-atome", "from": 2, "to": 3 })),
+                call(7, "get_note", json!({ "note": "Fiche atome" })),
+                call(8, "delete_note", json!({ "note": "fiche-atome" })),
+                call(9, "list_documents", json!({})),
+            ],
+        )
+        .await;
+        let response = |id: u64| out.iter().find(|m| m["id"] == json!(id)).unwrap()["result"].clone();
+        let events: Vec<Value> = out
+            .iter()
+            .filter(|m| m["method"] == EVENT_NOTIFICATION)
+            .map(|m| m["params"].clone())
+            .collect();
+
+        let created = &response(1)["structuredContent"]["note"];
+        assert_eq!(created["kind"], "note");
+        assert_eq!(created["revision"], 1);
+        assert_eq!(created["link"], "cadence:documents/document?doc=fiche-atome");
+        let file = courses.join("Notes/Chimie/Atomistique/Fiche atome.md");
+        assert_eq!(created["source"], file.to_string_lossy().replace('\\', "/"));
+
+        assert_eq!(response(2)["structuredContent"]["note"]["revision"], 2);
+        assert_eq!(response(3)["isError"], true, "révision périmée refusée");
+
+        let notes = &response(4)["structuredContent"]["notes"];
+        assert_eq!(notes.as_array().unwrap().len(), 1);
+        assert_eq!(notes[0]["sections"][2], json!({ "page": 3, "title": "Spin" }));
+
+        let hits = &response(5)["structuredContent"]["hits"];
+        assert_eq!(hits[0]["page"], 3);
+        assert_eq!(
+            hits[0]["link"],
+            "cadence:documents/document?doc=fiche-atome&page=3"
+        );
+
+        let read = &response(6)["structuredContent"];
+        assert_eq!(read["page_unit"], "section");
+        assert_eq!(read["pages"][0]["section"], "Électrons");
+        assert_eq!(read["pages"][1]["section"], "Spin");
+
+        let note = &response(7)["structuredContent"]["note"];
+        assert_eq!(note["revision"], 2);
+        assert!(
+            note["markdown"]
+                .as_str()
+                .unwrap()
+                .ends_with("Couches.\n\n# Spin\n\nDemi-entier.\n")
+        );
+        assert!(!file.exists(), "fichier supprimé avec la note");
+        assert_eq!(response(9)["structuredContent"]["documents"], json!([]));
+        assert_eq!(
+            events,
+            [
+                json!({ "event": "note-saved", "data": { "id": "fiche-atome", "revision": 1 } }),
+                json!({ "event": "note-saved", "data": { "id": "fiche-atome", "revision": 2 } }),
+                json!({ "event": "note-deleted", "data": { "id": "fiche-atome" } }),
+            ]
+        );
     }
 }

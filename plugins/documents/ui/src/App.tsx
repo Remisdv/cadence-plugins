@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { cadence, isCadenceError, type Route } from "@cadence/plugin-sdk";
 import { Callout, Spinner } from "@cadence/ui";
+import { DocumentView } from "./views/DocumentView";
 import { LibraryView } from "./views/LibraryView";
 import { SetupFolderView } from "./views/SetupFolderView";
 import { TrainingView } from "./views/TrainingView";
@@ -36,6 +37,8 @@ export function App() {
       return <LibraryView />;
     case "entrainement":
       return <TrainingView params={route.params} />;
+    case "document":
+      return <DocumentView params={route.params} />;
     case "setup-dossier":
       return <SetupFolderView />;
     default:

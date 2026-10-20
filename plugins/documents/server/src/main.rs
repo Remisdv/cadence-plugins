@@ -6,6 +6,7 @@
 
 mod extract;
 mod library;
+mod notes;
 mod server;
 
 use std::path::PathBuf;

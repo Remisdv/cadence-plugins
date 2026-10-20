@@ -1,7 +1,7 @@
 /** Données rendues par le serveur `cadence-documents`. */
 import type { BadgeTone, IconName, ProgressTone } from "@cadence/ui";
 
-export type DocKind = "pdf" | "docx" | "pptx" | "markdown" | "text";
+export type DocKind = "pdf" | "docx" | "pptx" | "markdown" | "text" | "note";
 export type QuizKind = "qcm" | "questions_ouvertes" | "flashcards";
 
 export interface SubjectSummary {
@@ -24,6 +24,54 @@ export interface DocumentInfo {
   chapter: string;
   chapter_name: string;
   page_unit: string;
+  /** Note : dernière modification et révision. */
+  updated_at?: string;
+  revision?: number;
+}
+
+/** Section d'une note (une page pour `read_pages`). */
+export interface NoteSection {
+  page: number;
+  title: string | null;
+}
+
+/** Note complète (`get_note`, `create_note`, `update_note`). */
+export interface NoteDoc extends DocumentInfo {
+  kind: "note";
+  revision: number;
+  markdown: string;
+  sections: NoteSection[];
+  missing_file: boolean;
+  link: string;
+}
+
+/** Ligne de `list_notes`. */
+export interface NoteSummary {
+  id: string;
+  title: string;
+  subject: string;
+  subject_name: string;
+  chapter: string;
+  chapter_name: string;
+  revision: number;
+  updated_at: string | null;
+  path: string;
+  sections: NoteSection[];
+  chars: number;
+  link: string;
+}
+
+/** Pages lues (`read_pages`). */
+export interface PagesRead {
+  document: string;
+  title: string;
+  kind: DocKind;
+  subject: string;
+  chapter: string;
+  page_unit: string;
+  total_pages: number;
+  pages: { page: number; text: string; link: string; section?: string | null }[];
+  next_page: number | null;
 }
 
 export interface QuizSummary {
@@ -43,7 +91,44 @@ export const kindMeta: Record<DocKind, { label: string; tone: BadgeTone }> = {
   pptx: { label: "PowerPoint", tone: "amber" },
   markdown: { label: "Markdown", tone: "muted" },
   text: { label: "Texte", tone: "neutral" },
+  note: { label: "Note", tone: "green" },
 };
+
+/** Nombre de pages d'un document, dans son unité : « 24 p. », « 12 diapo. », « 3 sections ». */
+export function pagesLabel(kind: DocKind, pages: number): string {
+  switch (kind) {
+    case "pdf":
+      return `${pages} p.`;
+    case "pptx":
+      return `${pages} diapo.`;
+    case "note":
+      return pages > 1 ? `${pages} sections` : "1 section";
+    default:
+      return `${pages} blocs`;
+  }
+}
+
+/** Unité d'une page à l'écran : « Page 3 », « Diapositive 3 », « Section 3 », « Bloc 3 ». */
+export function pageName(kind: DocKind, page: number): string {
+  const unit = kind === "pdf" ? "Page" : kind === "pptx" ? "Diapositive" : kind === "note" ? "Section" : "Bloc";
+  return `${unit} ${page}`;
+}
+
+/**
+ * Titre de section à afficher pour une page de note : celui de la page, ou de la dernière page
+ * titrée avant elle (section trop longue redécoupée). Renvoie son rang parmi les titres de
+ * niveau 1 à 3 de la note (0 pour le premier), ou -1 pour le début de la note.
+ */
+export function headingIndexForPage(sections: NoteSection[], page: number): number {
+  let index = -1;
+  let titled = -1;
+  for (const s of sections) {
+    if (s.title != null) titled++;
+    if (s.page > page) break;
+    if (s.title != null) index = titled;
+  }
+  return index;
+}
 
 export const quizMeta: Record<QuizKind, { label: string; action: string; tone: BadgeTone; start: string }> = {
   qcm: { label: "QCM", action: "generer-qcm", tone: "clay", start: "Commencer" },
@@ -262,6 +347,7 @@ export const ACCEPTED_EXTENSIONS = ["pdf", "docx", "pptx", "md", "markdown", "tx
 export const views = {
   bibliotheque: { title: "Bibliothèque", icon: "book" },
   entrainement: { title: "Entraînement", icon: "sparkle" },
+  document: { title: "Notes", icon: "pen" },
   "setup-dossier": { title: "Dossier des cours", icon: "folder" },
 } satisfies Record<string, { title: string; icon: IconName }>;
 
