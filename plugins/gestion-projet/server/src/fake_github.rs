@@ -18,6 +18,12 @@ pub struct Repo {
     pub milestones: Vec<Value>,
     /// Branches et leur commit.
     pub branches: HashMap<String, String>,
+    /// Pull requests brutes (forme REST de `GET /pulls/{n}`), voir `add_pull`.
+    pub pulls: Vec<Value>,
+    /// Revues publiées : `{ number, event, body, comments }`.
+    pub reviews: Vec<Value>,
+    /// Compte connecté : GitHub refuse qu'il approuve (ou bloque) ses propres PR.
+    pub login: String,
     /// Requêtes reçues : « MÉTHODE /chemin ».
     pub requests: Vec<String>,
 }
@@ -38,12 +44,38 @@ impl Repo {
             issues,
             milestones: Vec::new(),
             branches: HashMap::from([("main".to_string(), "c0ffee".to_string())]),
+            pulls: Vec::new(),
+            reviews: Vec::new(),
+            login: "cadence-bot".into(),
             requests: Vec::new(),
         }
     }
 
     pub fn issue(&self, number: u64) -> Option<&Value> {
         self.issues.iter().find(|i| i["number"].as_u64() == Some(number))
+    }
+
+    pub fn pull(&self, number: u64) -> Option<&Value> {
+        self.pulls.iter().find(|p| p["number"].as_u64() == Some(number))
+    }
+
+    /// Ajoute une PR ouverte de `head` vers `base` (branche créée au besoin), écrite par `author`.
+    pub fn add_pull(&mut self, number: u64, head: &str, base: &str, body: &str, author: &str) {
+        self.branches
+            .entry(head.to_string())
+            .or_insert_with(|| format!("sha-{head}"));
+        let sha = self.branches[head].clone();
+        self.pulls.push(json!({
+            "number": number, "state": "open", "draft": false, "merged_at": null, "mergeable": true,
+            "title": format!("PR #{number}"), "body": body, "user": { "login": author },
+            "html_url": format!("https://github.com/{}/pull/{number}", self.name),
+            "head": { "ref": head, "sha": sha, "repo": { "full_name": self.name } },
+            "base": { "ref": base, "repo": { "full_name": self.name, "default_branch": self.default_branch } },
+        }));
+    }
+
+    fn pull_mut(&mut self, n: &str) -> Option<&mut Value> {
+        self.pulls.iter_mut().find(|p| number_is(&p["number"], n))
     }
 
     fn handle(&mut self, method: &str, target: &str, body: Value) -> (u16, Value) {
@@ -114,10 +146,13 @@ impl Repo {
                 if let Some(m) = milestone {
                     issue["milestone"] = m;
                 }
-                for key in ["body", "title", "state"] {
+                for key in ["body", "title", "state", "state_reason"] {
                     if let Some(v) = body.get(key) {
                         issue[key] = v.clone();
                     }
+                }
+                if let Some(labels) = body["labels"].as_array() {
+                    issue["labels"] = labels.iter().map(|l| json!({ "name": l })).collect();
                 }
                 (200, issue.clone())
             }
@@ -169,7 +204,82 @@ impl Repo {
                     json!({ "ref": format!("refs/heads/{name}"), "object": { "sha": sha } }),
                 )
             }
-            ("GET", ["releases"] | ["pulls"]) => (200, json!([])),
+            ("DELETE", ["git", "refs", "heads", branch @ ..]) => {
+                match self.branches.remove(&branch.join("/")) {
+                    Some(_) => (204, Value::Null),
+                    None => (422, json!({ "message": "Reference does not exist" })),
+                }
+            }
+            ("GET", ["releases"]) => (200, json!([])),
+            ("GET", ["pulls"]) => {
+                let state = q.get("state").map(String::as_str).unwrap_or("open");
+                let list = self
+                    .pulls
+                    .iter()
+                    .filter(|p| state == "all" || p["state"] == state)
+                    .filter(|p| q.get("base").is_none_or(|b| p["base"]["ref"] == b.as_str()))
+                    .filter(|p| {
+                        q.get("head").is_none_or(|h| {
+                            let head = h.rsplit(':').next().unwrap_or(h);
+                            p["head"]["ref"] == head
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                (200, Value::Array(list))
+            }
+            ("GET", ["pulls", n]) => match self.pull_mut(n) {
+                Some(p) => (200, p.clone()),
+                None => not_found(path),
+            },
+            ("POST", ["pulls", n, "reviews"]) => {
+                let login = self.login.clone();
+                let Some(pr) = self.pull_mut(n) else {
+                    return not_found(path);
+                };
+                let event = body["event"].as_str().unwrap_or("COMMENT").to_string();
+                if event != "COMMENT" && pr["user"]["login"] == login.as_str() {
+                    let verb = if event == "APPROVE" {
+                        "approve"
+                    } else {
+                        "request changes on"
+                    };
+                    return (
+                        422,
+                        json!({ "message": "Unprocessable Entity", "errors": [format!("Can not {verb} your own pull request")] }),
+                    );
+                }
+                let number = pr["number"].clone();
+                let id = self.reviews.len() + 1;
+                self.reviews.push(json!({
+                    "number": number, "event": event, "body": body["body"], "comments": body["comments"],
+                }));
+                (
+                    200,
+                    json!({ "id": id, "state": event, "html_url": format!("https://github.com/{}/pull/{n}#pullrequestreview-{id}", self.name) }),
+                )
+            }
+            ("PUT", ["pulls", n, "merge"]) => {
+                let Some(pr) = self.pull_mut(n) else {
+                    return not_found(path);
+                };
+                if pr["state"] != "open" || !pr["merged_at"].is_null() {
+                    return (405, json!({ "message": "Pull Request is not mergeable" }));
+                }
+                if !body["sha"].is_null() && body["sha"] != pr["head"]["sha"] {
+                    return (409, json!({ "message": "Head branch was modified" }));
+                }
+                let sha = format!("merge-{n}");
+                pr["state"] = json!("closed");
+                pr["merged_at"] = json!("2026-10-20T12:00:00Z");
+                pr["merge_commit_sha"] = json!(sha);
+                // Champ du faux GitHub seulement : méthode reçue, pour les tests.
+                pr["merge_method"] = body["merge_method"].clone();
+                (
+                    200,
+                    json!({ "sha": sha, "merged": true, "message": "Pull Request successfully merged" }),
+                )
+            }
             _ => not_found(path),
         }
     }
@@ -299,7 +409,12 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<Repo>>) -> std::io::Resul
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .handle(&method, &target, body);
-        let text = json.to_string();
+        // 204 : pas de corps (le client garde la connexion pour la requête suivante).
+        let text = if status == 204 {
+            String::new()
+        } else {
+            json.to_string()
+        };
         let response = format!(
             "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{text}",
             if status < 300 { "OK" } else { "Error" },

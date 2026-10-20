@@ -6,6 +6,7 @@
 //! JSON). Les changements arrivent ensuite par `notifications/cadence/settings` et
 //! `notifications/cadence/repos`.
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -51,6 +52,8 @@ pub struct Settings {
     /// Préfixe des tags de version : `v` → `v0.1.2`.
     pub tag_prefix: String,
     pub sprint_length_days: u32,
+    /// Méthode de fusion des PR quand `merge_pull_request` n'en précise pas (squash par défaut).
+    pub merge_method: MergeMethod,
 }
 
 impl Default for Settings {
@@ -58,6 +61,30 @@ impl Default for Settings {
         Settings {
             tag_prefix: "v".into(),
             sprint_length_days: 14,
+            merge_method: MergeMethod::default(),
+        }
+    }
+}
+
+/// Méthode de fusion d'une pull request (`merge_method` de l'API GitHub).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeMethod {
+    /// Un seul commit sur la branche cible (par défaut).
+    #[default]
+    Squash,
+    /// Commit de fusion.
+    Merge,
+    /// Commits rejoués sur la branche cible.
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::Squash => "squash",
+            MergeMethod::Merge => "merge",
+            MergeMethod::Rebase => "rebase",
         }
     }
 }
@@ -140,6 +167,11 @@ mod tests {
         assert_eq!((s.tag_prefix.as_str(), s.sprint_length_days), ("release-", 14));
         let s = Settings::from_notification(&json!({ "sprint_length_days": 10 })).unwrap();
         assert_eq!(s.sprint_length_days, 10);
+        // Fusion des PR : squash par défaut, réglable.
+        assert_eq!(Settings::default().merge_method, MergeMethod::Squash);
+        let s = Settings::parse(r#"{"merge_method": "rebase"}"#).unwrap();
+        assert_eq!(s.merge_method.as_str(), "rebase");
+        assert!(Settings::parse(r#"{"merge_method": "octopus"}"#).is_err());
     }
 
     #[test]

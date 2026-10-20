@@ -141,6 +141,9 @@ pub struct Issue {
     pub labels: Vec<String>,
     /// Titre du milestone (version).
     pub milestone: Option<String>,
+    /// Numéro du milestone quand c'est un sprint (milestone daté) ; `None` sans version ou pour
+    /// un palier. Clé stable du sprint (groupes de conversations de l'UI).
+    pub sprint: Option<u32>,
     pub assignees: Vec<String>,
     pub author: Option<String>,
     pub comments: u32,
@@ -234,6 +237,10 @@ pub fn issue_from(raw: &Value, with_body: bool) -> Issue {
             .filter_map(|l| l.strip_prefix("priority/")?.parse::<u8>().ok())
             .find(|p| *p <= LOWEST_PRIORITY),
         milestone: str_of(&raw["milestone"]["title"]),
+        sprint: raw["milestone"]["due_on"]
+            .as_str()
+            .and_then(|_| raw["milestone"]["number"].as_u64())
+            .and_then(|n| u32::try_from(n).ok()),
         assignees: raw["assignees"]
             .as_array()
             .into_iter()
@@ -427,6 +434,13 @@ mod tests {
         assert_eq!(issue.issue_type.as_deref(), Some("feat"));
         assert_eq!(issue.estimate.as_deref(), Some("M"));
         assert_eq!(issue.milestone.as_deref(), Some("0.1.2"));
+        assert_eq!(
+            issue.sprint, None,
+            "milestone sans échéance : un palier, pas un sprint"
+        );
+        let mut dated = raw();
+        dated["milestone"] = json!({ "title": "0.1.2", "number": 3, "due_on": "2026-10-28T07:00:00Z" });
+        assert_eq!(issue_from(&dated, false).sprint, Some(3));
         assert_eq!(issue.body, None);
         assert_eq!(issue.repo, "me/app");
         assert_eq!(issue_from(&raw(), true).body.as_deref(), Some("## Contexte"));

@@ -11,7 +11,10 @@
 //!   `sprint_summary` (réservé à l'UI : sprint en cours ou version donnée, burndown, retard).
 //! - Pull requests : `list_pull_requests` (sans `repo` : tous les dépôts suivis),
 //!   `get_pull_request`, `create_pull_request` (brouillon par défaut, jamais depuis la branche par
-//!   défaut), `mark_pull_request_ready` (GraphQL `markPullRequestReadyForReview`).
+//!   défaut), `mark_pull_request_ready` (GraphQL `markPullRequestReadyForReview`),
+//!   `get_pull_request_diff`, `review_pull_request` (approbation, changements demandés,
+//!   commentaire), `merge_pull_request` (méthode, issues fermées comme terminées, branche
+//!   supprimée). `update_issue` avec `state: closed` passe l'issue à « terminé ».
 //! - Releases : `list_releases`, `create_release` (brouillon par défaut, tag = préfixe + version).
 //! - Sprints automatiques (réservés à l'UI, voir `projet` et `engine`) : `project_start`,
 //!   `project_pause`, `project_resume`, `project_set_duration`. L'issue d'état `cadence/sprints`
@@ -44,7 +47,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    config::{self, Env, Settings},
+    config::{self, Env, MergeMethod, Settings},
     engine::Project,
     github::GitHub,
     model::{self, IssueType, Status},
@@ -443,25 +446,22 @@ pub struct DiffParams {
     pub file: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum MergeMethod {
-    /// Commit de fusion (par défaut).
-    #[default]
-    Merge,
-    /// Un seul commit.
-    Squash,
-    Rebase,
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MergeParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
     /// Numéro de la pull request.
     pub number: u32,
+    /// squash, merge ou rebase ; absente : réglage `merge_method` du plugin (squash par défaut).
+    pub method: Option<MergeMethod>,
+    /// Supprimer la branche source une fois fusionnée (jamais la branche par défaut, une branche
+    /// `release/*` ou la branche d'un fork).
     #[serde(default)]
-    pub method: MergeMethod,
+    pub delete_branch: bool,
+    /// Issues à fermer comme terminées après la fusion, en plus de celles que la PR déclare
+    /// fermer (« Ferme #12 ») ; leur label `status/*` est retiré.
+    #[serde(default)]
+    pub close_issues: Vec<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -846,6 +846,8 @@ impl GestionProjet {
                 IssueState::Closed => "closed",
             });
         }
+        // Fermer l'issue la passe à « terminé » : son label `status/*` n'a plus lieu d'être.
+        let closing = matches!(p.state, Some(IssueState::Closed));
         if let Some(r) = p.state_reason {
             body["state_reason"] = json!(match r {
                 StateReason::Completed => "completed",
@@ -861,7 +863,8 @@ impl GestionProjet {
             || points.is_some()
             || priority.is_some()
             || !p.add_labels.is_empty()
-            || !p.remove_labels.is_empty();
+            || !p.remove_labels.is_empty()
+            || closing;
         if touches_labels {
             let mut labels = match p.labels {
                 Some(l) => l,
@@ -870,6 +873,9 @@ impl GestionProjet {
             labels = model::edit_labels(&labels, &p.add_labels, &p.remove_labels);
             if let Some(s) = p.status {
                 labels = model::with_status(&labels, s);
+            }
+            if closing {
+                labels.retain(|l| !l.starts_with("status/"));
             }
             for label in points.iter().chain(priority.iter()) {
                 labels = model::with_unique(&labels, label);
@@ -892,6 +898,116 @@ impl GestionProjet {
             .patch(&format!("/repos/{repo}/issues/{}", p.number), &body)
             .await?;
         Ok(serde_json::to_value(model::issue_in(&repo, &raw, true))?)
+    }
+
+    /// Ferme une issue comme terminée et retire son label `status/*` (fusion d'une PR validée).
+    async fn close_as_done(&self, repo: &str, number: u32) -> Result<()> {
+        let raw = self.raw_issue(repo, number).await?;
+        if model::is_pull_request(&raw) {
+            bail!("#{number} est une pull request, pas une issue.");
+        }
+        let mut labels = model::issue_from(&raw, false).labels;
+        labels.retain(|l| !l.starts_with("status/"));
+        self.gh
+            .patch(
+                &format!("/repos/{repo}/issues/{number}"),
+                &json!({ "state": "closed", "state_reason": "completed", "labels": labels }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn do_merge(&self, p: MergeParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let pr = self
+            .gh
+            .get(&format!("/repos/{repo}/pulls/{}", p.number), &[])
+            .await?;
+        if !pr["merged_at"].is_null() {
+            bail!("La pull request #{} est déjà fusionnée.", p.number);
+        }
+        if pr["state"].as_str() != Some("open") {
+            bail!("La pull request #{} est fermée.", p.number);
+        }
+        if pr["draft"].as_bool() == Some(true) {
+            bail!(
+                "La pull request #{} est en brouillon : sortez-la du brouillon (mark_pull_request_ready) avant de la fusionner.",
+                p.number
+            );
+        }
+        if pr["mergeable"].as_bool() == Some(false) {
+            bail!(
+                "La pull request #{} a des conflits avec {} : à résoudre d'abord.",
+                p.number,
+                pr["base"]["ref"].as_str().unwrap_or("sa base")
+            );
+        }
+        let method = p.method.unwrap_or(self.settings().merge_method);
+        let merged = self
+            .gh
+            .put(
+                &format!("/repos/{repo}/pulls/{}/merge", p.number),
+                &json!({ "merge_method": method.as_str(), "sha": pr["head"]["sha"] }),
+            )
+            .await?;
+        let base = pr["base"]["ref"].as_str().unwrap_or("").to_string();
+        let default_branch = pr["base"]["repo"]["default_branch"].as_str().unwrap_or("main");
+
+        // Issues terminées : celles demandées, puis celles que la PR déclare fermer (GitHub ne
+        // ferme ces dernières que vers la branche par défaut, et sans toucher aux labels).
+        let mut wanted = p.close_issues.clone();
+        for n in pulls::closing_refs(pr["body"].as_str().unwrap_or("")) {
+            if !wanted.contains(&n) {
+                wanted.push(n);
+            }
+        }
+        let mut closed = Vec::new();
+        let mut errors: Vec<Value> = Vec::new();
+        for n in wanted {
+            match self.close_as_done(&repo, n).await {
+                Ok(()) => closed.push(n),
+                Err(e) => errors.push(json!({ "issue": n, "message": format!("{e:#}") })),
+            }
+        }
+
+        // Branche source : supprimée seulement si elle est du dépôt et n'est pas une branche longue.
+        let head = pr["head"]["ref"].as_str().unwrap_or("").to_string();
+        let same_repo = pr["head"]["repo"]["full_name"]
+            .as_str()
+            .is_some_and(|f| f.eq_ignore_ascii_case(&repo));
+        let mut branch_deleted = false;
+        let mut note: Option<String> = None;
+        if p.delete_branch {
+            if !same_repo {
+                note = Some(format!("Branche {head} gardée : elle vient d'un fork."));
+            } else if head == default_branch || head.starts_with("release/") || head.is_empty() {
+                note = Some(format!(
+                    "Branche {head} gardée : branche par défaut ou de release."
+                ));
+            } else {
+                match self
+                    .gh
+                    .delete(&format!("/repos/{repo}/git/refs/heads/{head}"))
+                    .await
+                {
+                    Ok(()) => branch_deleted = true,
+                    Err(e) => errors.push(json!({ "branch": head, "message": format!("{e:#}") })),
+                }
+            }
+        }
+
+        let mut out = json!({
+            "repo": repo, "number": p.number, "merged": true, "method": method.as_str(),
+            "sha": merged["sha"], "base": base, "head": head, "closed_issues": closed,
+            "branch_deleted": branch_deleted,
+        });
+        if let Some(note) = note {
+            out["note"] = json!(note);
+        }
+        if !errors.is_empty() {
+            out["errors"] = Value::Array(errors);
+        }
+        Ok(out)
     }
 
     /* ---------- Versions ---------- */
@@ -1645,58 +1761,10 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Fusionne une pull request prête (sortie du brouillon, sans conflit). Vers une branche de release, ferme aussi les issues que la PR déclare fermer (« Ferme #12 ») : GitHub ne le fait que pour la branche par défaut. Jamais sans accord explicite de l'utilisateur."
+        description = "Fusionne une pull request prête (sortie du brouillon, sans conflit) avec la méthode `method` (squash, merge ou rebase ; absente : réglage du plugin, squash par défaut). Ferme ensuite comme terminées les issues `close_issues` et celles que la PR déclare fermer (« Ferme #12 »), label `status/*` retiré ; `delete_branch` supprime la branche source (jamais la branche par défaut, une branche `release/*` ou celle d'un fork). Jamais sans accord explicite de l'utilisateur."
     )]
     async fn merge_pull_request(&self, Parameters(p): Parameters<MergeParams>) -> ToolResult {
-        respond(
-            async {
-                let repo = self.repo(&p.repo)?;
-                let pr = self.gh.get(&format!("/repos/{repo}/pulls/{}", p.number), &[]).await?;
-                if !pr["merged_at"].is_null() {
-                    bail!("La pull request #{} est déjà fusionnée.", p.number);
-                }
-                if pr["state"].as_str() != Some("open") {
-                    bail!("La pull request #{} est fermée.", p.number);
-                }
-                if pr["draft"].as_bool() == Some(true) {
-                    bail!("La pull request #{} est en brouillon : sortez-la du brouillon (mark_pull_request_ready) avant de la fusionner.", p.number);
-                }
-                if pr["mergeable"].as_bool() == Some(false) {
-                    bail!("La pull request #{} a des conflits avec {} : à résoudre d'abord.", p.number, pr["base"]["ref"].as_str().unwrap_or("sa base"));
-                }
-                let method = match p.method {
-                    MergeMethod::Merge => "merge",
-                    MergeMethod::Squash => "squash",
-                    MergeMethod::Rebase => "rebase",
-                };
-                let merged = self
-                    .gh
-                    .put(
-                        &format!("/repos/{repo}/pulls/{}/merge", p.number),
-                        &json!({ "merge_method": method, "sha": pr["head"]["sha"] }),
-                    )
-                    .await?;
-                let base = pr["base"]["ref"].as_str().unwrap_or("").to_string();
-                let default_branch = pr["base"]["repo"]["default_branch"].as_str().unwrap_or("main");
-                let mut closed = Vec::new();
-                if base != default_branch {
-                    for n in pulls::closing_refs(pr["body"].as_str().unwrap_or("")) {
-                        let done = self
-                            .gh
-                            .patch(
-                                &format!("/repos/{repo}/issues/{n}"),
-                                &json!({ "state": "closed", "state_reason": "completed" }),
-                            )
-                            .await;
-                        if done.is_ok() {
-                            closed.push(n);
-                        }
-                    }
-                }
-                Ok(json!({ "repo": repo, "number": p.number, "merged": true, "sha": merged["sha"], "base": base, "closed_issues": closed }))
-            }
-            .await,
-        )
+        respond(self.do_merge(p).await)
     }
 
     #[tool(
@@ -2603,6 +2671,210 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    fn labels_of(fake: &Mutex<crate::fake_github::Repo>, number: u64) -> Vec<String> {
+        let f = fake.lock().unwrap();
+        f.issue(number).unwrap()["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|l| l["name"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn review(number: u32, event: ReviewEvent, body: &str) -> Parameters<ReviewParams> {
+        Parameters(ReviewParams {
+            repo: CRM.into(),
+            number,
+            event,
+            body: body.into(),
+            comments: vec![],
+        })
+    }
+
+    fn merge(
+        number: u32,
+        method: Option<MergeMethod>,
+        delete_branch: bool,
+        close_issues: Vec<u32>,
+    ) -> Parameters<MergeParams> {
+        Parameters(MergeParams {
+            repo: CRM.into(),
+            number,
+            method,
+            delete_branch,
+            close_issues,
+        })
+    }
+
+    /// « Relire et valider » : revue de chaque PR, puis fusion des validées (squash par défaut),
+    /// issues fermées comme terminées, branche supprimée ; changements demandés sur les autres.
+    #[tokio::test]
+    async fn reviews_then_merges_validated_tasks() {
+        let (s, fake) = crm().await;
+        {
+            let mut f = fake.lock().unwrap();
+            f.branches.insert("release/0.1.0".into(), "r010".into());
+            f.add_pull(
+                30,
+                "chore/1-socle",
+                "release/0.1.0",
+                "Socle du projet.\n\nFerme #1",
+                "dev",
+            );
+            f.add_pull(31, "feat/2-fiches", "release/0.1.0", "Ferme #2", "cadence-bot");
+            f.add_pull(32, "release/0.1.0", "main", "Livraison du sprint 0.1.0", "dev");
+            f.add_pull(33, "feat/4-relances", "release/0.1.0", "Ferme #4", "dev");
+            f.pulls.last_mut().unwrap()["draft"] = json!(true);
+            for n in [1, 2, 3] {
+                let issue = f.issues.iter_mut().find(|i| i["number"] == n).unwrap();
+                issue["labels"] = json!([{ "name": "type/feat" }, { "name": "status/review" }]);
+            }
+        }
+
+        // Verdicts : approbation, et changements demandés sur une PR du compte connecté (GitHub
+        // refuse : publiés en commentaire).
+        let approved = data(
+            &s.review_pull_request(review(30, ReviewEvent::Approve, "✅ Critères remplis."))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(approved["event"], "APPROVE");
+        let refused = data(
+            &s.review_pull_request(review(31, ReviewEvent::RequestChanges, "❌ Test manquant."))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(refused["event"], "COMMENT", "{refused}");
+        assert!(refused["note"].as_str().unwrap().contains("même compte"));
+        let empty = s
+            .review_pull_request(review(30, ReviewEvent::Comment, "  "))
+            .await
+            .unwrap();
+        assert!(text(&empty).contains("sans synthèse"), "{}", text(&empty));
+        {
+            let f = fake.lock().unwrap();
+            let events: Vec<&str> = f.reviews.iter().filter_map(|r| r["event"].as_str()).collect();
+            assert_eq!(events, ["APPROVE", "COMMENT"]);
+            assert!(
+                f.reviews[1]["body"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("**✋ Changements demandés**")
+            );
+        }
+
+        // Fusion de la validée : squash (réglage par défaut), branche supprimée, issue déclarée
+        // (#1) et issue de la tâche (#3) fermées comme terminées, sans label status/*.
+        let merged = data(
+            &s.merge_pull_request(merge(30, None, true, vec![3]))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            (
+                &merged["method"],
+                &merged["base"],
+                &merged["closed_issues"],
+                &merged["branch_deleted"]
+            ),
+            (
+                &json!("squash"),
+                &json!("release/0.1.0"),
+                &json!([3, 1]),
+                &json!(true)
+            ),
+            "{merged}"
+        );
+        assert!(merged.get("errors").is_none(), "{merged}");
+        {
+            let f = fake.lock().unwrap();
+            assert_eq!(f.pull(30).unwrap()["merge_method"], "squash");
+            assert!(!f.branches.contains_key("chore/1-socle"));
+            assert!(f.branches.contains_key("release/0.1.0"));
+            for n in [1, 3] {
+                let issue = f.issue(n).unwrap();
+                assert_eq!(
+                    (&issue["state"], &issue["state_reason"]),
+                    (&json!("closed"), &json!("completed"))
+                );
+            }
+            assert!(
+                f.requests
+                    .contains(&format!("DELETE /repos/{CRM}/git/refs/heads/chore/1-socle"))
+            );
+        }
+        assert_eq!(labels_of(&fake, 1), ["type/feat"]);
+        let issue = data(
+            &s.get_issue(Parameters(GetIssueParams {
+                repo: CRM.into(),
+                number: 1,
+                comments: Some(false),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(issue["status"], "done");
+
+        // Déjà fusionnée, brouillon : refusés sans rien changer.
+        let again = s.merge_pull_request(merge(30, None, true, vec![])).await.unwrap();
+        assert!(text(&again).contains("déjà fusionnée"), "{}", text(&again));
+        let draft = s
+            .merge_pull_request(merge(33, None, false, vec![]))
+            .await
+            .unwrap();
+        assert!(text(&draft).contains("brouillon"), "{}", text(&draft));
+
+        // Méthode du réglage (rebase) ; une branche de release n'est jamais supprimée.
+        assert!(s.apply_notification(
+            SETTINGS_NOTIFICATION,
+            Some(&json!({ "settings": { "merge_method": "rebase" } }))
+        ));
+        let release = data(&s.merge_pull_request(merge(32, None, true, vec![])).await.unwrap());
+        assert_eq!(
+            (&release["method"], &release["branch_deleted"]),
+            (&json!("rebase"), &json!(false))
+        );
+        assert!(release["note"].as_str().unwrap().contains("gardée"), "{release}");
+        assert!(fake.lock().unwrap().branches.contains_key("release/0.1.0"));
+        // Méthode explicite : prioritaire sur le réglage.
+        fake.lock()
+            .unwrap()
+            .add_pull(34, "fix/5-doublons", "release/0.1.0", "", "dev");
+        let explicit = data(
+            &s.merge_pull_request(merge(34, Some(MergeMethod::Merge), false, vec![99]))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(explicit["method"], "merge");
+        // Issue introuvable : la fusion reste faite, l'erreur est rendue.
+        assert_eq!(explicit["errors"][0]["issue"], 99, "{explicit}");
+        assert_eq!(explicit["closed_issues"], json!([]));
+
+        // Fermer une issue retire son label status/* : elle passe « terminé ».
+        data(
+            &s.update_issue(Parameters(UpdateIssueParams {
+                repo: CRM.into(),
+                number: 2,
+                title: None,
+                body: None,
+                state: Some(IssueState::Closed),
+                state_reason: Some(StateReason::Completed),
+                status: None,
+                points: None,
+                priority: None,
+                labels: None,
+                add_labels: vec![],
+                remove_labels: vec![],
+                milestone: None,
+                assignees: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(labels_of(&fake, 2), ["type/feat"]);
+        assert_eq!(fake.lock().unwrap().issue(2).unwrap()["state"], "closed");
     }
 
     #[tokio::test]

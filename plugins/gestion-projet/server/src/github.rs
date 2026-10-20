@@ -53,6 +53,10 @@ impl GitHub {
         Ok(self.send(Method::PUT, path, &[], Some(body)).await?.body)
     }
 
+    pub async fn delete(&self, path: &str) -> Result<()> {
+        self.send(Method::DELETE, path, &[], None).await.map(|_| ())
+    }
+
     /// Lecture qui rend `None` quand la ressource n'existe pas (404) : branche, comparaison…
     pub async fn get_opt(&self, path: &str, query: &[(&str, String)]) -> Result<Option<Value>> {
         let url = format!("{}{path}", self.base);
@@ -199,8 +203,10 @@ pub fn describe_error(status: StatusCode, headers: &HeaderMap, body: &str, path:
         .filter_map(|e| {
             e["message"]
                 .as_str()
+                .or_else(|| e["code"].as_str())
+                // Certaines routes (revues de PR) rendent des chaînes : « Can not approve your own pull request ».
+                .or_else(|| e.as_str())
                 .map(str::to_string)
-                .or_else(|| e["code"].as_str().map(str::to_string))
         })
         .collect();
     let remaining = headers.get("x-ratelimit-remaining").and_then(|v| v.to_str().ok());
@@ -247,6 +253,12 @@ mod tests {
         assert_eq!(
             describe_error(StatusCode::UNPROCESSABLE_ENTITY, &h, body, "/x"),
             "GitHub a refusé la requête (422) : Validation Failed — missing_field"
+        );
+        let own =
+            r#"{"message": "Unprocessable Entity", "errors": ["Can not approve your own pull request"]}"#;
+        assert!(
+            describe_error(StatusCode::UNPROCESSABLE_ENTITY, &h, own, "/x")
+                .ends_with("your own pull request")
         );
         h.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
         assert!(describe_error(StatusCode::FORBIDDEN, &h, "{}", "/x").starts_with("Quota"));
