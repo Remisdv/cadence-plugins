@@ -314,6 +314,10 @@ export interface SprintRecord {
   /** Issues reportées depuis le sprint précédent. */
   carried?: number[];
   done_points?: number | null;
+  /** Portée (story points de toutes ses issues) relevée à la clôture. */
+  scope_points?: number | null;
+  /** Numéro du milestone du sprint (groupe de ses conversations), s'il est connu. */
+  milestone?: number | null;
   ended_on?: string | null;
   /** Fusion de la branche de release dans la branche par défaut, à la fin du sprint. */
   release?: {
@@ -321,6 +325,8 @@ export interface SprintRecord {
     pull_request?: number;
     tag?: string;
     message?: string;
+    /** Aucune vérification sur la PR de release : « Fusionner maintenant » est proposé. */
+    no_ci?: boolean;
   } | null;
 }
 

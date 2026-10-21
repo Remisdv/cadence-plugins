@@ -58,10 +58,43 @@ use crate::{
 
 type ToolResult = Result<CallToolResult, McpError>;
 
+/// Écritures récentes d'issues par dépôt : numéro → (réponse de GitHub, instant de l'écriture).
+type RecentIssues = HashMap<String, HashMap<u32, (Value, Instant)>>;
+
+/// Durée pendant laquelle une écriture d'issue corrige les listes de GitHub (`patch_listing`).
+const RECENT_WRITES: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Notification de Cadence : dépôts suivis modifiés (service `repos`).
 pub const REPOS_NOTIFICATION: &str = "notifications/cadence/repos";
 /// Notification de Cadence : réglages globaux modifiés.
 pub const SETTINGS_NOTIFICATION: &str = "notifications/cadence/settings";
+/// Notification vers Cadence, relayée aux écrans du plugin (`cadence.on(event, …)`).
+pub const EVENT_NOTIFICATION: &str = "notifications/cadence/event";
+/// Événement des écrans : un outil vient d'écrire sur GitHub (`{ repo, tool }`).
+pub const SYNC_EVENT: &str = "sync.updated";
+/// Outils qui écrivent sur un dépôt (issues, sprint, PR) : `sync.updated` après chacun.
+const WRITE_TOOLS: &[&str] = &[
+    "create_issue",
+    "update_issue",
+    "create_milestone",
+    "update_milestone",
+    "create_pull_request",
+    "update_pull_request",
+    "mark_pull_request_ready",
+    "review_pull_request",
+    "merge_pull_request",
+    "create_release",
+    "project_start",
+    "project_pause",
+    "project_resume",
+    "project_set_duration",
+    "project_close_sprint",
+    "project_ship_release",
+    "sprint_issues",
+    "jalon_save",
+    "jalon_delete",
+    "jalon_issues",
+];
 
 /// `_meta` d'un outil appelable seulement par l'UI du plugin (contrat Cadence).
 fn ui_only() -> MetaObject {
@@ -317,6 +350,18 @@ pub struct CloseSprintParams {
     /// Version du sprint à clore, telle que l'utilisateur l'a vue (refus si le sprint en cours a
     /// changé entre-temps) ; absente : le sprint en cours.
     pub version: Option<String>,
+    /// Issues ouvertes du sprint à rendre au carnet (sans version) au lieu de les reporter au
+    /// sprint suivant : l'excédent sur sa capacité, au choix de l'utilisateur.
+    #[serde(default)]
+    pub to_backlog: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShipReleaseParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Version du sprint terminé dont la branche de release est à fusionner.
+    pub version: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -534,6 +579,19 @@ pub struct CreatePullRequestParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdatePullRequestParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Numéro de la pull request (ouverte).
+    pub number: u32,
+    /// Nouvelle branche cible : la branche de release du sprint ou la branche par défaut (jamais
+    /// la branche d'une autre PR).
+    pub base: Option<String>,
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct CreateReleaseParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
@@ -568,6 +626,10 @@ pub struct GestionProjet {
     /// Numéros des issues cachées (état, planning) déjà trouvées ou créées, par `dépôt#label` :
     /// la recherche par label de GitHub peut ne pas voir tout de suite une issue toute neuve.
     pub(crate) hidden_issues: Arc<Mutex<HashMap<String, u32>>>,
+    /// Issues écrites par ce processus depuis peu (réponse de GitHub), par dépôt : les listes de
+    /// GitHub mettent quelques secondes à refléter un changement de milestone, de labels ou
+    /// d'état ; on les corrige avec ces réponses (voir `patch_listing`).
+    recent_issues: Arc<Mutex<RecentIssues>>,
     #[allow(dead_code)] // lu par #[tool_handler]
     tool_router: ToolRouter<Self>,
 }
@@ -589,6 +651,7 @@ impl GestionProjet {
             last_pass: Arc::default(),
             engine_lock: Arc::default(),
             hidden_issues: Arc::default(),
+            recent_issues: Arc::default(),
             tool_router: Self::tool_router(),
         })
     }
@@ -624,6 +687,56 @@ impl GestionProjet {
             _ => return false,
         }
         true
+    }
+
+    /// Retient une issue que ce processus vient d'écrire (réponse brute de GitHub).
+    pub(crate) fn remember_issue(&self, repo: &str, raw: &Value) {
+        let Some(n) = raw["number"].as_u64().and_then(|n| u32::try_from(n).ok()) else {
+            return;
+        };
+        self.recent_issues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(repo.to_string())
+            .or_default()
+            .insert(n, (raw.clone(), Instant::now()));
+    }
+
+    /// Corrige une liste brute d'issues lue sur GitHub avec les écritures récentes de ce processus
+    /// (moins de `RECENT_WRITES`) : l'entrée périmée est remplacée par la réponse de l'écriture, ou
+    /// retirée si l'issue ne fait plus partie de la liste (`keep` faux) ; une issue qui vient d'y
+    /// entrer est ajoutée. Une entrée de la liste plus récente que l'écriture (`updated_at`) fait foi.
+    pub(crate) fn patch_listing(
+        &self,
+        repo: &str,
+        mut list: Vec<Value>,
+        keep: impl Fn(&Value) -> bool,
+    ) -> Vec<Value> {
+        let fresh: Vec<Value> = {
+            let mut all = self.recent_issues.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(issues) = all.get_mut(repo) else {
+                return list;
+            };
+            issues.retain(|_, (_, at)| at.elapsed() < RECENT_WRITES);
+            issues.values().map(|(raw, _)| raw.clone()).collect()
+        };
+        for raw in fresh {
+            let listed = list.iter().position(|i| i["number"] == raw["number"]);
+            if let Some(i) = listed {
+                let newer = match (list[i]["updated_at"].as_str(), raw["updated_at"].as_str()) {
+                    (Some(listed), Some(written)) => listed > written,
+                    _ => false,
+                };
+                if newer {
+                    continue;
+                }
+                list.remove(i);
+            }
+            if keep(&raw) {
+                list.push(raw);
+            }
+        }
+        list
     }
 
     /// Dépôt demandé, validé et pris parmi les dépôts suivis (nom canonique).
@@ -866,6 +979,7 @@ impl GestionProjet {
             body["assignees"] = json!(p.assignees);
         }
         let raw = self.gh.post(&format!("/repos/{repo}/issues"), &body).await?;
+        self.remember_issue(&repo, &raw);
         Ok(serde_json::to_value(model::issue_in(&repo, &raw, true))?)
     }
 
@@ -935,6 +1049,7 @@ impl GestionProjet {
             .gh
             .patch(&format!("/repos/{repo}/issues/{}", p.number), &body)
             .await?;
+        self.remember_issue(&repo, &raw);
         Ok(serde_json::to_value(model::issue_in(&repo, &raw, true))?)
     }
 
@@ -946,12 +1061,14 @@ impl GestionProjet {
         }
         let mut labels = model::issue_from(&raw, false).labels;
         labels.retain(|l| !l.starts_with("status/"));
-        self.gh
+        let raw = self
+            .gh
             .patch(
                 &format!("/repos/{repo}/issues/{number}"),
                 &json!({ "state": "closed", "state_reason": "completed", "labels": labels }),
             )
             .await?;
+        self.remember_issue(repo, &raw);
         Ok(())
     }
 
@@ -1015,6 +1132,39 @@ impl GestionProjet {
             .is_some_and(|f| f.eq_ignore_ascii_case(&repo));
         let mut branch_deleted = false;
         let mut note: Option<String> = None;
+
+        // PR empilées sur la branche fusionnée (base = cette branche) : elles visent désormais la
+        // base de la PR fusionnée, sinon GitHub les fermerait à la suppression de la branche (N11).
+        let mut retargeted: Vec<u64> = Vec::new();
+        let long_lived = head == default_branch || head.starts_with("release/") || head.is_empty();
+        if same_repo && !long_lived && !base.is_empty() {
+            let stacked = self
+                .gh
+                .get(
+                    &format!("/repos/{repo}/pulls"),
+                    &[
+                        ("state", "open".into()),
+                        ("base", head.clone()),
+                        ("per_page", "100".into()),
+                    ],
+                )
+                .await?;
+            for n in stacked
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p["number"].as_u64())
+            {
+                match self
+                    .gh
+                    .patch(&format!("/repos/{repo}/pulls/{n}"), &json!({ "base": base }))
+                    .await
+                {
+                    Ok(_) => retargeted.push(n),
+                    Err(e) => errors.push(json!({ "pull_request": n, "message": format!("{e:#}") })),
+                }
+            }
+        }
         if p.delete_branch {
             if !same_repo {
                 note = Some(format!("Branche {head} gardée : elle vient d'un fork."));
@@ -1037,7 +1187,7 @@ impl GestionProjet {
         let mut out = json!({
             "repo": repo, "number": p.number, "merged": true, "method": method.as_str(),
             "sha": merged["sha"], "base": base, "head": head, "closed_issues": closed,
-            "branch_deleted": branch_deleted,
+            "branch_deleted": branch_deleted, "retargeted": retargeted,
         });
         if let Some(note) = note {
             out["note"] = json!(note);
@@ -1110,7 +1260,7 @@ impl GestionProjet {
 
     /// Toutes les issues d'un milestone (ouvertes et fermées), sans les pull requests.
     pub(crate) async fn milestone_issues(&self, repo: &str, number: u32) -> Result<Vec<model::Issue>> {
-        let mut out = Vec::new();
+        let mut raws: Vec<Value> = Vec::new();
         for page in 1..=5u32 {
             let p = self
                 .gh
@@ -1124,19 +1274,21 @@ impl GestionProjet {
                     ],
                 )
                 .await?;
-            out.extend(
-                p.body
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|raw| !model::is_pull_request(raw))
-                    .map(|raw| model::issue_in(repo, raw, false)),
-            );
+            raws.extend(p.body.as_array().cloned().unwrap_or_default());
             if !p.has_next {
                 break;
             }
         }
-        Ok(out)
+        // Issue tout juste ajoutée au sprint, retirée ou fermée : la réponse de l'écriture fait foi
+        // tant que la liste de GitHub ne la reflète pas (N08).
+        let raws = self.patch_listing(repo, raws, |raw| {
+            raw["milestone"]["number"].as_u64() == Some(u64::from(number))
+        });
+        Ok(raws
+            .iter()
+            .filter(|raw| !model::is_pull_request(raw))
+            .map(|raw| model::issue_in(repo, raw, false))
+            .collect())
     }
 
     async fn do_sprint_summary(&self, p: SprintSummaryParams) -> Result<Value> {
@@ -1171,16 +1323,16 @@ impl GestionProjet {
                     .and_then(|m| model::find_milestone(&milestones, m["title"].as_str()?, ""))
             }
         };
-        let titles: Vec<String> = milestones
-            .iter()
-            .filter_map(|m| m["title"].as_str().map(str::to_string))
-            .collect();
+        let length = sprint_length(project.as_ref(), &settings);
         let mut out = json!({
             "repo": repo,
             "today": today,
-            "sprint_length_days": settings.sprint_length_days,
+            "sprint_length_days": length,
         });
-        merge(&mut out, project_summary(project.as_ref(), &settings, &titles));
+        merge(
+            &mut out,
+            project_summary(project.as_ref(), &settings, &milestones),
+        );
         if let Some(err) = project_error {
             out["project_error"] = json!(err);
         }
@@ -1204,7 +1356,7 @@ impl GestionProjet {
             &issues,
             record.map(|r| r.start_on.as_str()),
             version.due_on.as_deref(),
-            settings.sprint_length_days,
+            length,
             &today,
         );
         out["sprint"] = serde_json::to_value(&version)?;
@@ -1346,6 +1498,8 @@ impl GestionProjet {
             .unwrap_or(&default_branch)
             .to_string();
         pulls::check_head(&p.head, &base, &default_branch)?;
+        self.check_base(&repo, &base, &default_branch, Some(p.head.trim()))
+            .await?;
         let body = json!({
             "title": p.title.trim(),
             "head": p.head.trim(),
@@ -1354,6 +1508,99 @@ impl GestionProjet {
             "draft": p.draft.unwrap_or(true),
         });
         let raw = self.gh.post(&format!("/repos/{repo}/pulls"), &body).await?;
+        Ok(serde_json::to_value(pulls::from_rest(&repo, &raw))?)
+    }
+
+    /// Garde-fou des bases de PR (N11) : une PR d'issue vise la branche par défaut ou une branche
+    /// `release/*`, jamais la branche d'une autre PR ouverte (fusionnée puis supprimée, GitHub
+    /// fermerait la PR empilée) ; avec les sprints automatiques, toute autre base est refusée.
+    async fn check_base(
+        &self,
+        repo: &str,
+        base: &str,
+        default_branch: &str,
+        head: Option<&str>,
+    ) -> Result<()> {
+        if base == default_branch || base.starts_with("release/") {
+            return Ok(());
+        }
+        let release = match self.load_project(repo).await {
+            Ok(Some(p)) if p.state.started() => p.state.current().map(|c| c.branch()),
+            _ => None,
+        };
+        let target = release.clone().unwrap_or_else(|| default_branch.to_string());
+        let owner = repo.split_once('/').map_or(repo, |(o, _)| o);
+        let stacked = self
+            .gh
+            .get(
+                &format!("/repos/{repo}/pulls"),
+                &[
+                    ("state", "open".into()),
+                    ("head", format!("{owner}:{base}")),
+                    ("per_page", "10".into()),
+                ],
+            )
+            .await?;
+        let other = stacked
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| head.is_none_or(|h| p["head"]["ref"].as_str() != Some(h)))
+            .find_map(|p| p["number"].as_u64());
+        if let Some(n) = other {
+            bail!(
+                "Refusé : « {base} » est la branche de la PR #{n}. Une branche d'issue part toujours \
+                 de {target} et sa PR la vise (base: \"{target}\") ; une fois #{n} fusionnée et sa \
+                 branche supprimée, GitHub fermerait cette PR. Recréez la branche depuis \
+                 origin/{target} (ou fusionnez-y origin/{target}) puis visez {target}."
+            );
+        }
+        if let Some(release) = release {
+            bail!(
+                "Refusé : avec les sprints automatiques, une PR d'issue vise la branche de release \
+                 du sprint en cours ({release}) ou la branche par défaut, pas « {base} »."
+            );
+        }
+        Ok(())
+    }
+
+    async fn do_update_pull_request(&self, p: UpdatePullRequestParams) -> Result<Value> {
+        let repo = self.repo(&p.repo)?;
+        let mut body = json!({});
+        if let Some(t) = p.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            body["title"] = json!(t);
+        }
+        if let Some(b) = p.body {
+            body["body"] = json!(b);
+        }
+        if let Some(base) = p.base.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+            let pr = self
+                .gh
+                .get(&format!("/repos/{repo}/pulls/{}", p.number), &[])
+                .await?;
+            if pr["state"].as_str() != Some("open") {
+                bail!(
+                    "La pull request #{} n'est plus ouverte : sa base ne peut plus changer. Si sa \
+                     base a été supprimée, ouvrez une nouvelle PR depuis la même branche vers la \
+                     branche de release (create_pull_request).",
+                    p.number
+                );
+            }
+            let default_branch = pr["base"]["repo"]["default_branch"].as_str().unwrap_or("main");
+            let head = pr["head"]["ref"].as_str().unwrap_or("");
+            if head == base {
+                bail!("La branche source et la branche cible sont identiques (« {base} »).");
+            }
+            self.check_base(&repo, base, default_branch, Some(head)).await?;
+            body["base"] = json!(base);
+        }
+        if body.as_object().is_some_and(|o| o.is_empty()) {
+            bail!("Rien à modifier : précisez base, title ou body.");
+        }
+        let raw = self
+            .gh
+            .patch(&format!("/repos/{repo}/pulls/{}", p.number), &body)
+            .await?;
         Ok(serde_json::to_value(pulls::from_rest(&repo, &raw))?)
     }
 
@@ -1452,6 +1699,15 @@ const NOT_STARTED_MESSAGE: &str = concat!(
     "avec les issues sans version, par priorité. Sans cela, datez une version."
 );
 
+/// Durée d'un sprint en jours : celle des sprints automatiques une fois démarrés (issue d'état),
+/// sinon le réglage `sprint_length_days` du plugin.
+fn sprint_length(project: Option<&Project>, settings: &Settings) -> u32 {
+    project
+        .filter(|p| p.state.started())
+        .map(|p| p.state.duration_days)
+        .unwrap_or(settings.sprint_length_days)
+}
+
 /// Copie les champs de `extra` (un objet) dans `out`.
 fn merge(out: &mut Value, extra: Value) {
     if let (Some(out), Value::Object(extra)) = (out.as_object_mut(), extra) {
@@ -1462,11 +1718,17 @@ fn merge(out: &mut Value, extra: Value) {
 /// Partie « sprints automatiques » de `sprint_summary` : `started`, `project` (seulement une fois
 /// démarrés : l'écran Sprint propose sinon « Démarrer le projet ») et `start_defaults` tant qu'ils
 /// ne le sont pas — durée de l'issue d'état « idle » si elle existe, sinon celle des réglages.
-fn project_summary(project: Option<&Project>, settings: &Settings, milestone_titles: &[String]) -> Value {
+fn project_summary(project: Option<&Project>, settings: &Settings, milestones: &[Value]) -> Value {
     let started = project.is_some_and(|p| p.state.started());
+    let milestone_titles: Vec<String> = milestones
+        .iter()
+        .filter_map(|m| m["title"].as_str().map(str::to_string))
+        .collect();
     let mut out = json!({
         "started": started,
-        "project": project.filter(|_| started).map(project_view),
+        "project": project
+            .filter(|_| started)
+            .map(|p| project_view_with(p, milestones, &settings.tag_prefix)),
     });
     if !started {
         let days = project
@@ -1477,7 +1739,7 @@ fn project_summary(project: Option<&Project>, settings: &Settings, milestone_tit
             "duration_days": days,
             // 10 story points par semaine pour commencer : la capacité suit ensuite le rythme réel.
             "capacity": projet::start_capacity(days),
-            "first_version": projet::next_version(milestone_titles, &settings.tag_prefix),
+            "first_version": projet::next_version(&milestone_titles, &settings.tag_prefix),
         });
         if let Some(p) = project {
             // Issue d'état existante (jalons de la roadmap) : réutilisée au démarrage.
@@ -1489,6 +1751,13 @@ fn project_summary(project: Option<&Project>, settings: &Settings, milestone_tit
 
 /// État des sprints automatiques tel que l'écran Sprint l'affiche (six derniers sprints).
 fn project_view(project: &Project) -> Value {
+    project_view_with(project, &[], "")
+}
+
+/// `project_view`, chaque sprint portant le numéro de son milestone (`milestone`) s'il est dans
+/// `milestones` : l'écran retrouve les conversations d'un sprint terminé (groupe
+/// `sprint:<repo>:<n°>`).
+fn project_view_with(project: &Project, milestones: &[Value], tag_prefix: &str) -> Value {
     let s = &project.state;
     let cur = s.current();
     let sprints: Vec<Value> = s
@@ -1499,6 +1768,9 @@ fn project_view(project: &Project) -> Value {
         .map(|r| {
             let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
             v["branch"] = json!(r.branch());
+            v["milestone"] = model::find_milestone(milestones, &r.version, tag_prefix)
+                .and_then(|m| m["number"].as_u64())
+                .map_or(Value::Null, |n| json!(n));
             v
         })
         .collect();
@@ -1597,15 +1869,21 @@ impl GestionProjet {
                 let settings = self.settings();
                 // Sprints automatiques : la branche de release du sprint en cours est la base des
                 // branches d'issue et de leurs PR.
-                let sprints = match self.load_project(&repo).await {
-                    Ok(Some(p)) => json!({
+                let project = self.load_project(&repo).await.ok().flatten();
+                let sprints = match &project {
+                    Some(p) => json!({
                         "started": p.state.started(),
                         "status": p.state.status,
+                        "duration_days": p.state.duration_days,
                         "current_version": p.state.current().map(|c| c.version.clone()),
                         "release_branch": p.state.current().map(|c| c.branch()),
+                        "due_on": p.state.current().map(|c| c.due_on.clone()),
                     }),
-                    _ => Value::Null,
+                    None => Value::Null,
                 };
+                // Durée réelle des sprints : celle de l'issue d'état une fois démarrés (N07), le
+                // réglage du plugin sinon.
+                let length = sprint_length(project.as_ref(), &settings);
                 Ok(json!({
                     "sprints": sprints,
                     "repo": repo,
@@ -1615,7 +1893,7 @@ impl GestionProjet {
                     "url": r["html_url"],
                     "open_issues": r["open_issues_count"],
                     "tag_prefix": settings.tag_prefix,
-                    "sprint_length_days": settings.sprint_length_days,
+                    "sprint_length_days": length,
                 }))
             }
             .await,
@@ -1721,10 +1999,17 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée vers la branche par défaut (ou `base`). Refuse la branche par défaut comme source."
+        description = "Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée vers la branche par défaut (ou `base`, la branche de release du sprint pour une issue). Refuse la branche par défaut comme source et, comme base, la branche d'une autre PR ouverte (PR empilée)."
     )]
     async fn create_pull_request(&self, Parameters(p): Parameters<CreatePullRequestParams>) -> ToolResult {
         respond(self.do_create_pull_request(p).await)
+    }
+
+    #[tool(
+        description = "Modifie une pull request ouverte : `base` (repointer vers la branche de release du sprint ou la branche par défaut, par exemple quand sa base est la branche d'une autre PR), `title`, `body`. Refuse la branche d'une autre PR comme base."
+    )]
+    async fn update_pull_request(&self, Parameters(p): Parameters<UpdatePullRequestParams>) -> ToolResult {
+        respond(self.do_update_pull_request(p).await)
     }
 
     #[tool(description = "Sort une pull request du brouillon : elle devient prête pour la revue.")]
@@ -1910,8 +2195,31 @@ impl GestionProjet {
                     .load_project(&repo)
                     .await?
                     .and_then(|p| p.state.current().map(|c| c.version.clone()));
-                let project = self.close_sprint_now(&repo, p.version.as_deref()).await?;
+                let project = self
+                    .close_sprint_now(&repo, p.version.as_deref(), &p.to_backlog)
+                    .await?;
                 Ok(json!({ "repo": repo, "closed": closed, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Fusionne maintenant la branche de release d'un sprint terminé dans la branche par défaut (PR de release), sans attendre qu'une CI s'annonce — pour un dépôt sans CI. Refuse une CI en échec ou en cours et un conflit ; tague ensuite la version. Seulement à la demande de l'utilisateur.",
+        meta = ui_only()
+    )]
+    async fn project_ship_release(&self, Parameters(p): Parameters<ShipReleaseParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let project = self.ship_release_now(&repo, p.version.trim()).await?;
+                let release = project
+                    .state
+                    .sprints
+                    .iter()
+                    .find(|s| s.version == p.version.trim())
+                    .and_then(|s| s.release.clone());
+                Ok(json!({ "repo": repo, "release": release, "project": project_view(&project) }))
             }
             .await,
         )
@@ -2295,6 +2603,44 @@ impl ServerHandler for GestionProjet {
             )
     }
 
+    /// Appel d'outil (routeur des `#[tool]`), puis, après une écriture réussie sur un dépôt,
+    /// l'événement `sync.updated` (`{ repo, tool }`) pour les écrans du plugin : l'écran Sprint se
+    /// met à jour quand l'IA passe une issue en revue ou fusionne une PR (N09).
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let tool = request.name.to_string();
+        let repo = request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("repo"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let peer = context.peer.clone();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let response = self.tool_router.call(tcc).await?;
+        let ok = match &response {
+            rmcp::model::CallToolResponse::Complete(r) => r.is_error != Some(true),
+            _ => false,
+        };
+        if ok
+            && WRITE_TOOLS.contains(&tool.as_str())
+            && let Some(repo) = repo.and_then(|r| self.repo(&r).ok())
+        {
+            let params = json!({ "event": SYNC_EVENT, "data": { "repo": repo, "tool": tool } });
+            let notification = rmcp::model::ServerNotification::CustomNotification(CustomNotification::new(
+                EVENT_NOTIFICATION,
+                Some(params),
+            ));
+            if let Err(err) = peer.send_notification(notification).await {
+                tracing::debug!(tool, "événement {SYNC_EVENT} non envoyé : {err}");
+            }
+        }
+        Ok(response)
+    }
+
     fn on_custom_notification(
         &self,
         notification: CustomNotification,
@@ -2348,6 +2694,7 @@ mod tests {
             "list_pull_requests",
             "get_pull_request",
             "create_pull_request",
+            "update_pull_request",
             "mark_pull_request_ready",
             "list_releases",
             "create_release",
@@ -2357,6 +2704,7 @@ mod tests {
             "project_resume",
             "project_set_duration",
             "project_close_sprint",
+            "project_ship_release",
             "sprint_issues",
             "sprint_backlog",
             "roadmap",
@@ -3229,6 +3577,7 @@ mod tests {
         let stale = s
             .project_close_sprint(Parameters(CloseSprintParams {
                 repo: CRM.into(),
+                to_backlog: vec![],
                 version: Some("0.9.0".into()),
             }))
             .await
@@ -3237,6 +3586,7 @@ mod tests {
         let closed = data(
             &s.project_close_sprint(Parameters(CloseSprintParams {
                 repo: CRM.into(),
+                to_backlog: vec![],
                 version: Some("0.1.0".into()),
             }))
             .await
@@ -3262,5 +3612,350 @@ mod tests {
         // L'issue ouverte passe au sprint suivant.
         assert_eq!(sprint_issues(&fake, "0.2.0"), [4]);
         assert_eq!(summary(&s).await["sprint"]["title"], "0.2.0");
+    }
+
+    /// Démarre des sprints d'un jour de capacité `capacity` (sprint 0.1.0 avec l'issue #1).
+    async fn start_one_day(s: &GestionProjet, capacity: u32) {
+        data(
+            &s.project_start(Parameters(ProjectStartParams {
+                repo: CRM.into(),
+                duration_days: 1,
+                capacity,
+                first_version: None,
+            }))
+            .await
+            .unwrap(),
+        );
+    }
+
+    /// N07 : `get_repository` et `sprint_summary` donnent la durée réelle des sprints automatiques
+    /// (issue d'état), pas le réglage par défaut du plugin (14 jours).
+    #[tokio::test]
+    async fn reports_the_real_sprint_length() {
+        let (s, _fake) = crm().await;
+        start_one_day(&s, 1).await;
+        let repo = data(
+            &s.get_repository(Parameters(RepoParams { repo: CRM.into() }))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(repo["sprint_length_days"], 1, "{repo}");
+        assert_eq!(repo["sprints"]["duration_days"], 1);
+        assert_eq!(repo["sprints"]["release_branch"], "release/0.1.0");
+        let sum = summary(&s).await;
+        assert_eq!(sum["sprint_length_days"], 1);
+        assert_eq!(sum["pace"]["length_days"], 1, "{}", sum["pace"]);
+    }
+
+    /// N08 : juste après un ajout ou un retrait, les listes de GitHub ont quelques secondes de
+    /// retard ; le résumé du sprint et le carnet suivent quand même l'écriture.
+    #[tokio::test]
+    async fn sprint_and_backlog_follow_moves_despite_stale_listings() {
+        let (s, fake) = crm().await;
+        start_one_day(&s, 10).await;
+        let before: Vec<u64> = summary(&s).await["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["number"].as_u64())
+            .collect();
+        assert!(before.contains(&1) && !before.contains(&20), "{before:?}");
+
+        fake.lock().unwrap().listing_lag = true;
+        let moved = data(
+            &s.sprint_issues(Parameters(SprintIssuesParams {
+                repo: CRM.into(),
+                add: vec![20],
+                remove: vec![1],
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!((&moved["added"], &moved["removed"]), (&json!([20]), &json!([1])));
+        // Le faux GitHub liste encore l'ancien état…
+        assert!(
+            fake.lock().unwrap().listed("milestone=1").contains(&1),
+            "le faux GitHub devrait être en retard"
+        );
+        // … mais le sprint et le carnet suivent l'écriture.
+        let after: Vec<u64> = summary(&s).await["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["number"].as_u64())
+            .collect();
+        assert!(after.contains(&20) && !after.contains(&1), "{after:?}");
+        let backlog: Vec<u64> = data(
+            &s.sprint_backlog(Parameters(RepoParams { repo: CRM.into() }))
+                .await
+                .unwrap(),
+        )["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["number"].as_u64())
+            .collect();
+        assert!(backlog.contains(&1) && !backlog.contains(&20), "{backlog:?}");
+    }
+
+    /// N11 : une PR d'issue ne vise jamais la branche d'une autre PR ; une PR déjà empilée est
+    /// repointée vers la release avant la suppression de la branche fusionnée (GitHub la
+    /// fermerait), et `update_pull_request` repointe une base.
+    #[tokio::test]
+    async fn never_stacks_sprint_pull_requests() {
+        let (s, fake) = crm().await;
+        start_one_day(&s, 10).await;
+        {
+            let mut f = fake.lock().unwrap();
+            f.add_pull(30, "feat/20-heure", "release/0.1.0", "Ferme #20", "dev");
+            f.branches.insert("feat/21-majuscules".into(), "sha-21".into());
+            f.branches.insert("feat/22-autre".into(), "sha-22".into());
+        }
+        let create = |head: &str, base: &str| {
+            Parameters(CreatePullRequestParams {
+                repo: CRM.into(),
+                title: format!("PR {head}"),
+                head: head.into(),
+                base: Some(base.into()),
+                body: Some("Ferme #21".into()),
+                draft: Some(true),
+            })
+        };
+        // Base = branche de #30 : refusé, avec la branche de release à viser.
+        let stacked = s
+            .create_pull_request(create("feat/21-majuscules", "feat/20-heure"))
+            .await
+            .unwrap();
+        assert_eq!(stacked.is_error, Some(true));
+        assert!(
+            text(&stacked).contains("#30") && text(&stacked).contains("release/0.1.0"),
+            "{}",
+            text(&stacked)
+        );
+        // Sprints démarrés : une base quelconque (ni release ni défaut) est refusée aussi.
+        let odd = s
+            .create_pull_request(create("feat/21-majuscules", "feat/22-autre"))
+            .await
+            .unwrap();
+        assert!(text(&odd).contains("sprints automatiques"), "{}", text(&odd));
+        let ok = data(
+            &s.create_pull_request(create("feat/21-majuscules", "release/0.1.0"))
+                .await
+                .unwrap(),
+        );
+        let n = ok["number"].as_u64().unwrap() as u32;
+        assert_eq!(ok["base"], "release/0.1.0", "{ok}");
+
+        // Une PR empilée malgré tout (créée hors de Cadence) : repointée puis fusion sans perte.
+        fake.lock()
+            .unwrap()
+            .add_pull(40, "feat/22-autre", "feat/20-heure", "Ferme #22", "dev");
+        let refused = s
+            .update_pull_request(Parameters(UpdatePullRequestParams {
+                repo: CRM.into(),
+                number: n,
+                base: Some("feat/22-autre".into()),
+                title: None,
+                body: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&refused).contains("#40"), "{}", text(&refused));
+        let merged = data(&s.merge_pull_request(merge(30, None, true, vec![])).await.unwrap());
+        assert_eq!(merged["retargeted"], json!([40]), "{merged}");
+        assert_eq!(merged["branch_deleted"], true);
+        {
+            let f = fake.lock().unwrap();
+            let pr = f.pull(40).unwrap();
+            assert_eq!(
+                (&pr["state"], &pr["base"]["ref"]),
+                (&json!("open"), &json!("release/0.1.0"))
+            );
+        }
+        let renamed = data(
+            &s.update_pull_request(Parameters(UpdatePullRequestParams {
+                repo: CRM.into(),
+                number: 40,
+                base: Some("release/0.1.0".into()),
+                title: Some("feat(#22) : autre".into()),
+                body: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(renamed["title"], "feat(#22) : autre");
+    }
+
+    /// N13 / N14 : clôture avec l'excédent rendu au carnet, portée relevée (« fait / portée »),
+    /// numéro de milestone des sprints terminés (conversations), release fusionnée tout de suite
+    /// sur un dépôt sans CI ; avec des workflows, attente puis « Fusionner maintenant ».
+    #[tokio::test]
+    async fn closes_a_sprint_and_ships_without_ci() {
+        for workflows in [0, 1] {
+            let (s, fake) = crm().await;
+            start_one_day(&s, 1).await;
+            data(
+                &s.sprint_issues(Parameters(SprintIssuesParams {
+                    repo: CRM.into(),
+                    add: vec![2, 3],
+                    remove: vec![],
+                }))
+                .await
+                .unwrap(),
+            );
+            {
+                let mut f = fake.lock().unwrap();
+                f.workflows = workflows;
+                // Du travail livré sur la release, et #1 fermée.
+                f.branches.insert("release/0.1.0".into(), "travail".into());
+                let one = f.issues.iter_mut().find(|i| i["number"] == 1).unwrap();
+                one["state"] = json!("closed");
+                // Fermée sur GitHub après le remplissage : la liste, plus récente, fait foi.
+                one["updated_at"] = json!("2026-10-21T08:00:00Z");
+            }
+            let closed = data(
+                &s.project_close_sprint(Parameters(CloseSprintParams {
+                    repo: CRM.into(),
+                    version: Some("0.1.0".into()),
+                    to_backlog: vec![3],
+                }))
+                .await
+                .unwrap(),
+            );
+            assert_eq!(closed["project"]["current"], "0.2.0", "{closed}");
+            assert_eq!(sprint_issues(&fake, "0.2.0"), [2]);
+            assert!(fake.lock().unwrap().issue(3).unwrap()["milestone"].is_null());
+            let state = {
+                let f = fake.lock().unwrap();
+                projet::parse_body(f.issue(24).unwrap()["body"].as_str().unwrap()).unwrap()
+            };
+            let old = &state.sprints[0];
+            assert_eq!(old.carried, Vec::<u32>::new());
+            assert_eq!(state.sprints[1].carried, [2]);
+            let one = projet::weight(&model::issue_from(fake.lock().unwrap().issue(1).unwrap(), false));
+            assert_eq!(old.done_points, Some(one));
+            assert!(old.scope_points.unwrap() > one, "{old:?}");
+
+            let sum = summary(&s).await;
+            let ended = sum["project"]["sprints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["version"] == "0.1.0")
+                .unwrap()
+                .clone();
+            assert_eq!(ended["milestone"], 1, "{ended}");
+            let release = &ended["release"];
+            if workflows == 0 {
+                assert_eq!(release["status"], "merged", "{release}");
+                assert_eq!(release["tag"], "v0.1.0");
+            } else {
+                assert_eq!(release["status"], "pending", "{release}");
+                assert_eq!(release["no_ci"], true);
+                let shipped = data(
+                    &s.project_ship_release(Parameters(ShipReleaseParams {
+                        repo: CRM.into(),
+                        version: "0.1.0".into(),
+                    }))
+                    .await
+                    .unwrap(),
+                );
+                assert_eq!(shipped["release"]["status"], "merged", "{shipped}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod events {
+    use super::*;
+    use rmcp::ServiceExt;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    /// Session MCP en mémoire, côté Cadence : envoie chaque message (une ligne JSON-RPC), attend
+    /// la réponse des requêtes et rend tout ce que le serveur a écrit.
+    async fn session(server: GestionProjet, messages: &[Value]) -> Vec<Value> {
+        let (client, transport) = tokio::io::duplex(256 * 1024);
+        tokio::spawn(async move {
+            if let Ok(service) = server.serve(tokio::io::split(transport)).await {
+                let _ = service.waiting().await;
+            }
+        });
+        let (read, mut write) = tokio::io::split(client);
+        let mut lines = BufReader::new(read).lines();
+        let init = json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": {},
+                        "clientInfo": { "name": "cadence-test", "version": "0.0.0" } }
+        });
+        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let mut received = Vec::new();
+        for message in [init, initialized].iter().chain(messages) {
+            write.write_all(format!("{message}\n").as_bytes()).await.unwrap();
+            let Some(id) = message.get("id") else { continue };
+            loop {
+                let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+                    .await
+                    .expect("pas de réponse du serveur")
+                    .unwrap()
+                    .expect("flux fermé");
+                let reply: Value = serde_json::from_str(&line).unwrap();
+                let done = &reply["id"] == id;
+                received.push(reply);
+                if done {
+                    break;
+                }
+            }
+        }
+        received
+    }
+
+    fn call(id: u64, tool: &str, args: Value) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": tool, "arguments": args } })
+    }
+
+    /// N09 : une écriture réussie (ici par l'IA) prévient les écrans (`sync.updated`) ; ni une
+    /// lecture ni une écriture refusée.
+    #[tokio::test]
+    async fn notifies_screens_after_each_write() {
+        const REPO: &str = "me/app";
+        let issues = vec![
+            json!({ "number": 1, "title": "Une issue", "state": "open", "labels": [], "milestone": null }),
+        ];
+        let (url, _fake) = crate::fake_github::start(crate::fake_github::Repo::new(REPO, issues)).await;
+        let env = Env {
+            token: Some("test".into()),
+            repos: vec![REPO.into()],
+            settings: Settings::default(),
+            api_url: url,
+        };
+        let out = session(
+            GestionProjet::new(&env).unwrap(),
+            &[
+                call(1, "list_issues", json!({ "repo": REPO })),
+                call(
+                    2,
+                    "update_issue",
+                    json!({ "repo": "ME/App", "number": 1, "add_labels": ["area/api"] }),
+                ),
+                call(
+                    3,
+                    "update_issue",
+                    json!({ "repo": REPO, "number": 99, "add_labels": ["x"] }),
+                ),
+            ],
+        )
+        .await;
+        let events: Vec<&Value> = out
+            .iter()
+            .filter(|m| m["method"] == EVENT_NOTIFICATION)
+            .map(|m| &m["params"])
+            .collect();
+        assert_eq!(
+            events,
+            [&json!({ "event": SYNC_EVENT, "data": { "repo": REPO, "tool": "update_issue" } })],
+            "{out:#?}"
+        );
     }
 }

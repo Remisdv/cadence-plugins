@@ -41,6 +41,8 @@ Chaque outil du plugin prend `repo` : passe toujours celui du contexte.
 | `cadence__repo_checkout` | worktree `{ "repo", "task": "revue-<PR>" }` pour lancer build et tests si la CI ne suffit pas |
 | `gestion-projet__review_pull_request` | `APPROVE` ou `REQUEST_CHANGES`, synthèse et remarques sur des lignes |
 | `gestion-projet__mark_pull_request_ready` | sortir une PR validée du brouillon avant la fusion |
+| `gestion-projet__update_pull_request` | repointer une PR (`base`) vers la branche de release du sprint |
+| `gestion-projet__create_pull_request` | rouvrir le travail d'une PR fermée par GitHub (même branche, `base` = release) |
 | `gestion-projet__merge_pull_request` | fusionner : `delete_branch: true`, `close_issues: [<issue>]` ; sans `method`, le réglage du plugin (squash par défaut) |
 | `gestion-projet__update_issue` | `state: "closed"` + `state_reason: "completed"` (terminé) si l'issue n'a pas été fermée par la fusion ; `status: "doing"` pour une tâche refusée |
 
@@ -69,7 +71,17 @@ Chaque outil du plugin prend `repo` : passe toujours celui du contexte.
    #42 et #45 seulement », « fusionne en merge ») autorise les écritures. L'utilisateur peut faire
    passer une tâche d'un verdict à l'autre : suis sa décision. Sans réponse, ou sur un « non »,
    n'écris rien.
-5. **Appliquer**, tâche par tâche, dans l'ordre des dépendances (socle d'abord) :
+5. **Ordre sûr et bases.** Avant toute fusion :
+   - une PR dont la base n'est pas la branche de release du sprint (base = la branche d'une autre
+     issue, PR « empilée ») est d'abord repointée : `update_pull_request` avec
+     `base: "<release>"` (dis-le dans le bilan). `merge_pull_request` repointe aussi de lui-même
+     les PR qui visent la branche qu'il fusionne avant de la supprimer (`retargeted`) ;
+   - fusionne d'abord les PR qui visent déjà la release, dans l'ordre des dépendances (socle
+     d'abord), puis les autres ;
+   - une PR **fermée** dont la base a disparu (fusionnée puis supprimée) ne se rouvre pas : ouvre
+     une nouvelle PR depuis la même branche vers la release (`create_pull_request`, corps repris,
+     « Ferme #n »), relis-la comme les autres et signale-le.
+6. **Appliquer**, tâche par tâche, dans cet ordre :
    - **validée** : `review_pull_request` `APPROVE` (synthèse : critères ✅, CI, architecture ;
      termine par `_Revue du skill « Relire et valider » (Cadence)._`) ; `mark_pull_request_ready`
      si c'est un brouillon ; `merge_pull_request` avec `delete_branch: true` et
@@ -81,9 +93,11 @@ Chaque outil du plugin prend `repo` : passe toujours celui du contexte.
      concernée avec la correction proposée, puis `update_issue` avec `status: "doing"` ;
    - **en attente** : rien.
    Après chaque fusion, relis la PR suivante (`get_pull_request`) : une fusion peut créer un
-   conflit. Conflit ou refus de GitHub : arrête-toi pour cette tâche, dis pourquoi, passe à la
-   suivante. Jamais de `--force`, jamais de résolution de conflit sans demande.
-6. Ne fusionne jamais une PR dont la CI est rouge, même si l'utilisateur confirme en bloc : dis-le
+   conflit. Conflit : dans le worktree de la PR, fusionne `origin/<release>` dans sa branche
+   (`git merge`, jamais de rebase ni de `--force`) ; si la résolution est évidente et les tests
+   passent, pousse et continue, sinon arrête-toi pour cette tâche, dis pourquoi et passe à la
+   suivante. Refus de GitHub : arrête-toi pour cette tâche.
+7. Ne fusionne jamais une PR dont la CI est rouge, même si l'utilisateur confirme en bloc : dis-le
    et laisse-la en attente.
 
 ## Compte rendu

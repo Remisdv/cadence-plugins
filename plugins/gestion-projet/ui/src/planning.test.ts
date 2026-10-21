@@ -3,6 +3,10 @@ import type { Issue, PullRequest, Version } from "./domain";
 import {
   buildRoadmap,
   capacityFor,
+  carryOver,
+  closeSprintLead,
+  deliveredLabel,
+  moveMessage,
   dueFor,
   issueWeight,
   pointsByStatus,
@@ -288,6 +292,68 @@ describe("sprints automatiques", () => {
     });
     expect(releaseInfo({ status: "pending" }).tone).toBe("amber");
     expect(releaseInfo(null).label).toBe("En cours");
+  });
+  it("ne garde au sprint suivant que ce qui tient dans sa capacité (N13)", () => {
+    // Recette du 21/10 : #2 (socle, 8 SP) et #3 (P1, 8 SP) dans un sprint de 1 SP.
+    const open = [issue(3, { priority: 1, points: 8 }), issue(2, { priority: 0, points: 8 })];
+    expect(carryOver(open, 1)).toEqual({ keep: [2], excess: [3], keepPoints: 8, excessPoints: 8 });
+    expect(carryOver(open, 16).excess).toEqual([]);
+    // Une petite issue moins prioritaire tient encore après une grosse qui ne tient pas.
+    const mix = [
+      issue(1, { priority: 1, points: 5 }),
+      issue(2, { priority: 2, points: 8 }),
+      issue(3, { priority: null, points: 2 }),
+    ];
+    expect(carryOver(mix, 8)).toMatchObject({ keep: [1, 3], excess: [2], keepPoints: 7 });
+    expect(carryOver([], 3)).toMatchObject({ keep: [], excess: [] });
+    // Une issue déjà en revue (sa PR est ouverte) passe toujours, avant une issue à faire.
+    const review = [
+      issue(5, { priority: 0, points: 3 }),
+      issue(6, { priority: 3, points: 3, status: "review" }),
+    ];
+    expect(carryOver(review, 3)).toMatchObject({ keep: [6], excess: [5] });
+    const twoInReview = [
+      issue(7, { points: 8, status: "review" }),
+      issue(8, { points: 5, status: "doing" }),
+      issue(9, { priority: 0, points: 1 }),
+    ];
+    expect(carryOver(twoInReview, 2)).toMatchObject({ keep: [7, 8], excess: [9], keepPoints: 13 });
+  });
+
+  it("formule la clôture selon l'échéance (N13)", () => {
+    expect(closeSprintLead("2026-10-21", "2026-10-21")).toBe(
+      "Le sprint se termine aujourd'hui, à son échéance",
+    );
+    expect(closeSprintLead("2026-10-23T00:00:00Z", "2026-10-21")).toBe(
+      "Le sprint se termine aujourd'hui, au lieu de l'échéance du 23 oct.",
+    );
+  });
+
+  it("compte les SP livrés sur la portée du sprint terminé (N14)", () => {
+    expect(deliveredLabel({ done_points: 4, scope_points: 20, capacity: 0 })).toBe("4 / 20 SP");
+    expect(deliveredLabel({ done_points: 5, capacity: 21 })).toBe("5 / 21 SP");
+    expect(deliveredLabel({ done_points: 4, capacity: 0 })).toBe("4 SP livrés");
+    expect(deliveredLabel({ capacity: 0 })).toBe("0 SP livrés");
+  });
+
+  it("résume un ajout ou un retrait d'issues du sprint (N08)", () => {
+    expect(moveMessage({ added: [20, 21], removed: [], skipped: [] }, "0.2.0")).toEqual({
+      text: "#20, #21 ajoutées au sprint 0.2.0.",
+      kind: "success",
+    });
+    expect(moveMessage({ added: [], removed: [21], skipped: [] }, "0.2.0").text).toBe(
+      "#21 retirée du sprint 0.2.0 (retour au carnet).",
+    );
+    expect(
+      moveMessage(
+        { added: [4], removed: [], skipped: [{ issue: 9, reason: "issue fermée" }] },
+        "0.2.0",
+      ),
+    ).toEqual({
+      text: "#4 ajoutée au sprint 0.2.0 ; 1 refusée : #9 (issue fermée).",
+      kind: "warning",
+    });
+    expect(moveMessage({ added: [], removed: [], skipped: [] }, "0.2.0").kind).toBe("info");
   });
 });
 

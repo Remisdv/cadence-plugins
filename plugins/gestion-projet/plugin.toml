@@ -1,7 +1,7 @@
 api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
-version = "0.7.0"
+version = "0.8.0"
 description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"

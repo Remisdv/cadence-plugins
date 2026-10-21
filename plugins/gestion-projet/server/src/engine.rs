@@ -225,18 +225,20 @@ impl GestionProjet {
     }
 
     async fn set_milestone(&self, repo: &str, issue: u32, milestone: Option<u32>) -> Result<()> {
-        self.gh
+        let raw = self
+            .gh
             .patch(
                 &format!("/repos/{repo}/issues/{issue}"),
                 &json!({ "milestone": milestone }),
             )
             .await?;
+        self.remember_issue(repo, &raw);
         Ok(())
     }
 
     /// Issues ouvertes du dépôt (descriptions comprises), sans l'issue d'état.
     async fn open_issues(&self, repo: &str) -> Result<Vec<Issue>> {
-        let mut out = Vec::new();
+        let mut raws: Vec<Value> = Vec::new();
         for page in 1..=10u32 {
             let p = self
                 .gh
@@ -249,19 +251,19 @@ impl GestionProjet {
                     ],
                 )
                 .await?;
-            out.extend(
-                p.body
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|raw| !model::is_pull_request(raw) && !model::is_state_issue(raw))
-                    .map(|raw| model::issue_in(repo, raw, true)),
-            );
+            raws.extend(p.body.as_array().cloned().unwrap_or_default());
             if !p.has_next {
                 break;
             }
         }
-        Ok(out)
+        // Issue tout juste déplacée (ajoutée au sprint, rendue au carnet) ou fermée : la réponse de
+        // l'écriture fait foi tant que la liste de GitHub ne la reflète pas (N08).
+        let raws = self.patch_listing(repo, raws, |raw| raw["state"].as_str() == Some("open"));
+        Ok(raws
+            .iter()
+            .filter(|raw| !model::is_pull_request(raw) && !model::is_state_issue(raw))
+            .map(|raw| model::issue_in(repo, raw, true))
+            .collect())
     }
 
     /// Ajoute au sprint (milestone `number`) les issues du backlog qui tiennent dans `budget`.
@@ -323,7 +325,7 @@ impl GestionProjet {
         if project.state.status == RunStatus::Running
             && project.state.current().is_some_and(|c| today > c.due_on)
         {
-            self.roll_over(repo, &mut project, &today).await?;
+            self.roll_over(repo, &mut project, &today, &[]).await?;
         }
 
         // 2. Sprint en cours : milestone, branche de release, remplissage initial.
@@ -363,7 +365,7 @@ impl GestionProjet {
                 .is_some_and(|r| matches!(r.status, ReleaseStatus::Pending | ReleaseStatus::Blocked));
             if pending {
                 let record = project.state.sprints[i].clone();
-                let next = self.ship(repo, &record).await;
+                let next = self.ship(repo, &record, false).await;
                 project.state.sprints[i].release = Some(next);
             }
         }
@@ -429,7 +431,15 @@ impl GestionProjet {
     }
 
     /// Clôt le sprint échu : relevé des points, report des issues ouvertes et des PR, sprint suivant.
-    async fn roll_over(&self, repo: &str, project: &mut Project, today: &str) -> Result<()> {
+    /// `to_backlog` : issues ouvertes que l'utilisateur rend au carnet au lieu de les reporter
+    /// (excédent sur la capacité du sprint suivant, N13).
+    async fn roll_over(
+        &self,
+        repo: &str,
+        project: &mut Project,
+        today: &str,
+        to_backlog: &[u32],
+    ) -> Result<()> {
         let prefix = self.settings().tag_prefix;
         let index = project.state.sprints.len() - 1;
         let cur = project.state.sprints[index].clone();
@@ -440,11 +450,12 @@ impl GestionProjet {
             .filter(|i| i.state == "closed")
             .map(projet::weight)
             .sum();
-        let carried: Vec<u32> = issues
+        let scope: u32 = issues.iter().map(projet::weight).sum();
+        let (released, carried): (Vec<u32>, Vec<u32>) = issues
             .iter()
             .filter(|i| i.state == "open")
             .map(|i| i.number)
-            .collect();
+            .partition(|n| to_backlog.contains(n));
 
         // Versions déjà livrées ou closes : jamais réutilisées (un milestone ouvert du même nom
         // est celui d'une passe interrompue, il est repris).
@@ -466,6 +477,7 @@ impl GestionProjet {
         {
             let c = &mut project.state.sprints[index];
             c.done_points = Some(done);
+            c.scope_points = Some(scope);
             c.ended_on = Some(today.to_string());
             c.release = Some(ReleaseRecord::pending());
         }
@@ -479,6 +491,7 @@ impl GestionProjet {
             filled: false,
             carried: carried.clone(),
             done_points: None,
+            scope_points: None,
             ended_on: None,
             release: None,
         };
@@ -495,6 +508,9 @@ impl GestionProjet {
         self.ensure_branch(repo, &next.branch(), &from).await?;
         for n in &carried {
             self.set_milestone(repo, *n, Some(new_number)).await?;
+        }
+        for n in &released {
+            self.set_milestone(repo, *n, None).await?;
         }
         // PR encore ouvertes vers l'ancienne branche : elles visent la nouvelle.
         let open_prs = self
@@ -530,6 +546,7 @@ impl GestionProjet {
             to = version,
             done,
             ?carried,
+            ?released,
             "sprint clos, sprint suivant ouvert"
         );
         Ok(())
@@ -537,13 +554,15 @@ impl GestionProjet {
 
     /// Livraison d'un sprint terminé : PR `release/x` → branche par défaut, fusion quand la CI
     /// est verte, puis release taguée. Une erreur bloque la livraison sans arrêter le moteur.
-    async fn ship(&self, repo: &str, record: &SprintRecord) -> ReleaseRecord {
+    /// `now` : l'utilisateur demande la fusion sans attendre qu'une CI s'annonce.
+    async fn ship(&self, repo: &str, record: &SprintRecord, now: bool) -> ReleaseRecord {
         let previous = record.release.clone().unwrap_or_else(ReleaseRecord::pending);
-        match self.try_ship(repo, record, &previous).await {
+        match self.try_ship(repo, record, &previous, now).await {
             Ok(next) => next,
             Err(err) => ReleaseRecord {
                 status: ReleaseStatus::Blocked,
                 message: Some(format!("{err:#}")),
+                no_ci: false,
                 ..previous
             },
         }
@@ -554,6 +573,7 @@ impl GestionProjet {
         repo: &str,
         record: &SprintRecord,
         previous: &ReleaseRecord,
+        now: bool,
     ) -> Result<ReleaseRecord> {
         let prefix = self.settings().tag_prefix;
         let tag = model::tag_name(&prefix, &record.version)?;
@@ -564,6 +584,7 @@ impl GestionProjet {
             pull_request,
             tag: None,
             message,
+            no_ci: false,
         };
 
         let owner = repo.split_once('/').map(|(o, _)| o).unwrap_or(repo);
@@ -680,12 +701,18 @@ impl GestionProjet {
                     Some(format!("CI en cours sur la PR #{number}.")),
                 ));
             }
-            Ci::None if age < CI_GRACE_SECS => {
-                return Ok(status(
-                    ReleaseStatus::Pending,
-                    Some(number),
-                    Some(format!("PR #{number} ouverte, en attente de la CI.")),
-                ));
+            // Aucune vérification : on n'attend une CI que si le dépôt a des workflows (N14).
+            Ci::None if !now && age < CI_GRACE_SECS && self.has_workflows(repo).await => {
+                return Ok(ReleaseRecord {
+                    no_ci: true,
+                    ..status(
+                        ReleaseStatus::Pending,
+                        Some(number),
+                        Some(format!(
+                            "PR #{number} ouverte : aucune vérification encore, en attente de la CI."
+                        )),
+                    )
+                });
             }
             Ci::None | Ci::Success => {}
         }
@@ -752,7 +779,50 @@ impl GestionProjet {
             pull_request: pr,
             tag: Some(tag.to_string()),
             message: None,
+            no_ci: false,
         })
+    }
+
+    /// Le dépôt a-t-il des workflows GitHub Actions ? Dans le doute (droits, Actions désactivées
+    /// renvoyant une erreur), oui : on laisse à la CI le temps de s'annoncer.
+    async fn has_workflows(&self, repo: &str) -> bool {
+        match self
+            .gh
+            .get_opt(
+                &format!("/repos/{repo}/actions/workflows"),
+                &[("per_page", "1".into())],
+            )
+            .await
+        {
+            Ok(Some(v)) => v["total_count"].as_u64().unwrap_or(1) > 0,
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
+    /// Fusion immédiate de la release d'un sprint terminé (« Fusionner maintenant » de l'écran,
+    /// quand aucune CI ne s'annonce) : mêmes contrôles qu'à l'ordinaire (CI en échec ou en cours,
+    /// conflit), sans le délai d'attente de la CI.
+    pub(crate) async fn ship_release_now(&self, repo: &str, version: &str) -> Result<Project> {
+        let _guard = self.engine_lock.lock().await;
+        let mut project = self.require_started(repo).await?;
+        let last = project.state.sprints.len().saturating_sub(1);
+        let index = project.state.sprints[..last]
+            .iter()
+            .position(|s| s.version == version)
+            .ok_or_else(|| anyhow!("Aucun sprint terminé {version} dans {repo}."))?;
+        let record = project.state.sprints[index].clone();
+        if record
+            .release
+            .as_ref()
+            .is_some_and(|r| matches!(r.status, ReleaseStatus::Merged | ReleaseStatus::Empty))
+        {
+            bail!("La release {version} est déjà livrée.");
+        }
+        let next = self.ship(repo, &record, true).await;
+        project.state.sprints[index].release = Some(next);
+        self.save_project(repo, &project).await?;
+        Ok(project)
     }
 
     /// État de la CI d'un commit : checks (Actions…) et statuts (services externes).
@@ -861,6 +931,7 @@ impl GestionProjet {
                 filled: false,
                 carried: vec![],
                 done_points: None,
+                scope_points: None,
                 ended_on: None,
                 release: None,
             }],
@@ -961,7 +1032,12 @@ impl GestionProjet {
     /// l'échéance, issues ouvertes et PR reportées au sprint suivant, qui commence aujourd'hui,
     /// milestone fermé, puis livraison de la branche de release. `version` : le sprint que
     /// l'utilisateur a vu (refus s'il a changé entre-temps).
-    pub(crate) async fn close_sprint_now(&self, repo: &str, version: Option<&str>) -> Result<Project> {
+    pub(crate) async fn close_sprint_now(
+        &self,
+        repo: &str,
+        version: Option<&str>,
+        to_backlog: &[u32],
+    ) -> Result<Project> {
         let _guard = self.engine_lock.lock().await;
         let mut project = self.require_started(repo).await?;
         if project.state.status != RunStatus::Running {
@@ -977,7 +1053,7 @@ impl GestionProjet {
             );
         }
         let today = sprint::today();
-        self.roll_over(repo, &mut project, &today).await?;
+        self.roll_over(repo, &mut project, &today, to_backlog).await?;
         self.save_project(repo, &project).await?;
         self.advance(repo, project).await
     }

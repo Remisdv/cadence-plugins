@@ -16,12 +16,18 @@
  *
  * Les conversations lancées depuis le sprint (« Développer le sprint », « Implémenter », « Relire »)
  * portent le groupe `sprint:<repo>:<n° du milestone>` : Cadence les masque du chat global, la
- * section « Conversations du sprint » les liste (`conversations.list`) et les ouvre. La colonne
+ * section « Conversations du sprint » les liste (`conversations.list`) et les ouvre ; celles d'un
+ * sprint terminé restent accessibles depuis sa ligne dans « Sprints terminés ». La colonne
  * « En revue » se sélectionne : « Relire » une tâche ou « Relire la sélection » ouvre une seule
  * conversation `relire-valider` (revue, accord de l'utilisateur, puis fusion et clôture) ; la PR de
  * chaque tâche est celle qui la déclare fermer ou dont la branche la nomme (`feat/<n>-…`).
+ *
+ * Fraîcheur (N08, N09) : tout l'écran se relit après chacune de ses écritures, à l'événement
+ * `sync.updated` du serveur (écritures de l'IA comprises), à la fin d'une conversation ou d'une
+ * exécution, toutes les 20 s tant qu'une conversation du sprint tourne, et au retour sur la vue
+ * (`useLiveRefresh`).
  */
-import { useCallback, useEffect, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
 import {
   cadence,
   isCadenceError,
@@ -62,6 +68,7 @@ import {
   type ProjectView,
   type PullRequestList,
   type SprintIssuesResult,
+  type SprintRecord,
   type SprintSummary,
   type StartDefaults,
   type Version,
@@ -82,7 +89,10 @@ import {
 } from "../components";
 import {
   capacityFor,
+  carryOver,
+  closeSprintLead,
   daysLeftLabel,
+  deliveredLabel,
   delayLabel,
   dueFor,
   durationLabel,
@@ -93,6 +103,8 @@ import {
   formatPercent,
   formatRange,
   gainedToday,
+  issueWeight,
+  moveMessage,
   plural,
   pointsByStatus,
   releaseInfo,
@@ -101,7 +113,8 @@ import {
   statusMeters,
 } from "../planning";
 import { pullRequestFor } from "../issues";
-import { useConversations } from "../useConversations";
+import { useConversations, type ConversationsState } from "../useConversations";
+import { refreshWhenDone, useLiveRefresh } from "../useLiveRefresh";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
 
@@ -110,10 +123,16 @@ const notifyError = (e: unknown) =>
 
 type SprintRef = Pick<Version, "number" | "title">;
 
-/** Lance « Développer le sprint » sur un dépôt, rattaché au sprint affiché s'il est connu. */
-function developSprint(repo: string, sprint: SprintRef | null | undefined) {
+/**
+ * Lance « Développer le sprint » sur un dépôt, rattaché au sprint affiché s'il est connu ; l'écran
+ * se relit à la fin de l'exécution (`onDone`).
+ */
+function developSprint(repo: string, sprint: SprintRef | null | undefined, onDone: () => void) {
   const group = sprint ? sprintGroup(repo, sprint) : null;
-  void cadence.runAction("developper-sprint", { repo, ...withGroup(group) }).catch(notifyError);
+  cadence
+    .runAction("developper-sprint", { repo, ...withGroup(group) })
+    .then((runId) => refreshWhenDone(runId, onDone))
+    .catch(notifyError);
 }
 
 const DEVELOP_TITLE =
@@ -122,6 +141,19 @@ const DEVELOP_TITLE =
 export function SprintView() {
   const { repos, repo, shown, ready, error } = useSelection();
   const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  // Dépôts dont une conversation du sprint tourne : relecture de secours toutes les 20 s.
+  const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
+  const onRunning = useCallback((r: string, busy: boolean) => {
+    setRunning((all) => {
+      if (all.has(r) === busy) return all;
+      const next = new Set(all);
+      if (busy) next.add(r);
+      else next.delete(r);
+      return next;
+    });
+  }, []);
+  useLiveRefresh(shown, refresh, ready && shown.some((r) => running.has(r)));
   // Sprint affiché par dépôt : « Développer le sprint » rattache sa conversation à ce sprint.
   const [sprints, setSprints] = useState<Record<string, SprintRef | null>>({});
   const onSprint = useCallback((r: string, v: SprintRef | null) => {
@@ -144,7 +176,7 @@ export function SprintView() {
             icon="play"
             disabled={!target}
             title={DEVELOP_TITLE}
-            onClick={() => target && developSprint(target, sprints[target])}
+            onClick={() => target && developSprint(target, sprints[target], refresh)}
           >
             Développer le sprint
           </Button>
@@ -160,7 +192,7 @@ export function SprintView() {
           icon="refresh"
           iconOnly
           aria-label="Rafraîchir"
-          onClick={() => setTick((t) => t + 1)}
+          onClick={refresh}
           disabled={!ready}
         />
       </PageHeader>
@@ -175,6 +207,8 @@ export function SprintView() {
               heading={!repo}
               developHere={!target}
               refreshKey={String(tick)}
+              onRefresh={refresh}
+              onRunning={onRunning}
               onSprint={onSprint}
             />
           ))}
@@ -189,6 +223,8 @@ function SprintPanel({
   heading,
   developHere,
   refreshKey,
+  onRefresh,
+  onRunning,
   onSprint,
 }: {
   repo: string;
@@ -196,13 +232,15 @@ function SprintPanel({
   /** Plusieurs dépôts affichés : le bouton « Développer » est sur chaque sprint. */
   developHere: boolean;
   refreshKey: string;
+  /** Relit tout l'écran (sprint, carnet, PR, conversations), après une écriture par exemple. */
+  onRefresh: () => void;
+  onRunning: (repo: string, running: boolean) => void;
   onSprint: (repo: string, sprint: SprintRef | null) => void;
 }) {
-  const { data, error, loading, reload } = useTool<SprintSummary>(
-    "sprint_summary",
-    { repo },
-    refreshKey,
-  );
+  const { data, error, loading } = useTool<SprintSummary>("sprint_summary", { repo }, refreshKey);
+  const onBusy = useCallback((busy: boolean) => onRunning(repo, busy), [repo, onRunning]);
+  // Sprint plus affiché (clos, autre dépôt) : plus de relecture de secours pour lui.
+  useEffect(() => () => onRunning(repo, false), [repo, onRunning]);
   const current = data?.repo === repo ? data : null;
   const shownSprint = current?.sprint && current.pace ? current.sprint : null;
   useEffect(() => {
@@ -221,7 +259,10 @@ function SprintPanel({
         {current.message}
       </EmptyCard>
     ) : null;
-  } else body = <Sprint summary={current} refreshKey={refreshKey} onChanged={reload} />;
+  } else
+    body = (
+      <Sprint summary={current} refreshKey={refreshKey} onChanged={onRefresh} onRunning={onBusy} />
+    );
 
   return (
     <section className="flex flex-col gap-3.5">
@@ -233,7 +274,7 @@ function SprintPanel({
               icon="play"
               disabled={!shownSprint}
               title={DEVELOP_TITLE}
-              onClick={() => developSprint(repo, shownSprint)}
+              onClick={() => developSprint(repo, shownSprint, onRefresh)}
             >
               Développer le sprint
             </Button>
@@ -247,14 +288,16 @@ function SprintPanel({
         <StartProject
           repo={repo}
           defaults={current.start_defaults ?? startDefaults(current)}
-          onDone={reload}
+          onDone={onRefresh}
         />
       )}
       {project && current && (
-        <ProjectBar repo={repo} project={project} summary={current} onDone={reload} />
+        <ProjectBar repo={repo} project={project} summary={current} onDone={onRefresh} />
       )}
       {body}
-      {project && project.sprints.length > 1 && <Deliveries project={project} />}
+      {project && project.sprints.length > 1 && (
+        <Deliveries repo={repo} project={project} refreshKey={refreshKey} onDone={onRefresh} />
+      )}
     </section>
   );
 }
@@ -426,8 +469,9 @@ function ProjectBar({
         </Badge>
         <span className="text-caption text-tx3">
           {[
-            project.capacity !== null ? `capacité ${project.capacity} SP` : null,
-            project.capacity !== null && project.next_capacity !== project.capacity
+            // Capacité 0 : valeur héritée d'avant le plancher d'1 SP, sans signification.
+            project.capacity ? `capacité ${project.capacity} SP` : null,
+            project.next_capacity !== project.capacity
               ? `prochains sprints ${project.next_capacity} SP`
               : null,
             `rythme ${formatDecimal(project.points_per_day)} SP / jour`,
@@ -520,15 +564,30 @@ function ProjectBar({
           project={project}
           version={current.version}
           due={current.due_on}
+          today={summary.today}
           pace={summary.sprint?.title === current.version ? (summary.pace ?? null) : null}
+          openIssues={
+            summary.sprint?.title === current.version
+              ? (summary.issues ?? []).filter((i) => i.state === "open")
+              : null
+          }
           busy={busy}
           error={error}
           onCancel={() => setClosing(false)}
-          onConfirm={async () => {
-            const ok = await run("project_close_sprint", { repo, version: current.version });
+          onConfirm={async (toBacklog) => {
+            const ok = await run("project_close_sprint", {
+              repo,
+              version: current.version,
+              to_backlog: toBacklog,
+            });
             if (ok) {
               setClosing(false);
-              void cadence.notify(`Sprint ${current.version} clos.`, "success");
+              void cadence.notify(
+                toBacklog.length > 0
+                  ? `Sprint ${current.version} clos ; ${toBacklog.map((n) => `#${n}`).join(", ")} ${toBacklog.length > 1 ? "rendues" : "rendue"} au carnet.`
+                  : `Sprint ${current.version} clos.`,
+                "success",
+              );
             }
           }}
         />
@@ -609,12 +668,17 @@ function DurationDialog({
   );
 }
 
-/** Clôture anticipée du sprint en cours, après confirmation. */
+/**
+ * Clôture anticipée du sprint en cours, après confirmation. Quand le report dépasse la capacité du
+ * sprint suivant, la boîte le signale et propose de rendre l'excédent au carnet (N13).
+ */
 function CloseSprintDialog({
   project,
   version,
   due,
+  today,
   pace,
+  openIssues,
   busy,
   error,
   onCancel,
@@ -623,30 +687,49 @@ function CloseSprintDialog({
   project: ProjectView;
   version: string;
   due: string;
+  today: string;
   pace: Pace | null;
+  /** Issues ouvertes du sprint (celui affiché est bien le sprint à clore), sinon `null`. */
+  openIssues: Issue[] | null;
   busy: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (toBacklog: number[]) => void;
 }) {
-  const open = pace ? pace.total - pace.closed : null;
-  const openPoints = pace ? (pace.points_remaining ?? pace.points_total - pace.points_done) : null;
+  const carry = useMemo(
+    () => (openIssues ? carryOver(openIssues, project.next_capacity) : null),
+    [openIssues, project.next_capacity],
+  );
+  const [release, setRelease] = useState(true);
+  const toBacklog = carry && release ? carry.excess : [];
+  const open = openIssues ? openIssues.length : pace ? pace.total - pace.closed : null;
+  const openPoints = openIssues
+    ? openIssues.reduce((n, i) => n + issueWeight(i), 0)
+    : pace
+      ? (pace.points_remaining ?? pace.points_total - pace.points_done)
+      : null;
+  const moving = open === null ? null : open - toBacklog.length;
+  const movingPoints =
+    openPoints === null || !carry ? openPoints : release ? carry.keepPoints : openPoints;
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()} width={560}>
       <DialogHeader title={`Clore le sprint ${version} maintenant ?`} icon="check" />
       <DialogBody>
         <p className="text-body-sm leading-[1.6] text-tx2">
-          Le sprint se termine aujourd'hui au lieu du {formatDay(due)}, comme à son échéance :
+          {closeSprintLead(due, today)}, comme à une échéance normale :
         </p>
         <ul className="flex list-disc flex-col gap-1.5 pl-5 text-body-sm leading-[1.6] text-tx3">
           <li>
-            {open === null
+            {moving === null
               ? "Les issues ouvertes passent au sprint suivant"
-              : open === 0
-                ? "Toutes ses issues sont fermées. Le sprint suivant"
-                : `${plural(open, "issue ouverte", "issues ouvertes")} (${openPoints} SP) ${open > 1 ? "passent" : "passe"} en tête du sprint suivant`}
-            {open === 0 ? "" : ", qui"} commence aujourd'hui pour{" "}
-            {durationLabel(project.duration_days)} et se remplit selon l'ordre de la roadmap.
+              : moving === 0
+                ? open === 0
+                  ? "Toutes ses issues sont fermées. Le sprint suivant"
+                  : "Aucune issue ne passe au sprint suivant"
+                : `${plural(moving, "issue ouverte", "issues ouvertes")} (${movingPoints} SP) ${moving > 1 ? "passent" : "passe"} en tête du sprint suivant`}
+            {moving === 0 ? "" : ", qui"} commence aujourd'hui pour{" "}
+            {durationLabel(project.duration_days)} (capacité {project.next_capacity} SP) et se
+            remplit selon l'ordre de la roadmap.
           </li>
           <li>
             Le milestone {version} est fermé ; ses PR encore ouvertes visent la nouvelle branche de
@@ -654,9 +737,36 @@ function CloseSprintDialog({
           </li>
           <li>
             La branche <span className="mono">release/{version}</span> est fusionnée dans la branche
-            par défaut dès que la CI est verte, puis la version est taguée.
+            par défaut dès que la CI est verte (tout de suite sur un dépôt sans CI), puis la version
+            est taguée.
           </li>
         </ul>
+        {carry && carry.excess.length > 0 && (
+          <Callout tone="warning">
+            <span className="flex flex-col gap-2">
+              <span>
+                Le report ({openPoints} SP) dépasse la capacité du sprint suivant (
+                {project.next_capacity} SP).
+              </span>
+              <label className="flex cursor-pointer items-start gap-2 text-tx">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={release}
+                  disabled={busy}
+                  onChange={(e) => setRelease(e.target.checked)}
+                />
+                <span>
+                  Rendre l'excédent au carnet : {carry.excess.map((n) => `#${n}`).join(", ")} (
+                  {carry.excessPoints} SP, à faire, les moins prioritaires) ;{" "}
+                  {carry.keep.length > 1 ? "seules" : "seule"}{" "}
+                  {carry.keep.map((n) => `#${n}`).join(", ")} ({carry.keepPoints} SP){" "}
+                  {carry.keep.length > 1 ? "passent" : "passe"} au sprint suivant.
+                </span>
+              </label>
+            </span>
+          </Callout>
+        )}
         {error && <Callout tone="danger">{error}</Callout>}
       </DialogBody>
       <DialogFooter>
@@ -664,7 +774,13 @@ function CloseSprintDialog({
         <Button size="sm" variant="quiet" onClick={onCancel} disabled={busy}>
           Annuler
         </Button>
-        <Button size="sm" variant="primary" icon="check" disabled={busy} onClick={onConfirm}>
+        <Button
+          size="sm"
+          variant="primary"
+          icon="check"
+          disabled={busy}
+          onClick={() => onConfirm(toBacklog)}
+        >
           {busy ? "Clôture…" : `Clore le sprint ${version}`}
         </Button>
       </DialogFooter>
@@ -672,10 +788,46 @@ function CloseSprintDialog({
   );
 }
 
-/** Sprints terminés : story points livrés et fusion de leur branche de release. */
-function Deliveries({ project }: { project: ProjectView }) {
+/**
+ * Sprints terminés : story points livrés sur la portée, fusion de leur branche de release
+ * (« Fusionner maintenant » quand aucune CI ne s'annonce) et leurs conversations (N14).
+ */
+function Deliveries({
+  repo,
+  project,
+  refreshKey,
+  onDone,
+}: {
+  repo: string;
+  project: ProjectView;
+  refreshKey: string;
+  onDone: () => void;
+}) {
   const ended = project.sprints.filter((s) => s.ended_on);
+  const [shown, setShown] = useState<string | null>(null);
+  const [shipping, setShipping] = useState<string | null>(null);
   if (ended.length === 0) return null;
+  const ship = async (version: string) => {
+    setShipping(version);
+    try {
+      const r = await cadence.call<{ release: SprintRecord["release"] }>("project_ship_release", {
+        repo,
+        version,
+      });
+      const info = releaseInfo(r.release);
+      void cadence.notify(
+        r.release?.status === "merged"
+          ? `Release ${version} fusionnée${r.release.tag ? `, ${r.release.tag} publiée` : ""}.`
+          : `Release ${version} : ${info.detail ?? info.label}`,
+        r.release?.status === "merged" ? "success" : "warning",
+      );
+      onDone();
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setShipping(null);
+    }
+  };
   return (
     <Card className="px-[15px] py-3.5">
       <CardHeader
@@ -685,22 +837,62 @@ function Deliveries({ project }: { project: ProjectView }) {
       <div className="mt-2 divide-y divide-line">
         {ended.map((s) => {
           const info = releaseInfo(s.release);
+          const open = shown === s.version;
+          const canShip = s.release?.status === "pending" && s.release.no_ci === true;
           return (
-            <div key={s.version} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-              <span className="mono w-[64px] text-body-sm text-tx">{s.version}</span>
-              <span className="text-caption text-tx3">
-                {formatRange(s.start_on, s.ended_on ?? s.due_on)}
-              </span>
-              <span className="mono text-caption text-tx2">
-                {s.done_points ?? 0} / {s.capacity} SP
-              </span>
-              <div className="grow" />
-              {info.detail && (
-                <span className="max-w-[420px] truncate text-caption text-tx3" title={info.detail}>
-                  {info.detail}
+            <div key={s.version} className="flex flex-col py-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="mono w-[64px] text-body-sm text-tx">{s.version}</span>
+                <span className="text-caption text-tx3">
+                  {formatRange(s.start_on, s.ended_on ?? s.due_on)}
                 </span>
+                <span
+                  className="mono text-caption text-tx2"
+                  title="Story points livrés sur la portée du sprint à sa clôture"
+                >
+                  {deliveredLabel(s)}
+                </span>
+                <div className="grow" />
+                {info.detail && (
+                  <span
+                    className="max-w-[420px] truncate text-caption text-tx3"
+                    title={info.detail}
+                  >
+                    {info.detail}
+                  </span>
+                )}
+                {canShip && (
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    icon="branch"
+                    disabled={shipping !== null}
+                    title="Aucune CI ne s'est annoncée : fusionner la PR de release maintenant, puis taguer la version"
+                    onClick={() => void ship(s.version)}
+                  >
+                    {shipping === s.version ? "Fusion…" : "Fusionner maintenant"}
+                  </Button>
+                )}
+                <Badge tone={info.tone}>{info.label}</Badge>
+                {s.milestone != null && (
+                  <Button
+                    size="xs"
+                    variant={open ? "secondary" : "ghost"}
+                    icon="bot"
+                    aria-expanded={open}
+                    onClick={() => setShown(open ? null : s.version)}
+                  >
+                    Conversations
+                  </Button>
+                )}
+              </div>
+              {open && s.milestone != null && (
+                <SprintConversations
+                  className="mt-2"
+                  group={sprintGroup(repo, { number: s.milestone, title: s.version })}
+                  refreshKey={refreshKey}
+                />
               )}
-              <Badge tone={info.tone}>{info.label}</Badge>
             </div>
           );
         })}
@@ -726,17 +918,33 @@ function Sprint({
   summary,
   refreshKey,
   onChanged,
+  onRunning,
 }: {
   summary: SprintSummary;
   refreshKey: string;
+  /** Relit tout l'écran après une écriture. */
   onChanged: () => void;
+  /** Une conversation du sprint tourne-t-elle ? (relecture de secours de l'écran) */
+  onRunning: (running: boolean) => void;
 }) {
   const v = summary.sprint!;
   const pace = summary.pace!;
-  const issues = summary.issues ?? [];
   const repo = summary.repo;
   const group = sprintGroup(repo, v);
   const project = isStarted(summary.project) ? summary.project : null;
+  // Cartes tout juste retirées : masquées tout de suite, jusqu'à la relecture du sprint (N08).
+  const [removing, setRemoving] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => setRemoving(new Set()), [summary]);
+  const issues = (summary.issues ?? []).filter((i) => !removing.has(i.number));
+  // Résultat de la dernière écriture, sous le titre du tableau (en plus du toast).
+  const [notice, setNotice] = useState<{
+    text: string;
+    kind: "success" | "warning" | "info";
+  } | null>(null);
+
+  const conversations = useConversations(group.id, refreshKey);
+  const running = (conversations.conversations ?? []).some((c) => c.state === "running");
+  useEffect(() => onRunning(running), [running, onRunning]);
 
   // PR ouvertes du dépôt : la PR de chaque tâche en revue (« Closes #n » ou branche feat/<n>-…).
   const pulls = useTool<PullRequestList>("list_pull_requests", { repo, state: "open" }, refreshKey);
@@ -766,7 +974,8 @@ function Sprint({
         issue: i.number,
         pr: pullRequestFor(list, i)?.number ?? null,
       }));
-      await cadence.runAction("relire-valider", reviewContext(repo, items, group));
+      const runId = await cadence.runAction("relire-valider", reviewContext(repo, items, group));
+      refreshWhenDone(runId, onChanged);
       setPicked(new Set());
     } catch (e) {
       notifyError(e);
@@ -789,41 +998,43 @@ function Sprint({
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [moving, setMoving] = useState(false);
   const [dropping, setDropping] = useState(false);
-  const move = async (add: number[], remove: number[]) => {
-    if (add.length === 0 && remove.length === 0) return;
+  /** Ajoute / retire des issues ; rend les issues ajoutées (le carnet les masque aussitôt). */
+  const move = async (add: number[], remove: number[]): Promise<number[]> => {
+    if (add.length === 0 && remove.length === 0) return [];
     setMoving(true);
+    setNotice(null);
     try {
-      let done: number[];
+      let r: Pick<SprintIssuesResult, "added" | "removed" | "skipped">;
       if (project) {
-        const r = await cadence.call<SprintIssuesResult>("sprint_issues", { repo, add, remove });
-        done = [...r.added, ...r.removed];
-        if (r.skipped.length > 0)
-          void cadence.notify(
-            r.skipped.map((s) => `#${s.issue} : ${s.reason}`).join(" ; "),
-            "warning",
-          );
+        r = await cadence.call<SprintIssuesResult>("sprint_issues", { repo, add, remove });
       } else {
         // Sprint sans moteur (milestone daté) : on change la version de chaque issue.
-        for (const n of add)
-          await cadence.call("update_issue", { repo, number: n, milestone: v.title });
-        for (const n of remove)
-          await cadence.call("update_issue", { repo, number: n, milestone: "" });
-        done = [...add, ...remove];
+        r = { added: [], removed: [], skipped: [] };
+        for (const [list, milestone, out] of [
+          [add, v.title, r.added],
+          [remove, "", r.removed],
+        ] as const)
+          for (const n of list) {
+            try {
+              await cadence.call("update_issue", { repo, number: n, milestone });
+              out.push(n);
+            } catch (e) {
+              r.skipped.push({ issue: n, reason: isCadenceError(e) ? e.message : String(e) });
+            }
+          }
       }
-      if (done.length > 0) {
-        const what = done.map((n) => `#${n}`).join(", ");
-        void cadence.notify(
-          add.length > 0
-            ? `${what} ajoutée${done.length > 1 ? "s" : ""} au sprint ${v.title}.`
-            : `${what} retirée${done.length > 1 ? "s" : ""} du sprint ${v.title} (retour au carnet).`,
-          "success",
-        );
-      }
-      onChanged();
+      if (r.removed.length > 0) setRemoving((s) => new Set([...s, ...r.removed]));
+      const message = moveMessage(r, v.title);
+      setNotice(message);
+      void cadence.notify(message.text, message.kind);
+      return r.added;
     } catch (e) {
       notifyError(e);
+      return [];
     } finally {
       setMoving(false);
+      // Tout l'écran se relit : sprint, carnet, PR (le serveur corrige le retard des listes).
+      onChanged();
     }
   };
   const onDragOver = (e: DragEvent) => {
@@ -924,7 +1135,7 @@ function Sprint({
           refreshKey={refreshKey}
           capacityLeft={capacityLeft}
           busy={moving}
-          onAdd={(numbers) => void move(numbers, [])}
+          onAdd={(numbers) => move(numbers, [])}
           onClose={() => setBacklogOpen(false)}
         />
       )}
@@ -962,6 +1173,34 @@ function Sprint({
           />
           {dropping && (
             <p className="mt-2 text-caption text-clay">Déposez l'issue pour l'ajouter au sprint.</p>
+          )}
+          {notice && (
+            <div
+              role="status"
+              className={cn(
+                "mt-[11px] flex items-center gap-2.5 rounded-field border px-3 py-2",
+                notice.kind === "warning"
+                  ? "border-amber-line bg-amber-d"
+                  : notice.kind === "success"
+                    ? "border-green-line bg-green-d"
+                    : "border-line bg-p2",
+              )}
+            >
+              <Icon
+                name={notice.kind === "warning" ? "warning" : "check"}
+                size={14}
+                className={notice.kind === "warning" ? "text-amber" : "text-green"}
+              />
+              <span className="min-w-0 grow text-body-sm text-tx">{notice.text}</span>
+              <Button
+                size="xs"
+                variant="quiet"
+                icon="close"
+                iconOnly
+                aria-label="Masquer"
+                onClick={() => setNotice(null)}
+              />
+            </div>
           )}
           {selected.size > 0 && (
             <div className="mt-[11px] flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-field border border-blue-line bg-blue-d px-3 py-2">
@@ -1071,7 +1310,7 @@ function Sprint({
         </div>
       </div>
 
-      <SprintConversations group={group} refreshKey={refreshKey} />
+      <SprintConversations group={group} state={conversations} />
     </div>
   );
 }
@@ -1095,11 +1334,15 @@ function BacklogPanel({
   /** Story points encore libres dans la capacité du sprint (sprints automatiques). */
   capacityLeft: number | null;
   busy: boolean;
-  onAdd: (numbers: number[]) => void;
+  /** Rend les issues effectivement ajoutées. */
+  onAdd: (numbers: number[]) => Promise<number[]>;
   onClose: () => void;
 }) {
   const { data, error, loading } = useTool<BacklogList>("sprint_backlog", { repo }, refreshKey);
-  const list = data?.repo === repo ? data.issues : null;
+  // Issues tout juste ajoutées : retirées du carnet sans attendre sa relecture (N08).
+  const [added, setAdded] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => setAdded(new Set()), [data]);
+  const list = data?.repo === repo ? data.issues.filter((i) => !added.has(i.number)) : null;
   const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
   const chosen = (list ?? []).filter((i) => checked.has(i.number));
   const points = chosen.reduce((n, i) => n + i.weight, 0);
@@ -1200,8 +1443,10 @@ function BacklogPanel({
           icon="plus"
           disabled={busy || chosen.length === 0}
           onClick={() => {
-            onAdd(chosen.map((i) => i.number));
             setChecked(new Set());
+            void onAdd(chosen.map((i) => i.number)).then((ok) => {
+              if (ok.length > 0) setAdded((s) => new Set([...s, ...ok]));
+            });
           }}
         >
           Ajouter au sprint {version} ({chosen.length})
@@ -1213,15 +1458,27 @@ function BacklogPanel({
 
 /**
  * Conversations rattachées au sprint (masquées du chat global) : état, titre, issues, IA, date ;
- * une ligne s'ouvre dans la vue Chat de Cadence.
+ * une ligne s'ouvre dans la vue Chat de Cadence. `state` : liste déjà lue par le parent ; sinon
+ * elle est lue ici (`refreshKey`), comme pour un sprint terminé.
  */
-function SprintConversations({ group, refreshKey }: { group: ActionGroup; refreshKey: string }) {
-  const { conversations, error } = useConversations(group.id, refreshKey);
+function SprintConversations({
+  group,
+  state,
+  refreshKey = "",
+  className,
+}: {
+  group: ActionGroup;
+  state?: ConversationsState;
+  refreshKey?: string;
+  className?: string;
+}) {
+  const own = useConversations(state ? null : group.id, refreshKey);
+  const { conversations, error } = state ?? own;
   const list = conversations ?? [];
   const running = list.filter((c) => c.state === "running").length;
   const open = (c: ConversationInfo) => void cadence.conversations.open(c.id).catch(notifyError);
   return (
-    <Card className="px-[15px] py-3.5">
+    <Card className={cn("px-[15px] py-3.5", className)}>
       <CardHeader
         title="Conversations du sprint"
         actions={

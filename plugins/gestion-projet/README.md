@@ -131,7 +131,7 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | Outil                                                 | État                                                                                                                                                         |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `get_account`, `list_account_repos` (réservés à l'UI) | ✓ compte connecté, dépôts du compte à suivre                                                                                                                 |
-| `get_repository`                                      | ✓ branche par défaut, préfixe de tag                                                                                                                         |
+| `get_repository`                                      | ✓ branche par défaut, préfixe de tag, `sprint_length_days` (durée réelle des sprints automatiques une fois démarrés, sinon le réglage), `sprints` (version, branche de release, durée, échéance du sprint en cours) |
 | `list_issues`                                         | ✓ `repo` absent : tous les dépôts suivis (chaque issue porte `repo`, erreurs par dépôt dans `errors`)                                                        |
 | `get_issue`, `create_issue`, `update_issue`           | ✓ API REST GitHub ; une issue porte `sprint` (n° du milestone daté, sinon `null`) ; `update_issue` avec `state: closed` retire le label `status/*` (terminé) |
 | `add_comment`                                         | ✓                                                                                                                                                            |
@@ -140,15 +140,17 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `update_milestone`                                    | ✓ titre, description, échéance (`""` la retire), `state: closed` pour clore                                                                                  |
 | `list_pull_requests` (`repo` optionnel)               | ✓ GraphQL : ouvertes (50) et/ou 30 dernières fermées, CI du dernier commit, revues ; `closes` (références de GitHub, « Ferme #n » / « Closes #n » du titre ou du corps — GitHub ne les relie pas vers `release/x` —, liens manuels de la timeline) et `issues` (`closes` + issue de la branche `feat/<n>-…`) ; erreurs par dépôt dans `errors` |
 | `get_pull_request`                                    | ✓ description, checks détaillés, revues, fichiers (sans patchs)                                                                                              |
-| `create_pull_request`                                 | ✓ brouillon par défaut, `base` = branche par défaut ; refuse la branche par défaut comme `head`                                                              |
+| `create_pull_request`                                 | ✓ brouillon par défaut, `base` = branche par défaut ; refuse la branche par défaut comme `head` et, comme `base`, la branche d'une autre PR ouverte (PR empilée) ; sprints démarrés : `base` = une branche `release/*` ou la branche par défaut |
+| `update_pull_request`                                 | ✓ `base` (même garde-fou : repointer vers la release), `title`, `body` d'une PR ouverte                                                                      |
 | `mark_pull_request_ready`                             | ✓ mutation GraphQL `markPullRequestReadyForReview`                                                                                                           |
 | `get_pull_request_diff`                               | ✓ patchs par fichier (60 000 caractères au plus, ou un fichier)                                                                                              |
 | `review_pull_request`                                 | ✓ `APPROVE`, `REQUEST_CHANGES` ou `COMMENT`, synthèse et remarques sur des lignes ; PR du même compte : verdict publié en commentaire                       |
-| `merge_pull_request`                                  | ✓ PR prête et sans conflit ; `method` (absente : réglage `merge_method`, squash), `delete_branch` (jamais la branche par défaut, `release/*` ou un fork), `close_issues` ; issues déclarées (« Ferme #12 ») et demandées fermées comme terminées, label `status/*` retiré |
+| `merge_pull_request`                                  | ✓ PR prête et sans conflit ; `method` (absente : réglage `merge_method`, squash), `delete_branch` (jamais la branche par défaut, `release/*` ou un fork), `close_issues` ; issues déclarées (« Ferme #12 ») et demandées fermées comme terminées, label `status/*` retiré ; les PR empilées sur la branche fusionnée sont d'abord repointées vers sa base (`retargeted`), GitHub ne les ferme donc pas |
 | `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
 | `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
 | `sprint_summary`                                      | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état ; portée, avancement, burndown, rythme et retard **en story points** (3 SP par issue non estimée) ; l'échéance est le dernier jour du sprint, début = échéance − (`sprint_length_days` − 1) ; `started`, `start_defaults` tant que les sprints ne sont pas démarrés |
-| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (`apply` : `next` par défaut, `current` après confirmation), `project_close_sprint` (IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag, clôture anticipée (voir « Sprints automatiques ») |
+| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (`apply` : `next` par défaut, `current` après confirmation), `project_close_sprint` (`to_backlog` : issues rendues au carnet au lieu d'être reportées ; IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag, clôture anticipée (voir « Sprints automatiques ») |
+| `project_ship_release` (réservé à l'UI)               | ✓ « Fusionner maintenant » la release d'un sprint terminé sans attendre une CI (refuse une CI rouge ou en cours, un conflit)                                  |
 | `sprint_issues`, `sprint_backlog`                     | ✓ ajouter / retirer des issues du sprint en cours ; carnet (issues sans version) dans l'ordre de remplissage, avec jalon et poids |
 
 ## Sprints automatiques
@@ -175,7 +177,10 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
   l'échéance, les issues ouvertes passent en tête du sprint suivant et leurs PR visent la nouvelle
   branche de release.
 - **Livraison** : à la fin du sprint, PR `release/x` → branche par défaut, fusionnée dès que la CI
-  est verte (bloquée et signalée en cas d'échec ou de conflit), puis release `v0.2.0` publiée.
+  est verte (bloquée et signalée en cas d'échec ou de conflit), puis release `v0.2.0` publiée. Un
+  dépôt sans workflow GitHub Actions ni vérification est fusionné tout de suite ; avec des
+  workflows, Cadence laisse cinq minutes à la CI pour s'annoncer et l'écran propose « Fusionner
+  maintenant ».
 - **Pause** : plus de remplissage ni de clôture ; à la reprise, l'échéance est repoussée d'autant.
   La **durée** se change à tout moment, avec confirmation : par défaut à partir du prochain sprint
   (le sprint en cours garde son échéance) ; ou aussi au sprint en cours, dont l'échéance du
@@ -183,6 +188,10 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
   urgentes retirées).
 - **Clore le sprint** en avance (avec confirmation) : comme à l'échéance, issues ouvertes et PR
   reportées au sprint suivant, qui commence le jour même, puis livraison de la branche de release.
+  Quand le report dépasse la capacité du sprint suivant, la boîte le signale et propose de rendre
+  l'excédent au carnet (les issues les moins prioritaires).
+- **Sprints terminés** : story points livrés sur la portée du sprint à sa clôture, état de la
+  livraison et accès aux conversations du sprint.
 - **Portée à la main** : « Ajouter des issues » ouvre le carnet dans l'ordre de remplissage (on
   coche, ou on glisse une issue sur le tableau du sprint) ; une carte « À faire » se retire du
   sprint (elle repart sans version).
@@ -190,6 +199,12 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
 L'état est partagé par toute l'équipe dans une issue du dépôt, label `cadence/sprints`, masquée
 dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait avancer les sprints :
 à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
+
+L'écran Sprint se met à jour seul : après chacune de ses écritures, quand un outil écrit sur le
+dépôt (événement `sync.updated` `{ repo, tool }` émis par le serveur, y compris pour les outils
+appelés par l'IA), à la fin d'une conversation ou d'une exécution du sprint, toutes les 20 s tant
+qu'une conversation du sprint est en cours, et au retour sur la vue. Les listes de GitHub ayant
+quelques secondes de retard, le serveur corrige ses lectures avec ses propres écritures récentes.
 Outils `project_start`, `project_pause`, `project_resume`, `project_set_duration`,
 `project_close_sprint` (l'IA ne s'en sert qu'à la demande explicite de l'utilisateur),
 `sprint_issues`, `sprint_backlog` ; `sprint_summary` porte l'état : `started`,

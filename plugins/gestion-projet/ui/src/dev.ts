@@ -253,8 +253,15 @@ const projects: Record<string, ProjectView | null> = {
         capacity: 20,
         filled: true,
         done_points: 18,
+        scope_points: 21,
+        milestone: 2,
         ended_on: day(-6),
-        release: { status: "pending", pull_request: 158, message: "CI en cours sur la PR #158." },
+        release: {
+          status: "pending",
+          pull_request: 158,
+          message: "PR #158 ouverte : aucune vérification encore, en attente de la CI.",
+          no_ci: true,
+        },
       },
       {
         version: "0.1.0",
@@ -265,6 +272,8 @@ const projects: Record<string, ProjectView | null> = {
         capacity: 21,
         filled: true,
         done_points: 26,
+        scope_points: 26,
+        milestone: 1,
         ended_on: day(-20),
         release: { status: "merged", pull_request: 140, tag: "v0.1.0" },
       },
@@ -845,18 +854,32 @@ const planningTools: MockHostOptions["tools"] = {
     }
     return { repo, project: p };
   },
-  project_close_sprint: ({ repo, version: closing }) => {
+  project_close_sprint: ({ repo, version: closing, to_backlog }) => {
     const p = projects[repo as string]!;
     const cur = p.sprints[0]!;
     if (closing && closing !== cur.version)
       throw new Error(`Le sprint en cours est ${cur.version} : rafraîchissez l'écran.`);
-    const carried = sprintIssues.filter((i) => i.state === "open").map((i) => i.number);
+    // Comme le serveur : l'excédent choisi repart au carnet au lieu d'être reporté.
+    const back = (to_backlog as number[] | undefined) ?? [];
+    const scope = sprintIssues.reduce((sum, i) => sum + issueWeight(i), 0);
+    for (const i of sprintIssues) if (back.includes(i.number)) i.milestone = null;
+    const carried = sprintIssues
+      .filter((i) => i.state === "open" && !back.includes(i.number))
+      .map((i) => i.number);
+    sprintIssues = sprintIssues.filter((i) => !back.includes(i.number));
     Object.assign(cur, {
       ended_on: day(0),
       done_points: sprintIssues
         .filter((i) => i.state === "closed")
         .reduce((sum, i) => sum + issueWeight(i), 0),
-      release: { status: "pending", message: "PR de release ouverte, en attente de la CI." },
+      scope_points: scope,
+      milestone: SPRINT.number,
+      release: {
+        status: "pending",
+        pull_request: 170,
+        message: "PR #170 ouverte : aucune vérification encore, en attente de la CI.",
+        no_ci: true,
+      },
     });
     const next = "0.1.3";
     p.sprints.unshift({
@@ -871,6 +894,13 @@ const planningTools: MockHostOptions["tools"] = {
     });
     Object.assign(p, { current: next, release_branch: `release/${next}`, carried });
     return { repo, closed: closing, project: p };
+  },
+  project_ship_release: ({ repo, version }) => {
+    const p = projects[repo as string]!;
+    const s = p.sprints.find((x) => x.version === version && x.ended_on);
+    if (!s) throw new Error(`Aucun sprint terminé ${String(version)} dans ${String(repo)}.`);
+    s.release = { status: "merged", pull_request: s.release?.pull_request, tag: `v${s.version}` };
+    return { repo, release: s.release, project: p };
   },
   sprint_backlog: ({ repo }) => ({
     repo,

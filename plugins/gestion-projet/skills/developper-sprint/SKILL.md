@@ -44,18 +44,25 @@ Ceux du skill « Implémenter » (`cadence__repo_checkout`, `gestion-projet__get
    ou `list_issues` avec `milestone`. Garde les issues ouvertes à l'état « à faire » (ou la
    sélection demandée), sans PR ouverte déjà liée. Sprint vide (rien « à faire ») : dis-le et
    propose les issues suivantes sans version, par priorité.
-2. **L'ordre.** Priorité 0 (socle) d'abord, puis 1 à 5 ; une issue dont une dépendance
-   (« Dépend de #n ») n'est pas encore fermée ni livrée dans cette passe attend son tour. Présente
-   le plan dans le chat (ordre, SP, dépendances) et **attends le feu vert** — l'utilisateur peut
-   retirer des issues ou limiter le nombre.
+2. **L'ordre.** Priorité 0 (socle) d'abord, puis 1 à 5. Une issue dont une dépendance
+   (« Dépend de #n ») n'est pas encore **fusionnée** dans la branche de release n'est pas
+   développée dans cette passe : elle reste « à faire » (elle partira de la release une fois la
+   dépendance fusionnée). Présente le plan dans le chat (ordre, SP, dépendances, issues
+   reportées) et **attends le feu vert** — l'utilisateur peut retirer des issues ou limiter le
+   nombre.
 3. **Une issue après l'autre**, en suivant exactement les étapes du skill « Implémenter » :
-   - worktree `issue-<numéro>`, branche `<type>/<numéro>-<slug>` depuis
-     `origin/<branche de release du sprint>` (si une issue dépend d'une autre de cette passe pas
-     encore fusionnée, pars de la branche de cette dernière et dis-le dans la PR) ;
+   - worktree `issue-<numéro>`, branche `<type>/<numéro>-<slug>` créée **depuis
+     `origin/<branche de release du sprint>`**, toujours : **jamais depuis la branche d'une autre
+     issue**, même si deux issues touchent le même fichier. Une PR empilée sur la branche d'une
+     autre est fermée par GitHub quand celle-ci est fusionnée et sa branche supprimée ; deux
+     branches parallèles qui se chevauchent se règlent à la fusion (« Relire et valider »).
+     `git switch -c <branche> origin/<release>` après `git fetch origin`, puis vérifie
+     `git merge-base --is-ancestor origin/<release> HEAD` ;
    - `status: "doing"`, code conforme à l'architecture et au design, tests, conformité du diff ;
-   - commits, push de la branche, PR **en brouillon** vers la branche de release, `status:
-     "review"`, commentaire sur l'issue avec le lien.
-   Après chaque issue, une ligne de suivi dans le chat (issue, PR, tests).
+   - commits, push de la branche, PR **en brouillon** avec `base` = la branche de release du
+     sprint (jamais une branche `feat/…` : le serveur le refuse), `status: "review"`,
+     commentaire sur l'issue avec le lien.
+   Après chaque issue, une ligne de suivi dans le chat (issue, PR, base, tests).
 4. **Blocage** (critères incompréhensibles, tests impossibles à faire passer, dépendance
    manquante) : laisse l'issue en « à faire » avec un commentaire qui explique, et passe à la
    suivante. Ne force jamais.

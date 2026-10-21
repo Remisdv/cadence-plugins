@@ -79,6 +79,11 @@ l'identité et les accès déjà configurés sur la machine.
    - sinon `release/<version de l'issue>` si cette branche existe sur `origin`
      (`git ls-remote --heads origin release/<version>`) ;
    - sinon la branche par défaut (pas de sprints automatiques, ou issue hors sprint).
+
+   **Jamais la branche d'une autre issue** comme base, même si elle n'est pas encore fusionnée
+   et que ton issue en dépend : la PR empilée serait fermée par GitHub à la fusion de l'autre
+   (branche supprimée), et `create_pull_request` refuse une telle base. Si la dépendance n'est
+   pas fusionnée dans la base, arrête-toi et dis-le dans ton résultat (l'issue reste à faire).
 2. **Worktree et branche.**
    - `cadence__repo_checkout` avec `{ "repo": "<repo>", "task": "issue-<numéro>" }` ; note le
      `path` renvoyé. Un appel répété pour la même tâche renvoie le même worktree (reprise).
@@ -89,7 +94,8 @@ l'identité et les accès déjà configurés sur la machine.
      git fetch origin
      git switch <branche>  ||  git switch -c <branche> origin/<base>
      ```
-     (la branche existe déjà en cas de reprise). Vérifie `git status` : pas de changement étranger.
+     (la branche existe déjà en cas de reprise). Vérifie `git status` : pas de changement étranger,
+     et `git merge-base --is-ancestor origin/<base> HEAD` : la branche part bien de la base.
    - Passe l'issue en cours : `update_issue` avec `status: "doing"`.
 3. **Implémentation** dans le worktree.
 4. **Conformité.** Avant de commiter, relis ton diff contre l'architecture : fichiers dans les

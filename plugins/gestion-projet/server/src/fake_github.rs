@@ -26,6 +26,16 @@ pub struct Repo {
     pub login: String,
     /// Requêtes reçues : « MÉTHODE /chemin ».
     pub requests: Vec<String>,
+    /// Nombre de workflows GitHub Actions (`GET /actions/workflows`) ; aucun check n'est jamais
+    /// rendu sur un commit (dépôt sans CI tant que la valeur est 0).
+    pub workflows: u32,
+    /// Listes en retard (comme GitHub, quelques secondes) : `GET /issues` rend encore le
+    /// milestone d'avant pour les issues déplacées depuis que ce drapeau est levé.
+    pub listing_lag: bool,
+    /// Milestone d'avant des issues déplacées pendant `listing_lag`.
+    lagging: HashMap<u64, Value>,
+    /// Écritures d'issues reçues : horodatage `updated_at` croissant.
+    writes: u32,
 }
 
 impl Repo {
@@ -48,11 +58,28 @@ impl Repo {
             reviews: Vec::new(),
             login: "cadence-bot".into(),
             requests: Vec::new(),
+            workflows: 0,
+            listing_lag: false,
+            lagging: HashMap::new(),
+            writes: 0,
         }
     }
 
     pub fn issue(&self, number: u64) -> Option<&Value> {
         self.issues.iter().find(|i| i["number"].as_u64() == Some(number))
+    }
+
+    /// Numéros que rendrait `GET /issues?<query>` (ex. `milestone=1`), retard compris.
+    pub fn listed(&self, query: &str) -> Vec<u64> {
+        let q: HashMap<String, String> = query
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        self.list_issues(&q)
+            .iter()
+            .filter_map(|i| i["number"].as_u64())
+            .collect()
     }
 
     pub fn pull(&self, number: u64) -> Option<&Value> {
@@ -143,9 +170,20 @@ impl Repo {
                     ),
                     None => None,
                 };
+                // Liste en retard : on retient le milestone d'avant le déplacement.
+                if self.listing_lag
+                    && milestone.is_some()
+                    && let Some(i) = self.issue_mut(n)
+                {
+                    let (number, before) = (i["number"].as_u64().unwrap_or(0), i["milestone"].clone());
+                    self.lagging.entry(number).or_insert(before);
+                }
+                self.writes += 1;
+                let stamp = format!("2026-10-20T10:{:02}:{:02}Z", self.writes / 60, self.writes % 60);
                 let Some(issue) = self.issue_mut(n) else {
                     return not_found(path);
                 };
+                issue["updated_at"] = json!(stamp);
                 if let Some(m) = milestone {
                     issue["milestone"] = m;
                 }
@@ -208,8 +246,17 @@ impl Repo {
                 )
             }
             ("DELETE", ["git", "refs", "heads", branch @ ..]) => {
-                match self.branches.remove(&branch.join("/")) {
-                    Some(_) => (204, Value::Null),
+                let name = branch.join("/");
+                match self.branches.remove(&name) {
+                    Some(_) => {
+                        // Comme GitHub : les PR ouvertes qui visaient la branche sont fermées.
+                        for pr in &mut self.pulls {
+                            if pr["state"] == "open" && pr["base"]["ref"] == name.as_str() {
+                                pr["state"] = json!("closed");
+                            }
+                        }
+                        (204, Value::Null)
+                    }
                     None => (422, json!({ "message": "Reference does not exist" })),
                 }
             }
@@ -235,6 +282,70 @@ impl Repo {
                 Some(p) => (200, p.clone()),
                 None => not_found(path),
             },
+            ("POST", ["pulls"]) => {
+                let number = self
+                    .pulls
+                    .iter()
+                    .chain(self.issues.iter())
+                    .filter_map(|p| p["number"].as_u64())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let (head, base) = (
+                    body["head"].as_str().unwrap_or("").to_string(),
+                    body["base"].as_str().unwrap_or("").to_string(),
+                );
+                if !self.branches.contains_key(&base) {
+                    return (422, json!({ "message": format!("base {base} introuvable") }));
+                }
+                let login = self.login.clone();
+                self.add_pull(number, &head, &base, body["body"].as_str().unwrap_or(""), &login);
+                let pr = self.pulls.last_mut().unwrap();
+                pr["title"] = body["title"].clone();
+                pr["draft"] = json!(body["draft"].as_bool().unwrap_or(false));
+                // Toute neuve (fin de journée : jamais « vieille » de plus que le délai de la CI).
+                pr["created_at"] = json!(format!("{}T23:59:59Z", crate::sprint::today()));
+                (201, pr.clone())
+            }
+            ("PATCH", ["pulls", n]) => {
+                let base = body["base"].as_str().map(str::to_string);
+                if let Some(b) = &base
+                    && !self.branches.contains_key(b)
+                {
+                    return (422, json!({ "message": format!("base {b} introuvable") }));
+                }
+                let Some(pr) = self.pull_mut(n) else {
+                    return not_found(path);
+                };
+                if let Some(b) = base {
+                    pr["base"]["ref"] = json!(b);
+                }
+                for key in ["title", "body"] {
+                    if let Some(v) = body.get(key) {
+                        pr[key] = v.clone();
+                    }
+                }
+                (200, pr.clone())
+            }
+            ("GET", ["actions", "workflows"]) => {
+                (200, json!({ "total_count": self.workflows, "workflows": [] }))
+            }
+            ("GET", ["commits", _, "check-runs"]) => (200, json!({ "total_count": 0, "check_runs": [] })),
+            ("GET", ["commits", _, "status"]) => (
+                200,
+                json!({ "state": "pending", "total_count": 0, "statuses": [] }),
+            ),
+            ("GET", ["compare", range @ ..]) => {
+                let range = range.join("/");
+                let (base, head) = range.split_once("...").unwrap_or((&range, &range));
+                let ahead = match (self.branches.get(base), self.branches.get(head)) {
+                    (Some(b), Some(h)) if b != h => 1,
+                    (Some(_), Some(_)) => 0,
+                    _ => return not_found(path),
+                };
+                (200, json!({ "ahead_by": ahead, "behind_by": 0 }))
+            }
+            ("POST", ["releases"]) => (201, json!({ "tag_name": body["tag_name"] })),
             ("POST", ["pulls", n, "reviews"]) => {
                 let login = self.login.clone();
                 let Some(pr) = self.pull_mut(n) else {
@@ -363,13 +474,20 @@ impl Repo {
                         .is_some_and(|ls| ls.iter().any(|x| x["name"] == *l))
                 })
             })
+            .map(|i| {
+                // Liste en retard : milestone d'avant le déplacement.
+                let mut i = i.clone();
+                if let Some(before) = i["number"].as_u64().and_then(|n| self.lagging.get(&n)) {
+                    i["milestone"] = before.clone();
+                }
+                i
+            })
             .filter(|i| match q.get("milestone").map(String::as_str) {
                 None => true,
                 Some("none") => i["milestone"].is_null(),
                 Some("*") => !i["milestone"].is_null(),
                 Some(n) => number_is(&i["milestone"]["number"], n),
             })
-            .cloned()
             .collect()
     }
 }

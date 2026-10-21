@@ -137,6 +137,85 @@ export function dueFor(start: string, days: number, pausedDays: number, today: s
   return due < today.slice(0, 10) ? today.slice(0, 10) : due;
 }
 
+/**
+ * Report des issues ouvertes au sprint suivant de capacité `capacity` (N13) : les issues déjà
+ * entamées (en revue, en cours) passent toujours ; les issues à faire suivent, par priorité (socle,
+ * puis 1 à 5, sans priorité en dernier) et numéro, tant qu'elles tiennent dans la capacité — au
+ * moins une issue en tout, comme le remplissage du serveur — ; le reste est l'excédent, à rendre au
+ * carnet.
+ */
+export function carryOver(
+  open: (Pick<Issue, "number" | "points" | "priority"> & { status?: IssueStatus })[],
+  capacity: number,
+): { keep: number[]; excess: number[]; keepPoints: number; excessPoints: number } {
+  const started = (s: IssueStatus | undefined) => (s === "review" ? 0 : s === "doing" ? 1 : 2);
+  const ordered = [...open].sort(
+    (a, b) =>
+      started(a.status) - started(b.status) ||
+      (a.priority ?? 99) - (b.priority ?? 99) ||
+      a.number - b.number,
+  );
+  const out = { keep: [] as number[], excess: [] as number[], keepPoints: 0, excessPoints: 0 };
+  for (const issue of ordered) {
+    const w = issueWeight(issue);
+    if (started(issue.status) < 2 || out.keep.length === 0 || out.keepPoints + w <= capacity) {
+      out.keep.push(issue.number);
+      out.keepPoints += w;
+    } else {
+      out.excess.push(issue.number);
+      out.excessPoints += w;
+    }
+  }
+  return out;
+}
+
+/**
+ * Première phrase de « Clore le sprint » : « aujourd'hui, à son échéance » quand l'échéance est
+ * aujourd'hui, sinon « aujourd'hui, au lieu de l'échéance du 23 oct. » (N13).
+ */
+export function closeSprintLead(due: string, today: string): string {
+  return due.slice(0, 10) === today.slice(0, 10)
+    ? "Le sprint se termine aujourd'hui, à son échéance"
+    : `Le sprint se termine aujourd'hui, au lieu de l'échéance du ${formatDay(due)}`;
+}
+
+/**
+ * Story points livrés d'un sprint terminé (N14) : « 4 / 20 SP » sur la portée relevée à la clôture ;
+ * à défaut sur la capacité visée si elle est connue, sinon « 4 SP livrés ».
+ */
+export function deliveredLabel(
+  s: Pick<SprintRecord, "done_points" | "scope_points" | "capacity">,
+): string {
+  const done = s.done_points ?? 0;
+  const of = s.scope_points ?? (s.capacity > 0 ? s.capacity : null);
+  return of === null ? `${done} SP livrés` : `${done} / ${of} SP`;
+}
+
+/** Retour d'un ajout / retrait d'issues du sprint (`sprint_issues`) : message et ton du toast. */
+export function moveMessage(
+  r: { added: number[]; removed: number[]; skipped: { issue: number; reason: string }[] },
+  version: string,
+): { text: string; kind: "success" | "warning" | "info" } {
+  const list = (ns: number[]) => ns.map((n) => `#${n}`).join(", ");
+  const parts: string[] = [];
+  if (r.added.length > 0)
+    parts.push(`${list(r.added)} ajoutée${r.added.length > 1 ? "s" : ""} au sprint ${version}`);
+  if (r.removed.length > 0)
+    parts.push(
+      `${list(r.removed)} retirée${r.removed.length > 1 ? "s" : ""} du sprint ${version} (retour au carnet)`,
+    );
+  if (r.skipped.length > 0)
+    parts.push(
+      `${plural(r.skipped.length, "refusée", "refusées")} : ${r.skipped
+        .map((s) => `#${s.issue} (${s.reason})`)
+        .join(", ")}`,
+    );
+  const text = parts.length > 0 ? `${parts.join(" ; ")}.` : "Aucun changement.";
+  const kind =
+    r.skipped.length > 0 ? "warning" : r.added.length + r.removed.length > 0 ? "success" : "info";
+  return { text, kind };
+}
+
 /** Libellé et ton de la livraison d'un sprint terminé. */
 export function releaseInfo(release: SprintRecord["release"]): {
   label: string;

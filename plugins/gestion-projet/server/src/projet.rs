@@ -75,6 +75,10 @@ pub struct ReleaseRecord {
     pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Aucune vérification (checks, statuts) sur la PR de release : l'écran propose de la
+    /// fusionner tout de suite plutôt que d'attendre une CI qui ne viendra pas.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_ci: bool,
 }
 
 impl ReleaseRecord {
@@ -84,6 +88,7 @@ impl ReleaseRecord {
             pull_request: None,
             tag: None,
             message: None,
+            no_ci: false,
         }
     }
 }
@@ -108,6 +113,11 @@ pub struct SprintRecord {
     /// Story points fermés, relevés à la fin du sprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_points: Option<u32>,
+    /// Portée du sprint à sa clôture (story points de toutes ses issues, ouvertes et fermées) :
+    /// le « fait / portée » des sprints terminés (la capacité visée peut valoir 0 sur un vieux
+    /// sprint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_points: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_on: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -737,6 +747,7 @@ mod tests {
                 filled: true,
                 carried: vec![],
                 done_points: None,
+                scope_points: None,
                 ended_on: None,
                 release: None,
             }],
