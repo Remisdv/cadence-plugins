@@ -225,10 +225,22 @@ export function StatCard({
     <div className="min-w-[150px] flex-1 rounded-[11px] border border-line bg-panel px-[15px] py-[13px]">
       <div className="text-caption text-tx3">{label}</div>
       <div className="mt-[5px] flex items-baseline gap-[7px]">
-        <span className={cn("mono text-kpi font-medium tracking-[-0.02em]", valueTones[tone])}>
+        <span
+          className={cn(
+            "mono shrink-0 text-kpi font-medium tracking-[-0.02em] whitespace-nowrap",
+            valueTones[tone],
+          )}
+        >
           {value}
         </span>
-        {hint && <span className="truncate text-caption text-tx3">{hint}</span>}
+        {hint && (
+          <span
+            className="truncate text-caption text-tx3"
+            title={typeof hint === "string" ? hint : undefined}
+          >
+            {hint}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -255,7 +267,12 @@ export function StatStrip({ items }: { items: StatStripItem[] }) {
         >
           <div className="text-tiny text-tx3">{item.label}</div>
           <div className="mt-1 flex items-baseline gap-1.5">
-            <span className={cn("mono text-[20px] font-medium", valueTones[item.tone ?? "tx"])}>
+            <span
+              className={cn(
+                "mono shrink-0 text-[20px] font-medium whitespace-nowrap",
+                valueTones[item.tone ?? "tx"],
+              )}
+            >
               {item.value}
             </span>
             {item.suffix && <span className="truncate text-tiny text-tx3">{item.suffix}</span>}
@@ -417,6 +434,8 @@ export interface ReviewControls {
   onToggleAll: (issues: Issue[], select: boolean) => void;
   onReview: (issue: Issue) => void;
   pullRequestOf: (issue: Issue) => PullRequest | null;
+  /** Liste des PR pas encore lue : ni PR ni « sans PR ». */
+  pullsLoading?: boolean;
   disabled?: boolean;
 }
 
@@ -461,8 +480,12 @@ export function ReviewCard({ issue, review }: { issue: Issue; review: ReviewCont
           >
             <Icon name="pullRequest" size={12} />#{pr.number}
           </button>
+        ) : review.pullsLoading ? (
+          <span>PR…</span>
         ) : (
-          <span title="Aucune PR ouverte ne déclare fermer cette issue">sans PR</span>
+          <span title="Aucune PR ouverte liée à cette issue (« Closes #n » dans la PR, ou branche feat/<n>-…)">
+            sans PR
+          </span>
         )}
         {pr && <CiStatus ci={pr.ci} />}
         <div className="grow" />
@@ -481,10 +504,23 @@ export function ReviewCard({ issue, review }: { issue: Issue; review: ReviewCont
   );
 }
 
-export function KanbanColumn({ column, review }: { column: BoardColumn; review?: ReviewControls }) {
+export function KanbanColumn({
+  column,
+  review,
+  onRemove,
+  removeDisabled,
+}: {
+  column: BoardColumn;
+  review?: ReviewControls;
+  /** « Retirer du sprint » sur chaque carte (colonne « À faire » du sprint en cours). */
+  onRemove?: (issue: Issue) => void;
+  removeDisabled?: boolean;
+}) {
   const meta = issueStatuses[column.status];
   const allSelected =
-    !!review && column.issues.length > 0 && column.issues.every((i) => review.selected.has(i.number));
+    !!review &&
+    column.issues.length > 0 &&
+    column.issues.every((i) => review.selected.has(i.number));
   return (
     <div className="flex min-w-[150px] flex-1 flex-col gap-[9px]">
       <div className="flex items-center gap-[7px] px-0.5">
@@ -509,6 +545,20 @@ export function KanbanColumn({ column, review }: { column: BoardColumn; review?:
         {column.issues.map((issue) =>
           review ? (
             <ReviewCard key={`${issue.repo}#${issue.number}`} issue={issue} review={review} />
+          ) : onRemove ? (
+            <div key={`${issue.repo}#${issue.number}`} className="group relative">
+              <IssueCard issue={issue} />
+              <button
+                type="button"
+                onClick={() => onRemove(issue)}
+                disabled={removeDisabled}
+                aria-label={`Retirer #${issue.number} du sprint`}
+                title="Retirer du sprint (l'issue repart au carnet, sans version)"
+                className="absolute right-1.5 bottom-1.5 flex h-[22px] w-[22px] items-center justify-center rounded-control text-tx3 opacity-40 transition-opacity group-hover:opacity-100 hover:bg-p4 hover:text-tx focus-visible:opacity-100 disabled:opacity-50"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </div>
           ) : (
             <IssueCard key={`${issue.repo}#${issue.number}`} issue={issue} />
           ),

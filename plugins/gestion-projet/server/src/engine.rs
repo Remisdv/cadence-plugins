@@ -272,12 +272,13 @@ impl GestionProjet {
         sprint_issues: &[Issue],
         budget: u32,
         at_least_one: bool,
+        order: &HashMap<u32, usize>,
     ) -> Result<Vec<u32>> {
         let open = self.open_issues(repo).await?;
         let open_set: HashSet<u32> = open.iter().map(|i| i.number).collect();
         let in_sprint: HashSet<u32> = sprint_issues.iter().map(|i| i.number).collect();
         let backlog: Vec<Issue> = open.into_iter().filter(|i| i.milestone.is_none()).collect();
-        let picks = projet::select(&backlog, budget, &open_set, &in_sprint, at_least_one);
+        let picks = projet::select(&backlog, budget, &open_set, &in_sprint, at_least_one, order);
         for n in &picks {
             self.set_milestone(repo, *n, Some(number)).await?;
         }
@@ -337,7 +338,10 @@ impl GestionProjet {
                     let days_left = sprint::days_between(&today, &cur.due_on).unwrap_or(0) + 1;
                     let budget =
                         projet::capacity_for(project.state.points_per_day(), days_left.max(1) as u32);
-                    let added = self.pull_into_sprint(repo, number, &issues, budget, true).await?;
+                    let order = project.state.jalon_order();
+                    let added = self
+                        .pull_into_sprint(repo, number, &issues, budget, true, &order)
+                        .await?;
                     if !added.is_empty() {
                         tracing::info!(
                             repo,
@@ -412,8 +416,9 @@ impl GestionProjet {
             }
             let load: u32 = issues.iter().map(projet::weight).sum();
             let budget = record.capacity.saturating_sub(load);
+            let order = project.state.jalon_order();
             let added = self
-                .pull_into_sprint(repo, number, &issues, budget, issues.is_empty())
+                .pull_into_sprint(repo, number, &issues, budget, issues.is_empty(), &order)
                 .await?;
             tracing::info!(repo, sprint = record.version, ?added, budget, "sprint rempli");
             if let Some(cur) = project.state.current_mut() {
@@ -903,13 +908,21 @@ impl GestionProjet {
         self.advance(repo, project).await
     }
 
-    pub(crate) async fn set_duration(&self, repo: &str, duration_days: u32) -> Result<Project> {
+    /// Change la durée des sprints. `current` : elle s'applique aussi au sprint en cours
+    /// (échéance du milestone recalculée, portée ajustée à la nouvelle capacité) ; sinon seulement
+    /// à partir du sprint suivant : le sprint en cours garde son échéance et sa portée.
+    pub(crate) async fn set_duration(
+        &self,
+        repo: &str,
+        duration_days: u32,
+        current: bool,
+    ) -> Result<Project> {
         let duration_days = projet::check_duration(duration_days)?;
         let _guard = self.engine_lock.lock().await;
         let mut project = self.require_project(repo).await?;
         let today = sprint::today();
         project.state.duration_days = duration_days;
-        if project.state.sprints.is_empty() {
+        if project.state.sprints.is_empty() || !current {
             self.save_project(repo, &project).await?;
             return Ok(project);
         }
@@ -930,17 +943,123 @@ impl GestionProjet {
         if cur.filled {
             let issues = self.milestone_issues(repo, number).await?;
             let load: u32 = issues.iter().map(projet::weight).sum();
+            let order = project.state.jalon_order();
             if load < target {
-                self.pull_into_sprint(repo, number, &issues, target - load, issues.is_empty())
+                self.pull_into_sprint(repo, number, &issues, target - load, issues.is_empty(), &order)
                     .await?;
             } else {
-                for n in projet::trim(&issues, &cur.carried, target) {
+                for n in projet::trim(&issues, &cur.carried, target, &order) {
                     self.set_milestone(repo, n, None).await?;
                 }
             }
         }
         self.save_project(repo, &project).await?;
         self.advance(repo, project).await
+    }
+
+    /// Clôt le sprint en cours avant son échéance (à la demande de l'utilisateur) : comme à
+    /// l'échéance, issues ouvertes et PR reportées au sprint suivant, qui commence aujourd'hui,
+    /// milestone fermé, puis livraison de la branche de release. `version` : le sprint que
+    /// l'utilisateur a vu (refus s'il a changé entre-temps).
+    pub(crate) async fn close_sprint_now(&self, repo: &str, version: Option<&str>) -> Result<Project> {
+        let _guard = self.engine_lock.lock().await;
+        let mut project = self.require_started(repo).await?;
+        if project.state.status != RunStatus::Running {
+            bail!("Sprints en pause : reprenez-les avant de clore le sprint en cours.");
+        }
+        let cur = project.state.current().cloned().context("aucun sprint")?;
+        if let Some(v) = version.map(str::trim).filter(|v| !v.is_empty())
+            && v != cur.version
+        {
+            bail!(
+                "Le sprint en cours est {} (et non {v}) : rafraîchissez l'écran avant de le clore.",
+                cur.version
+            );
+        }
+        let today = sprint::today();
+        self.roll_over(repo, &mut project, &today).await?;
+        self.save_project(repo, &project).await?;
+        self.advance(repo, project).await
+    }
+
+    /// Ajoute des issues au sprint en cours (son milestone) ou les en retire (sans version). Les
+    /// issues fermées, inconnues ou déjà à leur place sont signalées sans bloquer les autres.
+    pub(crate) async fn move_sprint_issues(&self, repo: &str, add: &[u32], remove: &[u32]) -> Result<Value> {
+        let _guard = self.engine_lock.lock().await;
+        let project = self.require_started(repo).await?;
+        let cur = project.state.current().cloned().context("aucun sprint")?;
+        let index = project.state.sprints.len() - 1;
+        let number = self.ensure_milestone(repo, &cur, index, project.issue).await?;
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        let mut skipped: Vec<Value> = Vec::new();
+        let wanted = add
+            .iter()
+            .map(|n| (*n, true))
+            .chain(remove.iter().map(|n| (*n, false)));
+        for (n, into) in wanted {
+            let raw = match self.gh.get_opt(&format!("/repos/{repo}/issues/{n}"), &[]).await? {
+                Some(raw) if !model::is_pull_request(&raw) && !model::is_state_issue(&raw) => raw,
+                _ => {
+                    skipped.push(json!({ "issue": n, "reason": "issue introuvable" }));
+                    continue;
+                }
+            };
+            let in_sprint = raw["milestone"]["number"].as_u64() == Some(u64::from(number));
+            if into && raw["state"].as_str() != Some("open") {
+                skipped.push(json!({ "issue": n, "reason": "issue fermée" }));
+            } else if into == in_sprint {
+                let reason = if into {
+                    "déjà dans le sprint"
+                } else {
+                    "pas dans le sprint"
+                };
+                skipped.push(json!({ "issue": n, "reason": reason }));
+            } else {
+                self.set_milestone(repo, n, into.then_some(number)).await?;
+                if into {
+                    added.push(n);
+                } else {
+                    removed.push(n);
+                }
+            }
+        }
+        Ok(json!({
+            "repo": repo, "version": cur.version, "milestone": number,
+            "added": added, "removed": removed, "skipped": skipped,
+        }))
+    }
+
+    /// Issues sans version, dans l'ordre où le remplissage les prendrait : ordre des jalons de la
+    /// roadmap, puis priorité et numéro ; chacune avec son jalon et son poids en SP.
+    pub(crate) async fn read_backlog(&self, repo: &str) -> Result<Value> {
+        let project = self.load_project(repo).await?;
+        let state = project.as_ref().map(|p| &p.state);
+        let order = state.map(ProjectState::jalon_order).unwrap_or_default();
+        let mut backlog: Vec<Issue> = self
+            .open_issues(repo)
+            .await?
+            .into_iter()
+            .filter(|i| i.milestone.is_none())
+            .collect();
+        backlog.sort_by_key(|i| projet::rank(i, &order));
+        let issues: Vec<Value> = backlog
+            .iter()
+            .map(|i| {
+                let jalon = order
+                    .get(&i.number)
+                    .and_then(|k| state.and_then(|s| s.jalons.get(*k)))
+                    .map(|j| json!({ "id": j.id, "name": j.name }));
+                let mut v = serde_json::to_value(i).unwrap_or(Value::Null);
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("body");
+                    o.insert("jalon".into(), jalon.unwrap_or(Value::Null));
+                    o.insert("weight".into(), json!(projet::weight(i)));
+                }
+                v
+            })
+            .collect();
+        Ok(json!({ "repo": repo, "issues": issues }))
     }
 
     async fn require_started(&self, repo: &str) -> Result<Project> {
@@ -1287,6 +1406,7 @@ impl GestionProjet {
             let (low, avg, high) = state.rate_range();
             // Environ un an de sprints, au moins 52 : des sprints d'un jour vont plus loin en nombre.
             let horizon = (365 / state.duration_days.max(1) as usize).clamp(52, 366);
+            let order = state.jalon_order();
             [avg, high, low].map(|rate| {
                 projet::forecast(
                     cur,
@@ -1298,6 +1418,7 @@ impl GestionProjet {
                     &taken,
                     &prefix,
                     horizon,
+                    &order,
                 )
             })
         });

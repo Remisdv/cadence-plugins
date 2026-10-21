@@ -15,12 +15,13 @@
 //! - à l'échéance, les issues ouvertes passent en tête du sprint suivant (leur poids réduit la
 //!   place des nouvelles), la branche de release est fusionnée dans la branche par défaut.
 //!
-//! Roadmap : des **jalons** (nom clair, description, issues) rangés dans l'état, pour l'affichage
-//! seulement (ni branche ni milestone ; les sprints restent remplis par priorité). La prévision
-//! simule les sprints à venir au rythme moyen, puis aux rythmes haut et bas pour la fourchette :
-//! un jalon finit avec le sprint qui prend sa dernière issue ouverte.
+//! Roadmap : des **jalons** (nom clair, description, issues) rangés dans l'état (ni branche ni
+//! milestone). Leur ordre nourrit les sprints : le remplissage prend d'abord les issues du premier
+//! jalon, puis du suivant…, puis les issues sans jalon, chaque groupe par priorité. La prévision
+//! simule les sprints à venir de la même façon au rythme moyen, puis aux rythmes haut et bas pour
+//! la fourchette : un jalon finit avec le sprint qui prend sa dernière issue ouverte.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -254,6 +255,17 @@ impl ProjectState {
         }
     }
 
+    /// Rang de jalon de chaque issue rangée dans un jalon (0 = premier jalon de la roadmap).
+    pub fn jalon_order(&self) -> HashMap<u32, usize> {
+        let mut out = HashMap::new();
+        for (k, j) in self.jalons.iter().enumerate() {
+            for n in &j.issues {
+                out.entry(*n).or_insert(k);
+            }
+        }
+        out
+    }
+
     pub fn jalon(&self, id: &str) -> Option<&Jalon> {
         self.jalons.iter().find(|j| j.id == id)
     }
@@ -331,8 +343,10 @@ pub fn slug(name: &str) -> String {
     out.trim_end_matches('-').chars().take(40).collect()
 }
 
+/// Capacité d'un sprint : rythme × jours, arrondie, jamais sous un story point (un rythme lent
+/// sur un sprint d'un jour donnait 0 SP). Le remplissage prend de toute façon au moins une issue.
 pub fn capacity_for(points_per_day: f32, days: u32) -> u32 {
-    (points_per_day * days as f32).round().max(0.0) as u32
+    (points_per_day * days as f32).round().max(1.0) as u32
 }
 
 pub fn release_branch(version: &str) -> String {
@@ -348,7 +362,7 @@ pub fn check_duration(days: u32) -> Result<u32> {
 
 /// Capacité proposée pour un premier sprint de `days` jours (au moins un story point).
 pub fn start_capacity(days: u32) -> u32 {
-    capacity_for(START_POINTS_PER_DAY, days).max(1)
+    capacity_for(START_POINTS_PER_DAY, days)
 }
 
 /// Échéance d'un sprint : son dernier jour, inclus (début + durée − 1, plus les pauses), jamais
@@ -477,30 +491,35 @@ pub fn weight(issue: &Issue) -> u32 {
     issue.points.unwrap_or(DEFAULT_POINTS)
 }
 
-/// Rang de priorité : 0 (socle) d'abord, sans priorité en dernier.
-fn rank(issue: &Issue) -> (u8, u32) {
+/// Rang de remplissage : ordre des jalons de la roadmap (`order`, issue → rang du jalon ; sans
+/// jalon après tous les jalons), puis priorité (0 = socle d'abord, sans priorité en dernier), puis
+/// numéro.
+pub fn rank(issue: &Issue, order: &HashMap<u32, usize>) -> (usize, u8, u32) {
     (
+        order.get(&issue.number).copied().unwrap_or(usize::MAX),
         issue.priority.unwrap_or(crate::model::LOWEST_PRIORITY + 1),
         issue.number,
     )
 }
 
-/// Issues à ajouter au sprint, dans l'ordre : par priorité puis numéro, tant qu'elles tiennent
+/// Issues à ajouter au sprint, dans l'ordre de `rank` (jalons, priorité, numéro), tant qu'elles tiennent
 /// dans `budget` story points. Une issue dont une dépendance est ouverte hors du sprint attend.
 /// `at_least_one` : une issue plus grosse que le budget est prise si rien d'autre n'entre.
 ///
 /// - `backlog` : candidates (issues ouvertes sans version, avec leur description) ;
 /// - `open` : numéros de toutes les issues ouvertes du dépôt ;
-/// - `in_sprint` : numéros des issues déjà dans le sprint.
+/// - `in_sprint` : numéros des issues déjà dans le sprint ;
+/// - `order` : rang du jalon de chaque issue (`ProjectState::jalon_order`).
 pub fn select(
     backlog: &[Issue],
     budget: u32,
     open: &HashSet<u32>,
     in_sprint: &HashSet<u32>,
     at_least_one: bool,
+    order: &HashMap<u32, usize>,
 ) -> Vec<u32> {
     let mut ordered: Vec<&Issue> = backlog.iter().collect();
-    ordered.sort_by_key(|i| rank(i));
+    ordered.sort_by_key(|i| rank(i, order));
     let mut chosen: Vec<u32> = Vec::new();
     let mut used = 0u32;
     // Plusieurs passes : une issue débloquée par une dépendance choisie plus loin entre ensuite.
@@ -534,7 +553,7 @@ pub fn select(
 /// de la moins prioritaire à la plus prioritaire, jusqu'à revenir sous `target`. Le sprint garde
 /// toujours au moins une issue ouverte, même plus grosse que la capacité (sprints courts), comme
 /// au remplissage.
-pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
+pub fn trim(sprint: &[Issue], carried: &[u32], target: u32, order: &HashMap<u32, usize>) -> Vec<u32> {
     let mut load: u32 = sprint.iter().map(weight).sum();
     let mut open_left = sprint.iter().filter(|i| i.state == "open").count();
     let mut removable: Vec<&Issue> = sprint
@@ -542,7 +561,7 @@ pub fn trim(sprint: &[Issue], carried: &[u32], target: u32) -> Vec<u32> {
         .filter(|i| i.state == "open" && i.status == "todo" && i.assignees.is_empty())
         .filter(|i| !carried.contains(&i.number))
         .collect();
-    removable.sort_by_key(|i| std::cmp::Reverse(rank(i)));
+    removable.sort_by_key(|i| std::cmp::Reverse(rank(i, order)));
     let mut out = Vec::new();
     for issue in removable {
         if load <= target || open_left <= 1 {
@@ -569,8 +588,9 @@ pub struct PlannedSprint {
 }
 
 /// Sprints à venir au rythme `rate` (SP par jour) : après le sprint `current` (issues ouvertes
-/// `current_open`), des sprints de `duration` jours prennent `backlog` par priorité, comme le
-/// moteur. Une issue dont une dépendance n'est planifiée nulle part reste hors prévision.
+/// `current_open`), des sprints de `duration` jours prennent `backlog` comme le
+/// moteur (ordre des jalons, puis priorité). Une issue dont une dépendance n'est planifiée nulle
+/// part reste hors prévision.
 #[allow(clippy::too_many_arguments)]
 pub fn forecast(
     current: &SprintRecord,
@@ -582,6 +602,7 @@ pub fn forecast(
     taken: &[String],
     prefix: &str,
     max_sprints: usize,
+    order: &HashMap<u32, usize>,
 ) -> Vec<PlannedSprint> {
     let mut out = vec![PlannedSprint {
         version: current.version.clone(),
@@ -601,7 +622,7 @@ pub fn forecast(
         let last = out.last().cloned().unwrap_or_else(|| out[0].clone());
         // Les issues planifiées plus tôt sont faites quand ce sprint commence.
         let open_now: HashSet<u32> = open.difference(&scheduled).copied().collect();
-        let picks = select(&remaining, capacity, &open_now, &HashSet::new(), true);
+        let picks = select(&remaining, capacity, &open_now, &HashSet::new(), true, order);
         if picks.is_empty() {
             break;
         }
@@ -697,6 +718,10 @@ mod tests {
         )
     }
 
+    fn no_order() -> HashMap<u32, usize> {
+        HashMap::new()
+    }
+
     fn state() -> ProjectState {
         ProjectState {
             status: RunStatus::Running,
@@ -754,18 +779,69 @@ mod tests {
         let open: HashSet<u32> = (1..=6).collect();
         let none = HashSet::new();
         // 21 SP : #1 (5) + #2 (8) + #3 (8) ; #4 attend #3, déjà pris : 21 + 5 > 21.
-        assert_eq!(select(&backlog, 21, &open, &none, true), [1, 2, 3]);
+        assert_eq!(select(&backlog, 21, &open, &none, true, &no_order()), [1, 2, 3]);
         // 15 SP : #3 ne tient pas, #4 dépend de #3 : place pour #6 (2) puis rien (#5 = 3 SP par défaut → 15+3).
-        assert_eq!(select(&backlog, 15, &open, &none, true), [1, 2, 6]);
+        assert_eq!(select(&backlog, 15, &open, &none, true, &no_order()), [1, 2, 6]);
         // Dépendance hors du sprint et ouverte : l'issue attend.
         let only_3 = vec![backlog[2].clone()];
-        assert!(select(&only_3, 50, &open, &none, true).is_empty());
+        assert!(select(&only_3, 50, &open, &none, true, &no_order()).is_empty());
         // Dépendances déjà dans le sprint : elle entre.
         let in_sprint: HashSet<u32> = [1, 2].into();
-        assert_eq!(select(&only_3, 50, &open, &in_sprint, true), [3]);
+        assert_eq!(select(&only_3, 50, &open, &in_sprint, true, &no_order()), [3]);
         // Budget trop petit : au moins une issue si demandé.
-        assert_eq!(select(&backlog, 1, &open, &none, true), [1]);
-        assert!(select(&backlog, 1, &open, &none, false).is_empty());
+        assert_eq!(select(&backlog, 1, &open, &none, true, &no_order()), [1]);
+        assert!(select(&backlog, 1, &open, &none, false, &no_order()).is_empty());
+    }
+
+    /// Constat P08 : un petit jalon placé en tête de la roadmap passe avant les grosses issues
+    /// prioritaires sans jalon, au remplissage comme dans la prévision.
+    #[test]
+    fn fills_by_roadmap_order_first() {
+        let mut s = state();
+        s.jalons = vec![
+            Jalon {
+                id: "bonjour".into(),
+                name: "Mini-projet bonjour".into(),
+                description: String::new(),
+                issues: vec![17, 15, 16],
+            },
+            Jalon {
+                id: "courses".into(),
+                name: "Liste de courses".into(),
+                description: String::new(),
+                issues: vec![3],
+            },
+        ];
+        let order = s.jalon_order();
+        assert_eq!((order[&15], order[&3], order.get(&2)), (0, 1, None));
+        let backlog = vec![
+            issue(2, Some(0), Some(8), ""),
+            issue(3, Some(1), Some(8), ""),
+            issue(15, Some(0), Some(1), ""),
+            issue(16, Some(1), Some(1), ""),
+            issue(17, Some(2), Some(1), ""),
+        ];
+        let open: HashSet<u32> = [2, 3, 15, 16, 17].into();
+        // Le jalon de tête d'abord (par priorité), puis le jalon suivant ; #2 ne tient plus.
+        assert_eq!(
+            select(&backlog, 11, &open, &HashSet::new(), true, &order),
+            [15, 16, 17, 3]
+        );
+        // Sans jalons : priorité seule, comme avant.
+        assert_eq!(
+            select(&backlog, 11, &open, &HashSet::new(), true, &no_order()),
+            [2, 15, 16, 17]
+        );
+        // Prévision : le jalon de 3 SP part dans le premier sprint simulé.
+        let mut current = s.sprints[0].clone();
+        current.due_on = "2026-10-21".into();
+        let plan = forecast(&current, &[], &backlog, &open, 0.4, 7, &[], "v", 20, &order);
+        assert_eq!(plan[1].issues, [15, 16, 17]);
+        assert_eq!(plan[1].due_on, "2026-10-28");
+        // Durée réduite : on retire d'abord ce qui n'est dans aucun jalon.
+        let mut sprint = backlog.clone();
+        sprint.truncate(3);
+        assert_eq!(trim(&sprint, &[], 9, &order), [2]);
     }
 
     #[test]
@@ -777,14 +853,14 @@ mod tests {
             issue(4, Some(2), Some(5), ""),
         ];
         sprint[0].status = "doing";
-        assert_eq!(trim(&sprint, &[], 21), Vec::<u32>::new());
-        assert_eq!(trim(&sprint, &[], 15), [3, 4]);
+        assert_eq!(trim(&sprint, &[], 21, &no_order()), Vec::<u32>::new());
+        assert_eq!(trim(&sprint, &[], 15, &no_order()), [3, 4]);
         // Reportée : jamais retirée.
-        assert_eq!(trim(&sprint, &[3], 15), [4, 2]);
+        assert_eq!(trim(&sprint, &[3], 15, &no_order()), [4, 2]);
         // Durée réduite à un jour (1 SP) : au moins une issue ouverte reste dans le sprint.
         let todo: Vec<Issue> = sprint[1..].to_vec();
-        assert_eq!(trim(&todo, &[], 1), [3, 4]);
-        assert_eq!(trim(&todo[..1], &[], 1), Vec::<u32>::new());
+        assert_eq!(trim(&todo, &[], 1, &no_order()), [3, 4]);
+        assert_eq!(trim(&todo[..1], &[], 1, &no_order()), Vec::<u32>::new());
     }
 
     #[test]
@@ -799,6 +875,11 @@ mod tests {
         assert_eq!(s.next_capacity(), 20);
         s.duration_days = 21;
         assert_eq!(s.next_capacity(), 29);
+        // Constat P09 : 0,4 SP/jour sur un sprint d'un jour donnait 0 SP ; au moins 1.
+        assert_eq!(
+            (capacity_for(0.4, 1), capacity_for(0.0, 7), capacity_for(0.4, 5)),
+            (1, 1, 2)
+        );
     }
 
     #[test]
@@ -861,7 +942,18 @@ mod tests {
         ];
         let open: HashSet<u32> = [1, 2, 3, 4, 5, 99].into();
         // 1 SP/j × 14 j = 14 SP par sprint.
-        let plan = forecast(&current, &in_sprint, &backlog, &open, 1.0, 14, &[], "v", 20);
+        let plan = forecast(
+            &current,
+            &in_sprint,
+            &backlog,
+            &open,
+            1.0,
+            14,
+            &[],
+            "v",
+            20,
+            &no_order(),
+        );
         let sprints: Vec<(&str, &str, Vec<u32>)> = plan
             .iter()
             .map(|s| (s.version.as_str(), s.due_on.as_str(), s.issues.clone()))
@@ -929,7 +1021,7 @@ mod tests {
         (current.start_on, current.due_on) = ("2026-10-20".into(), "2026-10-20".into());
         let backlog = vec![issue(2, Some(1), Some(3), ""), issue(3, Some(2), Some(3), "")];
         let open: HashSet<u32> = [1, 2, 3].into();
-        let plan = forecast(&current, &[], &backlog, &open, 3.0, 1, &[], "v", 20);
+        let plan = forecast(&current, &[], &backlog, &open, 3.0, 1, &[], "v", 20, &no_order());
         let sprints: Vec<(&str, &str, &str, Vec<u32>)> = plan
             .iter()
             .map(|s| {
@@ -991,13 +1083,19 @@ mod tests {
         let open: HashSet<u32> = backlog.iter().map(|i| i.number).collect();
         let none = HashSet::new();
         // 7 jours à 10 SP : #1 (socle, 5 SP) ; #2 (8 SP) ne tient plus, les autres en dépendent.
-        assert_eq!(select(&backlog, start_capacity(7), &open, &none, true), [1]);
+        assert_eq!(
+            select(&backlog, start_capacity(7), &open, &none, true, &no_order()),
+            [1]
+        );
         // 14 jours à 20 SP : #1 puis #2 ; #3 (3 SP, dépend de #1 et #2) aussi.
         assert_eq!(
-            select(&backlog, start_capacity(14), &open, &none, true),
+            select(&backlog, start_capacity(14), &open, &none, true, &no_order()),
             [1, 2, 3]
         );
         // Sprint d'un jour (1 SP) : la première issue quand même, plus grosse que la capacité.
-        assert_eq!(select(&backlog, start_capacity(1), &open, &none, true), [1]);
+        assert_eq!(
+            select(&backlog, start_capacity(1), &open, &none, true, &no_order()),
+            [1]
+        );
     }
 }

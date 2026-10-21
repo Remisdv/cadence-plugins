@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Issue, PullRequest, Version } from "./domain";
 import {
   buildRoadmap,
+  capacityFor,
+  dueFor,
+  issueWeight,
+  pointsByStatus,
   ciLabel,
   closeChecks,
   compareVersions,
@@ -133,6 +137,32 @@ describe("sprint", () => {
       ["En cours", 1, 25],
       ["À faire", 1, 25],
     ]);
+  });
+
+  it("mesure le sprint en story points (3 SP sans estimation)", () => {
+    const list = [
+      issue(2, { points: 8 }),
+      issue(3, { points: 8, status: "doing" }),
+      issue(15, { points: 1, status: "done" }),
+      issue(16, { points: null, status: "done" }),
+    ];
+    expect(issueWeight(list[3]!)).toBe(3);
+    const points = pointsByStatus(list);
+    expect(points).toEqual({ todo: 8, doing: 8, review: 0, done: 4 });
+    expect(statusMeters(points, "SP").map((m) => m.value)).toEqual([
+      "4 SP",
+      "0 SP",
+      "8 SP",
+      "8 SP",
+    ]);
+  });
+
+  it("calcule capacité et échéance comme le serveur (constat P09)", () => {
+    // 0,4 SP / jour sur un jour : au moins 1 SP.
+    expect([capacityFor(0.4, 1), capacityFor(0, 7), capacityFor(1.6, 14)]).toEqual([1, 1, 22]);
+    expect(dueFor("2026-10-19", 21, 0, "2026-10-21")).toBe("2026-11-08");
+    expect(dueFor("2026-10-19", 1, 0, "2026-10-21")).toBe("2026-10-21");
+    expect(dueFor("2026-10-19", 3, 2, "2026-10-19")).toBe("2026-10-23");
   });
 });
 

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 /// Champs communs d'une PR, pour la liste et le détail.
 const PR_FIELDS: &str = r#"
-  id number title state isDraft url
+  id number title body state isDraft url
   headRefName baseRefName
   author { login }
   milestone { title }
@@ -20,6 +20,11 @@ const PR_FIELDS: &str = r#"
   latestOpinionatedReviews(first: 20) { nodes { state author { login } } }
   reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
   timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 1) { nodes { ... on ReviewRequestedEvent { createdAt } } }
+  links: timelineItems(itemTypes: [CONNECTED_EVENT, DISCONNECTED_EVENT], last: 20) { nodes {
+    __typename
+    ... on ConnectedEvent { subject { ... on Issue { number } } source { ... on Issue { number } } }
+    ... on DisconnectedEvent { subject { ... on Issue { number } } source { ... on Issue { number } } }
+  } }
   commits(last: 1) { nodes { commit { statusCheckRollup {
     state
     contexts(first: 1) { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } }
@@ -46,7 +51,7 @@ pub fn detail_query() -> String {
   repository(owner: $owner, name: $name) {{
     pullRequest(number: $number) {{
       ...Pr
-      body mergeable
+      mergeable
       reviews(last: 30) {{ nodes {{ state submittedAt body author {{ login }} }} }}
       checks: commits(last: 1) {{ nodes {{ commit {{ oid statusCheckRollup {{ contexts(first: 50) {{ nodes {{
         __typename
@@ -94,8 +99,13 @@ pub struct PullRequest {
     /// Titre du milestone (version).
     pub milestone: Option<String>,
     pub labels: Vec<String>,
-    /// Issues fermées par la PR (`Closes #42`).
+    /// Issues que la PR déclare fermer : références de GitHub (vers la branche par défaut
+    /// seulement), « Ferme #42 » / « Closes #42 » du titre ou de la description, liens manuels
+    /// (panneau Development, timeline).
     pub closes: Vec<u32>,
+    /// Issues liées : `closes`, plus l'issue de la branche (`feat/42-connexion`, `42-connexion`).
+    /// Sert à retrouver la PR d'une tâche en revue, même vers une branche `release/x`.
+    pub issues: Vec<u32>,
     pub ci: Ci,
     /// `approved`, `changes_requested`, `pending` (revue demandée ou requise) ou absent.
     pub review: Option<&'static str>,
@@ -152,6 +162,7 @@ pub fn from_graphql(repo: &str, raw: &Value) -> PullRequest {
         Some("REVIEW_REQUIRED") => Some("pending"),
         _ => None,
     };
+    let closes = closes_of(raw);
     PullRequest {
         repo: repo.to_string(),
         number: u32_of(&raw["number"]),
@@ -163,9 +174,8 @@ pub fn from_graphql(repo: &str, raw: &Value) -> PullRequest {
         url: str_of(&raw["url"]).unwrap_or_default(),
         milestone: str_of(&raw["milestone"]["title"]),
         labels: nodes(&raw["labels"]).filter_map(|l| str_of(&l["name"])).collect(),
-        closes: nodes(&raw["closingIssuesReferences"])
-            .map(|i| u32_of(&i["number"]))
-            .collect(),
+        issues: linked_issues(&closes, raw["headRefName"].as_str().unwrap_or("")),
+        closes,
         ci: ci_of(raw),
         review,
         approvals: count("APPROVED"),
@@ -185,6 +195,78 @@ pub fn from_graphql(repo: &str, raw: &Value) -> PullRequest {
         created_at: str_of(&raw["createdAt"]),
         updated_at: str_of(&raw["updatedAt"]),
     }
+}
+
+/// Issues fermées d'une PR GraphQL : références de GitHub, mots-clés du titre et de la
+/// description (GitHub ne relie « Closes #n » que vers la branche par défaut), liens manuels.
+fn closes_of(raw: &Value) -> Vec<u32> {
+    let mut out: Vec<u32> = nodes(&raw["closingIssuesReferences"])
+        .map(|i| u32_of(&i["number"]))
+        .filter(|n| *n > 0)
+        .collect();
+    let text = format!(
+        "{}
+{}",
+        raw["title"].as_str().unwrap_or(""),
+        raw["body"].as_str().unwrap_or("")
+    );
+    for n in closing_refs(&text) {
+        push_unique(&mut out, n);
+    }
+    // Liens du panneau Development, dans l'ordre : une déconnexion annule une connexion.
+    let own = u32_of(&raw["number"]);
+    for event in nodes(&raw["links"]) {
+        let linked = [&event["subject"], &event["source"]]
+            .into_iter()
+            .map(|s| u32_of(&s["number"]))
+            .find(|n| *n > 0 && *n != own);
+        let Some(n) = linked else { continue };
+        match event["__typename"].as_str() {
+            Some("ConnectedEvent") => push_unique(&mut out, n),
+            Some("DisconnectedEvent") => out.retain(|x| *x != n),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn push_unique(out: &mut Vec<u32>, n: u32) {
+    if !out.contains(&n) {
+        out.push(n);
+    }
+}
+
+/// `closes`, plus l'issue que nomme la branche source.
+pub fn linked_issues(closes: &[u32], head: &str) -> Vec<u32> {
+    let mut out = closes.to_vec();
+    if let Some(n) = branch_issue(head) {
+        push_unique(&mut out, n);
+    }
+    out
+}
+
+/// Préfixes de branche d'issue (`feat/42-…`) ; les autres (`release/…`, `archi/2026-10-19`,
+/// `design/…`) ne nomment pas d'issue.
+const BRANCH_TYPES: [&str; 14] = [
+    "feat", "feature", "fix", "bugfix", "hotfix", "chore", "perf", "docs", "refactor", "test", "ci", "build",
+    "style", "issue",
+];
+
+/// Issue d'une branche de travail : `feat/42-connexion`, `fix/7`, `42-connexion` (branche créée
+/// depuis l'issue sur GitHub) ; `owner:` (fork) toléré.
+pub fn branch_issue(head: &str) -> Option<u32> {
+    let branch = head.trim().rsplit_once(':').map_or(head.trim(), |(_, b)| b);
+    let name = match branch.split_once('/') {
+        Some((kind, rest)) if BRANCH_TYPES.contains(&kind.to_lowercase().as_str()) => rest,
+        Some(_) => return None,
+        None => branch,
+    };
+    let digits: String = name.chars().take_while(char::is_ascii_digit).collect();
+    let after = name[digits.len()..].chars().next();
+    if digits.is_empty() || !matches!(after, None | Some('-' | '_')) {
+        return None;
+    }
+    digits.parse().ok().filter(|n| *n > 0)
 }
 
 /// État de CI du dernier commit.
@@ -287,6 +369,12 @@ pub fn from_rest(repo: &str, raw: &Value) -> PullRequest {
         (_, _, Some(true)) => "draft",
         _ => "open",
     };
+    let closes = closing_refs(&format!(
+        "{}
+{}",
+        raw["title"].as_str().unwrap_or(""),
+        raw["body"].as_str().unwrap_or("")
+    ));
     PullRequest {
         repo: repo.to_string(),
         number: u32_of(&raw["number"]),
@@ -303,7 +391,8 @@ pub fn from_rest(repo: &str, raw: &Value) -> PullRequest {
             .flatten()
             .filter_map(|l| str_of(&l["name"]))
             .collect(),
-        closes: vec![],
+        issues: linked_issues(&closes, raw["head"]["ref"].as_str().unwrap_or("")),
+        closes,
         ci: Ci {
             state: "none",
             passed: 0,
@@ -560,6 +649,74 @@ mod tests {
         let body = "Ferme #12\n\nVoir aussi #13. Closes: #3 et fixes #7 (lié à #8) ; Résout #4, corrige #4";
         assert_eq!(closing_refs(body), [12, 3, 7, 4]);
         assert!(closing_refs("Aucune référence, juste #5").is_empty());
+    }
+
+    /// PR réelles de Remisdv/linear-test (#18, #19) : vers `release/0.2.0`, GitHub ne remplit
+    /// pas `closingIssuesReferences` ; « Closes #15 » du corps et la branche suffisent.
+    #[test]
+    fn links_sprint_pull_requests_to_their_issues() {
+        let pr18 = from_graphql(
+            "Remisdv/linear-test",
+            &node(
+                json!({"number": 18, "headRefName": "feat/15-bonjour", "baseRefName": "release/0.2.0",
+                "closingIssuesReferences": {"nodes": []},
+                "body": "## Objet
+
+Pose le socle.
+
+Closes #15
+
+- L'option `--nom` fait l'objet de #16."}),
+            ),
+        );
+        assert_eq!((pr18.closes.clone(), pr18.issues.clone()), (vec![15], vec![15]));
+        // Sans mot-clé : la branche relie la PR à son issue, sans la déclarer fermée.
+        let pr19 = from_graphql(
+            "Remisdv/linear-test",
+            &node(
+                json!({"number": 19, "headRefName": "feat/16-option-nom", "title": "feat : option --nom",
+                "closingIssuesReferences": {"nodes": []}, "body": "Dépend de #15."}),
+            ),
+        );
+        assert_eq!((pr19.closes.clone(), pr19.issues.clone()), (vec![], vec![16]));
+        // Titre « Ferme #n » et lien manuel (panneau Development), annulé par une déconnexion.
+        let manual = from_graphql(
+            "me/app",
+            &node(
+                json!({"number": 40, "headRefName": "wip", "title": "Ferme #3", "body": null,
+                "closingIssuesReferences": {"nodes": []},
+                "links": {"nodes": [
+                    {"__typename": "ConnectedEvent", "subject": {"number": 7}, "source": {}},
+                    {"__typename": "ConnectedEvent", "subject": {}, "source": {"number": 8}},
+                    {"__typename": "DisconnectedEvent", "subject": {"number": 7}, "source": {}}
+                ]}}),
+            ),
+        );
+        assert_eq!(manual.closes, [3, 8]);
+        assert!(list_query().contains("CONNECTED_EVENT") && list_query().contains("body"));
+        let created = from_rest(
+            "me/app",
+            &json!({"number": 41, "title": "fix: quota", "body": "Fixes #156", "head": {"ref": "fix/157-x"}}),
+        );
+        assert_eq!((created.closes, created.issues), (vec![156], vec![156, 157]));
+    }
+
+    #[test]
+    fn reads_the_issue_of_a_branch() {
+        assert_eq!(branch_issue("feat/15-bonjour"), Some(15));
+        assert_eq!(branch_issue("fix/7"), Some(7));
+        assert_eq!(branch_issue("me:chore/42_socle"), Some(42));
+        assert_eq!(branch_issue("42-connexion-github"), Some(42));
+        for other in [
+            "release/0.2.0",
+            "archi/2026-10-19",
+            "design/ecrans",
+            "main",
+            "feat/v2-ui",
+            "0.2.0",
+        ] {
+            assert_eq!(branch_issue(other), None, "{other}");
+        }
     }
 
     #[test]

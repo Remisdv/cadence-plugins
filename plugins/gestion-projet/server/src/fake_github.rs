@@ -86,6 +86,9 @@ impl Repo {
             .filter_map(|kv| kv.split_once('='))
             .map(|(k, v)| (decode(k), decode(v)))
             .collect();
+        if method == "POST" && path == "/graphql" {
+            return (200, self.graphql(&body));
+        }
         let prefix = format!("/repos/{}", self.name);
         let Some(rest) = path.strip_prefix(&prefix) else {
             return not_found(path);
@@ -282,6 +285,61 @@ impl Repo {
             }
             _ => not_found(path),
         }
+    }
+
+    /// `POST /graphql` : seulement la liste des PR (`pulls::list_query`), à partir des PR REST.
+    /// Comme GitHub, `closingIssuesReferences` n'est rempli que pour une PR vers la branche par
+    /// défaut ; `links` (champ du faux GitHub) donne les liens manuels du panneau Development.
+    fn graphql(&self, body: &Value) -> Value {
+        let vars = &body["variables"];
+        let node = |p: &Value| {
+            let state = if !p["merged_at"].is_null() {
+                "MERGED"
+            } else if p["state"] == "closed" {
+                "CLOSED"
+            } else {
+                "OPEN"
+            };
+            let closing: Vec<Value> = if p["base"]["ref"] == self.default_branch.as_str() {
+                crate::pulls::closing_refs(p["body"].as_str().unwrap_or(""))
+                    .into_iter()
+                    .map(|n| json!({ "number": n }))
+                    .collect()
+            } else {
+                vec![]
+            };
+            json!({
+                "id": format!("PR_{}", p["number"]), "number": p["number"], "title": p["title"],
+                "body": p["body"], "state": state, "isDraft": p["draft"], "url": p["html_url"],
+                "headRefName": p["head"]["ref"], "baseRefName": p["base"]["ref"],
+                "author": { "login": p["user"]["login"] }, "milestone": null,
+                "labels": { "nodes": [] }, "additions": 1, "deletions": 0, "changedFiles": 1,
+                "comments": { "totalCount": 0 }, "createdAt": "2026-10-20T09:00:00Z",
+                "updatedAt": "2026-10-20T09:00:00Z",
+                "closingIssuesReferences": { "nodes": closing },
+                "reviewDecision": null, "latestOpinionatedReviews": { "nodes": [] },
+                "reviewRequests": { "nodes": [] }, "timelineItems": { "nodes": [] },
+                "links": { "nodes": p.get("links").cloned().unwrap_or(json!([])) },
+                "commits": { "nodes": [] },
+            })
+        };
+        let list = |open: bool| -> Value {
+            let nodes: Vec<Value> = self
+                .pulls
+                .iter()
+                .filter(|p| (p["state"] == "open") == open)
+                .map(node)
+                .collect();
+            json!({ "nodes": nodes })
+        };
+        let mut repository = json!({});
+        if vars["open"] == true {
+            repository["open"] = list(true);
+        }
+        if vars["done"] == true {
+            repository["done"] = list(false);
+        }
+        json!({ "data": { "repository": repository } })
     }
 
     fn issue_mut(&mut self, n: &str) -> Option<&mut Value> {

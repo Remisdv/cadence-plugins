@@ -123,7 +123,8 @@ dépôt.
 
    Si une dépendance apparaît après coup, ajoute-la avec `update_issue` (`body` complet).
 7. **Ranger dans la roadmap.** Un jalon est un objectif nommé, atteint en un ou plusieurs sprints
-   (affichage de la roadmap seulement : il ne change ni la priorité ni les sprints). Lis `roadmap` :
+   (il ne change pas la priorité, mais l'ordre des jalons ordonne le remplissage des sprints).
+   Lis `roadmap` :
    - si l'objectif d'un jalon existant couvre le document, range-y les issues créées ;
    - sinon crée un jalon avec `jalon_save` : **nom clair et court** tiré du document (« Liste de
      courses partagée », « Bêta publique »), `description` = l'objectif en une ou deux phrases ;

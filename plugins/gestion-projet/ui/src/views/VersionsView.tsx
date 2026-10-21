@@ -27,6 +27,7 @@ import {
 import {
   issueStatuses,
   issueTypeTone,
+  linkedIssues,
   type Issue,
   type PullRequestList,
   type ReleaseList,
@@ -61,6 +62,7 @@ import {
   formatRange,
   isOpenPr,
   plural,
+  pointsByStatus,
   prStateMeta,
   releaseNotes,
   requiredPace,
@@ -281,8 +283,7 @@ function VersionDetail({ repo, version, onBack }: Selected & { onBack: () => voi
   const issues = s?.issues ?? [];
   const versionPulls = (pulls.data?.pull_requests ?? []).filter(
     (p) =>
-      p.milestone === v?.title ||
-      (p.closes.length > 0 && p.closes.some((n) => issues.some((i) => i.number === n))),
+      p.milestone === v?.title || linkedIssues(p).some((n) => issues.some((i) => i.number === n)),
   );
   const release = releases.data?.releases.find((r) => v && r.version === v.title) ?? null;
 
@@ -417,8 +418,11 @@ function VersionDetail({ repo, version, onBack }: Selected & { onBack: () => voi
 
               <div className="flex w-[340px] shrink-0 flex-col gap-[13px] max-[900px]:w-full">
                 <Card className="px-[15px] py-3.5">
-                  <h3 className="text-body">Progression</h3>
-                  <MeterList className="mt-[13px]" items={statusMeters(pace.counts)} />
+                  <h3 className="text-body">Progression (SP)</h3>
+                  <MeterList
+                    className="mt-[13px]"
+                    items={statusMeters(pace.points_by_status ?? pointsByStatus(issues), "SP")}
+                  />
                 </Card>
                 {v.kind === "sprint" &&
                   pace.start_on &&
@@ -427,13 +431,14 @@ function VersionDetail({ repo, version, onBack }: Selected & { onBack: () => voi
                     <Card className="px-[15px] py-3.5">
                       <div className="flex items-center gap-2">
                         <h3 className="text-body">Burndown</h3>
+                        <span className="text-tiny text-tx3">story points restants</span>
                         <div className="grow" />
                         {v.state === "open" && <DelayText delay={pace.delay_days} />}
                       </div>
                       <div className="mt-3">
                         <Burndown
                           points={pace.burndown}
-                          scope={Math.max(1, pace.total)}
+                          scope={Math.max(1, pace.points_total)}
                           start={pace.start_on}
                           end={pace.due_on}
                           days={(pace.length_days ?? s.sprint_length_days) + 1}
@@ -476,13 +481,13 @@ function stats(
   openPrs: number,
 ): StatStripItem[] {
   const shipped = v.state === "closed";
-  const remaining = pace.total - pace.closed;
+  const remaining = pace.points_remaining ?? pace.points_total - pace.points_done;
   const required = requiredPace(remaining, pace.days_left);
   return [
     {
-      label: "Issues fermées",
-      value: `${pace.closed} / ${pace.total}`,
-      suffix: formatPercent(pace.progress),
+      label: "Avancement (SP)",
+      value: `${pace.points_done} / ${pace.points_total}`,
+      suffix: `SP · ${formatPercent(pace.progress)} · ${pace.closed}/${pace.total} issues fermées`,
       tone: "clay",
     },
     {
@@ -506,13 +511,13 @@ function stats(
       ? {
           label: "Rythme",
           value: v.kind === "sprint" ? formatDecimal(pace.velocity) : "—",
-          suffix: v.kind === "sprint" ? "issues / jour" : "palier sans sprint",
+          suffix: v.kind === "sprint" ? "SP fermés / jour" : "palier sans sprint",
           tone: "blue",
         }
       : {
           label: "Rythme requis",
           value: formatDecimal(required),
-          suffix: "issue / jour",
+          suffix: "SP / jour",
           tone: "amber",
         },
   ];

@@ -1,9 +1,5 @@
 /** Données rendues par le serveur `cadence-gestion-projet` et leur vocabulaire d'affichage. */
-import type {
-  ActionGroup,
-  ConversationInfo,
-  ConversationState,
-} from "@cadence/plugin-sdk";
+import type { ActionGroup, ConversationInfo, ConversationState } from "@cadence/plugin-sdk";
 import type { BadgeTone, DotTone, IconName } from "@cadence/ui";
 
 export type IssueType = "feat" | "fix" | "chore" | "perf" | "docs";
@@ -121,19 +117,29 @@ export function reviewContext(
   return { type: "review", repo, items, ...withGroup(group) };
 }
 
-/** PR ouverte (brouillon compris) qui ferme l'issue ; la plus récente s'il y en a plusieurs. */
+/** Issues liées à une PR : `issues` du serveur (closes + branche `feat/<n>-…`), sinon `closes`. */
+export function linkedIssues(pr: Pick<PullRequest, "closes" | "issues">): number[] {
+  return pr.issues ?? pr.closes;
+}
+
+/**
+ * PR ouverte (brouillon compris) liée à l'issue : celle qui déclare la fermer (« Closes #n », même
+ * vers une branche `release/x`), sinon celle de sa branche (`feat/<n>-…`) ; la plus récente s'il y
+ * en a plusieurs.
+ */
 export function pullRequestFor(
   pulls: PullRequest[],
   issue: Pick<Issue, "repo" | "number">,
 ): PullRequest | null {
-  const candidates = pulls.filter(
-    (p) =>
-      p.repo === issue.repo &&
-      (p.state === "open" || p.state === "draft") &&
-      p.closes.includes(issue.number),
+  const open = pulls.filter(
+    (p) => p.repo === issue.repo && (p.state === "open" || p.state === "draft"),
   );
-  candidates.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
-  return candidates[0] ?? null;
+  const recent = (list: PullRequest[]) =>
+    [...list].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0] ?? null;
+  return (
+    recent(open.filter((p) => p.closes.includes(issue.number))) ??
+    recent(open.filter((p) => linkedIssues(p).includes(issue.number)))
+  );
 }
 
 export const conversationStates: Record<
@@ -291,19 +297,27 @@ export interface Pace {
   due_on: string | null;
   days_left: number | null;
   length_days: number | null;
+  /** Issues de la portée et issues fermées (compteurs seulement). */
   total: number;
   closed: number;
-  /** 0 → 100 */
+  /** Avancement en story points (`points_done` sur `points_total`), 0 → 100. */
   progress: number;
+  /** Issues par état. */
   counts: Record<IssueStatus, number>;
-  /** Story points des issues estimées, et des issues fermées. */
+  /** Story points par état. */
+  points_by_status?: Record<IssueStatus, number>;
+  /** Portée en story points (une issue sans estimation compte 3 SP), et SP fermés. */
   points_total: number;
   points_done: number;
-  /** Issues sans story points. */
+  /** Story points encore ouverts. */
+  points_remaining?: number;
+  /** Issues sans story points (comptées 3 SP chacune). */
   unestimated: number;
+  /** Story points fermés par jour écoulé. */
   velocity: number;
-  /** Retard (positif) ou avance (négatif) sur la droite idéale, en jours. */
+  /** Retard (positif) ou avance (négatif) sur la droite idéale des SP, en jours. */
   delay_days: number;
+  /** Story points restants, jour par jour. */
   burndown: BurndownPoint[];
 }
 
@@ -577,6 +591,28 @@ export interface PlanningResponse {
   today?: string;
 }
 
+/** Issue du carnet (`sprint_backlog`) : sans version, dans l'ordre de remplissage des sprints. */
+export interface BacklogIssue extends Issue {
+  /** Jalon de la roadmap qui la porte (son rang ordonne le carnet). */
+  jalon: { id: string; name: string } | null;
+  /** Poids dans la capacité : story points, 3 sans estimation. */
+  weight: number;
+}
+
+export interface BacklogList {
+  repo: string;
+  issues: BacklogIssue[];
+}
+
+/** Réponse de `sprint_issues` (ajout / retrait d'issues du sprint en cours). */
+export interface SprintIssuesResult {
+  repo: string;
+  version: string;
+  added: number[];
+  removed: number[];
+  skipped: { issue: number; reason: string }[];
+}
+
 /** Valeurs proposées par « Démarrer le projet ». */
 export interface StartDefaults {
   duration_days: number;
@@ -620,7 +656,10 @@ export interface PullRequest {
   url: string;
   milestone: string | null;
   labels: string[];
+  /** Issues que la PR déclare fermer (« Closes #n », même vers `release/x`, liens manuels). */
   closes: number[];
+  /** Issues liées : `closes` plus l'issue de la branche (`feat/42-…`). */
+  issues?: number[];
   ci: { state: CiState; passed: number; total: number };
   review: ReviewState | null;
   approvals: number;

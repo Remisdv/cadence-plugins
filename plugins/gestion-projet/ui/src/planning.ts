@@ -113,6 +113,30 @@ export function durationOptions(current: number): number[] {
   return [...new Set([...sprintDurations, current])].sort((a, b) => a - b);
 }
 
+/** Poids d'une issue sans story points, dans la capacité et l'avancement (comme le serveur). */
+export const DEFAULT_POINTS = 3;
+
+/** Story points d'une issue : `sp/<n>`, 3 sans estimation. */
+export function issueWeight(issue: Pick<Issue, "points">): number {
+  return issue.points ?? DEFAULT_POINTS;
+}
+
+/** Capacité d'un sprint (règle du serveur) : rythme × jours, arrondie, jamais sous 1 SP. */
+export function capacityFor(pointsPerDay: number, days: number): number {
+  return Math.max(1, Math.round(pointsPerDay * days));
+}
+
+/**
+ * Échéance (dernier jour inclus) d'un sprint de `days` jours commencé le `start`, pauses comprises,
+ * jamais avant `today` — même règle que le serveur (`projet::due_for`).
+ */
+export function dueFor(start: string, days: number, pausedDays: number, today: string): string {
+  const d = new Date(`${start.slice(0, 10)}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + Math.max(1, days) - 1 + pausedDays);
+  const due = d.toISOString().slice(0, 10);
+  return due < today.slice(0, 10) ? today.slice(0, 10) : due;
+}
+
 /** Libellé et ton de la livraison d'un sprint terminé. */
 export function releaseInfo(release: SprintRecord["release"]): {
   label: string;
@@ -195,8 +219,17 @@ export function sprintBoard(issues: Issue[], doneLimit = 5): BoardColumn[] {
   });
 }
 
-/** Jauges « Progression » : fermées, en revue, en cours, à faire. */
-export function statusMeters(counts: Record<IssueStatus, number>) {
+/** Story points par état d'une liste d'issues (3 SP sans estimation). */
+export function pointsByStatus(
+  issues: Pick<Issue, "status" | "points">[],
+): Record<IssueStatus, number> {
+  const out: Record<IssueStatus, number> = { todo: 0, doing: 0, review: 0, done: 0 };
+  for (const i of issues) out[i.status] += issueWeight(i);
+  return out;
+}
+
+/** Jauges « Progression » : fermées, en revue, en cours, à faire (`unit` : « SP » après la valeur). */
+export function statusMeters(counts: Record<IssueStatus, number>, unit?: string) {
   const total = Math.max(
     1,
     statusOrder.reduce((n, s) => n + (counts[s] ?? 0), 0),
@@ -209,7 +242,7 @@ export function statusMeters(counts: Record<IssueStatus, number>) {
   };
   return (["done", "review", "doing", "todo"] as const).map((status) => ({
     label: status === "done" ? "Fermées" : issueStatuses[status].label,
-    value: counts[status] ?? 0,
+    value: unit ? `${counts[status] ?? 0} ${unit}` : (counts[status] ?? 0),
     percent: ((counts[status] ?? 0) / total) * 100,
     tone: tones[status],
   }));
@@ -239,7 +272,7 @@ export function requiredPace(remaining: number, daysLeft: number | null): number
   return Math.round((remaining / (daysLeft + 1)) * 10) / 10;
 }
 
-/** Points d'avancement gagnés depuis la veille (« +3 aujourd'hui »). */
+/** Points de pourcentage gagnés depuis la veille (« +3 aujourd'hui »), dans l'unité du burndown. */
 export function gainedToday(burndown: { remaining: number }[], scope: number): number {
   const [prev, last] = burndown.slice(-2);
   if (!prev || !last || scope === 0) return 0;

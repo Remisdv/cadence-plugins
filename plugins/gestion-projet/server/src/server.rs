@@ -17,8 +17,10 @@
 //!   supprimée). `update_issue` avec `state: closed` passe l'issue à « terminé ».
 //! - Releases : `list_releases`, `create_release` (brouillon par défaut, tag = préfixe + version).
 //! - Sprints automatiques (réservés à l'UI, voir `projet` et `engine`) : `project_start`,
-//!   `project_pause`, `project_resume`, `project_set_duration`. L'issue d'état `cadence/sprints`
-//!   est masquée de `list_issues`.
+//!   `project_pause`, `project_resume`, `project_set_duration` (sprint suivant, ou en cours après
+//!   confirmation), `project_close_sprint` (clôture anticipée), `sprint_issues` (ajouter / retirer
+//!   des issues du sprint en cours), `sprint_backlog` (carnet dans l'ordre de remplissage).
+//!   L'issue d'état `cadence/sprints` est masquée de `list_issues`.
 //! - Roadmap : `roadmap` (jalons, sprints passés et prévus, dates estimées avec fourchette),
 //!   `jalon_save`, `jalon_delete`, `jalon_issues` (jalons rangés dans l'issue d'état).
 //! - Designs (Claude Design) : `list_designs`, `get_design`, `design_add`, `design_update`,
@@ -285,12 +287,48 @@ pub struct ProjectStartParams {
     pub first_version: Option<String>,
 }
 
+/// Sprint concerné par un changement de durée.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DurationApply {
+    /// À partir du sprint suivant : le sprint en cours garde son échéance et sa portée.
+    #[default]
+    Next,
+    /// Aussi au sprint en cours : échéance de son milestone recalculée, portée ajustée.
+    Current,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProjectDurationParams {
     /// Dépôt `owner/name` parmi les dépôts suivis.
     pub repo: String,
-    /// Nouvelle durée d'un sprint en jours (1 à 90) : s'applique au sprint en cours.
+    /// Nouvelle durée d'un sprint en jours (1 à 90).
     pub duration_days: u32,
+    /// `next` (défaut) : à partir du sprint suivant ; `current` : aussi au sprint en cours (son
+    /// échéance sur GitHub change), seulement si l'utilisateur l'a confirmé.
+    #[serde(default)]
+    pub apply: DurationApply,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CloseSprintParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Version du sprint à clore, telle que l'utilisateur l'a vue (refus si le sprint en cours a
+    /// changé entre-temps) ; absente : le sprint en cours.
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SprintIssuesParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Issues à ajouter au sprint en cours (elles prennent sa version).
+    #[serde(default)]
+    pub add: Vec<u32>,
+    /// Issues à retirer du sprint en cours (elles repartent au carnet, sans version).
+    #[serde(default)]
+    pub remove: Vec<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1846,14 +1884,66 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Change la durée des sprints automatiques (en jours : 14 = 2 semaines) : l'échéance du sprint en cours est recalculée et sa portée ajustée à la nouvelle capacité (issues ajoutées par priorité, ou issues « à faire » les moins urgentes retirées). Seulement à la demande de l'utilisateur."
+        description = "Change la durée des sprints automatiques (en jours : 14 = 2 semaines). `apply: next` (défaut) : à partir du sprint suivant, le sprint en cours ne change pas. `apply: current` : aussi le sprint en cours, dont l'échéance (milestone GitHub) est recalculée et la portée ajustée à la nouvelle capacité (issues ajoutées dans l'ordre de la roadmap puis par priorité, ou issues « à faire » les moins urgentes retirées). Seulement à la demande de l'utilisateur, `current` après sa confirmation explicite."
     )]
     async fn project_set_duration(&self, Parameters(p): Parameters<ProjectDurationParams>) -> ToolResult {
         respond(
             async {
                 let repo = self.repo(&p.repo)?;
-                let project = self.set_duration(&repo, p.duration_days).await?;
+                let project = self
+                    .set_duration(&repo, p.duration_days, p.apply == DurationApply::Current)
+                    .await?;
                 Ok(json!({ "repo": repo, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Clôt le sprint automatique en cours avant son échéance, comme à l'échéance : story points relevés, issues ouvertes et PR reportées au sprint suivant (qui commence aujourd'hui), milestone fermé, branche de release fusionnée dans la branche par défaut quand la CI est verte. Seulement après confirmation explicite de l'utilisateur."
+    )]
+    async fn project_close_sprint(&self, Parameters(p): Parameters<CloseSprintParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let closed = self
+                    .load_project(&repo)
+                    .await?
+                    .and_then(|p| p.state.current().map(|c| c.version.clone()));
+                let project = self.close_sprint_now(&repo, p.version.as_deref()).await?;
+                Ok(json!({ "repo": repo, "closed": closed, "project": project_view(&project) }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Ajoute des issues ouvertes au sprint automatique en cours (`add` : elles prennent sa version) ou les en retire (`remove` : elles repartent au carnet, sans version). Rend les issues ajoutées, retirées et celles laissées de côté (fermée, introuvable, déjà à sa place)."
+    )]
+    async fn sprint_issues(&self, Parameters(p): Parameters<SprintIssuesParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                if p.add.is_empty() && p.remove.is_empty() {
+                    bail!("Rien à modifier : précisez `add` ou `remove`.");
+                }
+                if let Some(n) = p.add.iter().find(|n| p.remove.contains(n)) {
+                    bail!("L'issue #{n} est à la fois à ajouter et à retirer.");
+                }
+                self.move_sprint_issues(&repo, &p.add, &p.remove).await
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Carnet du sprint : issues ouvertes sans version, dans l'ordre où les sprints les prennent (jalons de la roadmap dans leur ordre, puis priorité, puis numéro), chacune avec son jalon et son poids en story points (3 sans estimation)."
+    )]
+    async fn sprint_backlog(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                self.read_backlog(&repo).await
             }
             .await,
         )
@@ -2266,6 +2356,9 @@ mod tests {
             "project_pause",
             "project_resume",
             "project_set_duration",
+            "project_close_sprint",
+            "sprint_issues",
+            "sprint_backlog",
             "roadmap",
             "jalon_save",
             "jalon_delete",
@@ -2515,6 +2608,7 @@ mod tests {
             .project_set_duration(Parameters(ProjectDurationParams {
                 repo: "me/app".into(),
                 duration_days: 120,
+                apply: DurationApply::Next,
             }))
             .await
             .unwrap();
@@ -2979,6 +3073,7 @@ mod tests {
             &s.project_set_duration(Parameters(ProjectDurationParams {
                 repo: CRM.into(),
                 duration_days: 2,
+                apply: DurationApply::Current,
             }))
             .await
             .unwrap(),
@@ -3002,5 +3097,170 @@ mod tests {
             .await
             .unwrap();
         assert!(text(&again).contains("déjà démarrés"), "{}", text(&again));
+    }
+
+    /// Constat P15 : les PR de sprint visent `release/x`, pour lesquelles GitHub ne relie pas
+    /// « Closes #n » ; la liste les relie quand même à leur issue (corps, branche, liens manuels).
+    #[tokio::test]
+    async fn links_sprint_pull_requests_to_their_issues() {
+        let (s, fake) = crm().await;
+        {
+            let mut f = fake.lock().unwrap();
+            f.add_pull(
+                18,
+                "feat/2-fiches",
+                "release/0.1.0",
+                "Fiches.\n\nCloses #2",
+                "dev",
+            );
+            f.add_pull(19, "feat/3-import", "release/0.1.0", "Dépend de #2.", "dev");
+            f.add_pull(20, "chore/1-socle", "main", "Ferme #1", "dev");
+            f.add_pull(21, "wip", "release/0.1.0", "", "dev");
+            f.pulls.last_mut().unwrap()["links"] =
+                json!([{ "__typename": "ConnectedEvent", "subject": { "number": 5 }, "source": {} }]);
+        }
+        let list = data(
+            &s.list_pull_requests(Parameters(ListPullRequestsParams {
+                repo: Some(CRM.into()),
+                state: StateFilter::Open,
+            }))
+            .await
+            .unwrap(),
+        );
+        let links: Vec<(u64, Value, Value)> = list["pull_requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["number"].as_u64().unwrap(),
+                    p["closes"].clone(),
+                    p["issues"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            links,
+            [
+                (18, json!([2]), json!([2])),
+                (19, json!([]), json!([3])),
+                (20, json!([1]), json!([1])),
+                (21, json!([5]), json!([5])),
+            ]
+        );
+    }
+
+    /// Écran Sprint : carnet dans l'ordre de la roadmap, ajout et retrait d'issues, durée
+    /// appliquée au sprint suivant sans toucher l'échéance (P09), clôture anticipée.
+    #[tokio::test]
+    async fn manages_the_current_sprint_from_the_screen() {
+        let (s, fake) = crm().await;
+        data(
+            &s.project_start(Parameters(ProjectStartParams {
+                repo: CRM.into(),
+                duration_days: 7,
+                capacity: 10,
+                first_version: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(sprint_issues(&fake, "0.1.0"), [1]);
+        let today = sprint::today();
+        let due = format!("{}T12:00:00Z", sprint::add_days(&today, 6).unwrap());
+        assert_eq!(fake.lock().unwrap().milestones[0]["due_on"], json!(due));
+
+        // Carnet : jalon V1 d'abord (par priorité), puis V2 ; poids en SP.
+        let backlog = data(
+            &s.sprint_backlog(Parameters(RepoParams { repo: CRM.into() }))
+                .await
+                .unwrap(),
+        );
+        let items = backlog["issues"].as_array().unwrap();
+        let numbers: Vec<u64> = items.iter().filter_map(|i| i["number"].as_u64()).collect();
+        assert_eq!(numbers.len(), 22);
+        assert_eq!(&numbers[..3], [2, 3, 4]);
+        assert_eq!(&numbers[19..], [21, 22, 23]);
+        assert_eq!(items[0]["jalon"]["id"], "v1-crm-ecoles");
+        assert_eq!(items[21]["jalon"]["id"], "v2-automatisation-commerciale");
+        assert_eq!((&items[0]["weight"], items[0].get("body")), (&json!(8), None));
+
+        // Ajout et retrait (P11) ; une issue inconnue est signalée sans bloquer.
+        let moved = data(
+            &s.sprint_issues(Parameters(SprintIssuesParams {
+                repo: CRM.into(),
+                add: vec![4, 999],
+                remove: vec![1],
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!((&moved["added"], &moved["removed"]), (&json!([4]), &json!([1])));
+        assert_eq!(moved["skipped"][0]["issue"], 999, "{moved}");
+        assert_eq!(sprint_issues(&fake, "0.1.0"), [4]);
+        let again = data(
+            &s.sprint_issues(Parameters(SprintIssuesParams {
+                repo: CRM.into(),
+                add: vec![4],
+                remove: vec![],
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(again["skipped"][0]["reason"], "déjà dans le sprint");
+
+        // Durée d'un jour, au sprint suivant : l'échéance du sprint en cours ne bouge pas.
+        let next = data(
+            &s.project_set_duration(Parameters(ProjectDurationParams {
+                repo: CRM.into(),
+                duration_days: 1,
+                apply: DurationApply::Next,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(next["project"]["duration_days"], 1);
+        assert_eq!(next["project"]["capacity"], 10);
+        assert_eq!(next["project"]["next_capacity"], 1);
+        assert_eq!(fake.lock().unwrap().milestones[0]["due_on"], json!(due));
+        assert_eq!(sprint_issues(&fake, "0.1.0"), [4]);
+
+        // Clôture anticipée : refusée si le sprint vu n'est plus le sprint en cours.
+        let stale = s
+            .project_close_sprint(Parameters(CloseSprintParams {
+                repo: CRM.into(),
+                version: Some("0.9.0".into()),
+            }))
+            .await
+            .unwrap();
+        assert!(text(&stale).contains("rafraîchissez"), "{}", text(&stale));
+        let closed = data(
+            &s.project_close_sprint(Parameters(CloseSprintParams {
+                repo: CRM.into(),
+                version: Some("0.1.0".into()),
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(
+            (&closed["closed"], &closed["project"]["current"]),
+            (&json!("0.1.0"), &json!("0.2.0"))
+        );
+        {
+            let f = fake.lock().unwrap();
+            assert_eq!(f.milestones[0]["state"], "closed");
+            let state = projet::parse_body(f.issue(24).unwrap()["body"].as_str().unwrap()).unwrap();
+            let (old, cur) = (&state.sprints[0], &state.sprints[1]);
+            assert_eq!(old.ended_on.as_deref(), Some(today.as_str()));
+            assert_eq!(
+                (cur.start_on.as_str(), cur.due_on.as_str()),
+                (today.as_str(), today.as_str())
+            );
+            assert_eq!(cur.carried, [4]);
+            assert!(f.branches.contains_key("release/0.2.0"));
+        }
+        // L'issue ouverte passe au sprint suivant.
+        assert_eq!(sprint_issues(&fake, "0.2.0"), [4]);
+        assert_eq!(summary(&s).await["sprint"]["title"], "0.2.0");
     }
 }

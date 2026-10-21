@@ -44,7 +44,7 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 
 | Vue                             | Section        | État                                                                                                                                                                                                   |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; colonne « En revue » sélectionnable (« Relire », « Relire la sélection (n) ») ; **Conversations du sprint** ; un sprint par dépôt en mode « Tous les dépôts » |
+| Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée confirmée — prochain sprint ou sprint en cours —, « Clore le sprint » en avance, capacité), KPI, kanban par état, burndown et progression **en story points**, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; « Ajouter des issues » (carnet dans l'ordre de la roadmap, cases ou glisser sur le tableau) et retrait d'une carte « À faire » (`sprint_backlog`, `sprint_issues`) ; colonne « En revue » sélectionnable (« Relire », « Relire la sélection (n) »), PR de chaque tâche retrouvée même vers `release/x` ; **Conversations du sprint** ; un sprint par dépôt en mode « Tous les dépôts » (un seul dépôt suivi : il est pris d'office) |
 | Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
 | Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
 | Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
@@ -132,7 +132,7 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `list_milestones`                                     | ✓ versions (sprint / palier), nom (`# Nom`) et thèmes (éléments de liste) lus dans la description                                                            |
 | `create_milestone`                                    | ✓ échéance `AAAA-MM-JJ` (sprint) ou aucune (palier) ; refuse un titre existant                                                                               |
 | `update_milestone`                                    | ✓ titre, description, échéance (`""` la retire), `state: closed` pour clore                                                                                  |
-| `list_pull_requests` (`repo` optionnel)               | ✓ GraphQL : ouvertes (50) et/ou 30 dernières fermées, CI du dernier commit, revues, issues fermées ; erreurs par dépôt dans `errors`                         |
+| `list_pull_requests` (`repo` optionnel)               | ✓ GraphQL : ouvertes (50) et/ou 30 dernières fermées, CI du dernier commit, revues ; `closes` (références de GitHub, « Ferme #n » / « Closes #n » du titre ou du corps — GitHub ne les relie pas vers `release/x` —, liens manuels de la timeline) et `issues` (`closes` + issue de la branche `feat/<n>-…`) ; erreurs par dépôt dans `errors` |
 | `get_pull_request`                                    | ✓ description, checks détaillés, revues, fichiers (sans patchs)                                                                                              |
 | `create_pull_request`                                 | ✓ brouillon par défaut, `base` = branche par défaut ; refuse la branche par défaut comme `head`                                                              |
 | `mark_pull_request_ready`                             | ✓ mutation GraphQL `markPullRequestReadyForReview`                                                                                                           |
@@ -141,8 +141,9 @@ Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dé
 | `merge_pull_request`                                  | ✓ PR prête et sans conflit ; `method` (absente : réglage `merge_method`, squash), `delete_branch` (jamais la branche par défaut, `release/*` ou un fork), `close_issues` ; issues déclarées (« Ferme #12 ») et demandées fermées comme terminées, label `status/*` retiré |
 | `list_releases`                                       | ✓ publiées et brouillons                                                                                                                                     |
 | `create_release`                                      | ✓ brouillon par défaut, tag = préfixe réglé + version ; refuse un tag qui a déjà une release                                                                 |
-| `sprint_summary`                                      | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état, burndown, rythme, retard ; l'échéance est le dernier jour du sprint, début = échéance − (`sprint_length_days` − 1) ; `started`, `start_defaults` tant que les sprints ne sont pas démarrés |
-| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag (voir « Sprints automatiques ») |
+| `sprint_summary`                                      | ✓ milestone daté ouvert le plus proche (ou `version` donnée) : issues par état ; portée, avancement, burndown, rythme et retard **en story points** (3 SP par issue non estimée) ; l'échéance est le dernier jour du sprint, début = échéance − (`sprint_length_days` − 1) ; `started`, `start_defaults` tant que les sprints ne sont pas démarrés |
+| `project_start`, `project_pause`, `project_resume`, `project_set_duration` (`apply` : `next` par défaut, `current` après confirmation), `project_close_sprint` (IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag, clôture anticipée (voir « Sprints automatiques ») |
+| `sprint_issues`, `sprint_backlog`                     | ✓ ajouter / retirer des issues du sprint en cours ; carnet (issues sans version) dans l'ordre de remplissage, avec jalon et poids |
 
 ## Sprints automatiques
 
@@ -156,8 +157,10 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
 - **Un sprint = une version** : milestone daté `0.2.0` et branche `release/0.2.0` (créée depuis la
   branche par défaut, ou depuis la release précédente si elle n'est pas encore fusionnée). Les
   branches `feat/…` partent de la branche de release et y sont fusionnées (skill « Implémenter »).
-- **Remplissage par priorité** : les issues ouvertes sans version, `priority/0` (socle) d'abord
-  puis 1 à 5, sans priorité en dernier, tant qu'elles tiennent dans la capacité ; une issue dont une
+- **Remplissage selon la roadmap** : les issues ouvertes sans version, celles du premier jalon de
+  la Roadmap d'abord, puis du suivant…, puis les issues sans jalon ; dans chaque groupe
+  `priority/0` (socle) d'abord puis 1 à 5, sans priorité en dernier ; tant qu'elles tiennent dans
+  la capacité (rythme × durée, jamais sous 1 SP) ; une issue dont une
   dépendance (« Dépend de #12 ») est ouverte hors du sprint attend ; une issue sans story points
   compte pour 3. Un sprint vide prend au moins une issue, même plus grosse que sa capacité
   (sprints courts), et une durée réduite n'en retire jamais la dernière.
@@ -168,28 +171,36 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
 - **Livraison** : à la fin du sprint, PR `release/x` → branche par défaut, fusionnée dès que la CI
   est verte (bloquée et signalée en cas d'échec ou de conflit), puis release `v0.2.0` publiée.
 - **Pause** : plus de remplissage ni de clôture ; à la reprise, l'échéance est repoussée d'autant.
-  La **durée** se change à tout moment : l'échéance du sprint en cours est recalculée et sa portée
-  ajustée (issues ajoutées, ou issues « à faire » les moins urgentes retirées).
+  La **durée** se change à tout moment, avec confirmation : par défaut à partir du prochain sprint
+  (le sprint en cours garde son échéance) ; ou aussi au sprint en cours, dont l'échéance du
+  milestone est recalculée et la portée ajustée (issues ajoutées, ou issues « à faire » les moins
+  urgentes retirées).
+- **Clore le sprint** en avance (avec confirmation) : comme à l'échéance, issues ouvertes et PR
+  reportées au sprint suivant, qui commence le jour même, puis livraison de la branche de release.
+- **Portée à la main** : « Ajouter des issues » ouvre le carnet dans l'ordre de remplissage (on
+  coche, ou on glisse une issue sur le tableau du sprint) ; une carte « À faire » se retire du
+  sprint (elle repart sans version).
 
 L'état est partagé par toute l'équipe dans une issue du dépôt, label `cadence/sprints`, masquée
 dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait avancer les sprints :
 à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
-Outils `project_start`, `project_pause`, `project_resume`, `project_set_duration` (l'IA ne s'en
-sert qu'à la demande explicite de l'utilisateur) ; `sprint_summary` porte l'état : `started`,
+Outils `project_start`, `project_pause`, `project_resume`, `project_set_duration`,
+`project_close_sprint` (l'IA ne s'en sert qu'à la demande explicite de l'utilisateur),
+`sprint_issues`, `sprint_backlog` ; `sprint_summary` porte l'état : `started`,
 `project` une fois démarrés, sinon `start_defaults` (durée, capacité, version proposées).
 
 ## Roadmap par jalons
 
 Un **jalon** est un objectif nommé (« MVP privé », « Bêta publique ») avec une description et des
 issues ; il s'atteint en un ou plusieurs sprints. Les jalons vivent dans l'issue d'état (rangés dans
-l'ordre de la roadmap, une issue dans un seul jalon) et ne servent qu'à l'affichage : ni branche ni
-milestone, les sprints restent remplis par priorité.
+l'ordre de la roadmap, une issue dans un seul jalon) : ni branche ni milestone, mais leur ordre
+nourrit les sprints (les issues du jalon de tête passent avant les autres, puis par priorité).
 
 L'écran Roadmap montre une frise (sprints terminés, en cours, puis prévus au rythme moyen) et une
 carte par jalon : avancement en story points, sprints concernés, **date de fin estimée** et sa
 **fourchette** (rythmes du meilleur et du moins bon des trois derniers sprints ; ±40 % sans
-historique, ±25 % après un sprint). La prévision rejoue le remplissage du moteur (priorité,
-dépendances, capacité) sur les issues sans version ; un jalon finit avec le sprint qui prend sa
+historique, ±25 % après un sprint). La prévision rejoue le remplissage du moteur (ordre des
+jalons, priorité, dépendances, capacité) sur les issues sans version ; un jalon finit avec le sprint qui prend sa
 dernière issue ouverte. Les dates se précisent à chaque sprint. On y crée, renomme, réordonne et
 supprime les jalons, et on y range les issues ; le skill « Créer des issues depuis un document »
 range les issues qu'il crée dans un jalon (existant ou nouveau), « Proposer des issues » complète

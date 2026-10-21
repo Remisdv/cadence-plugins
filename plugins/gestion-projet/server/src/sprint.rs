@@ -6,11 +6,15 @@
 //! dans un milestone). Un sprint de N jours couvre N jours civils, du début à l'échéance
 //! incluse (un sprint d'un jour commence et finit le même jour) ; sans début connu, il commence
 //! N − 1 jours avant l'échéance (durée de sprint réglée).
+//!
+//! Une seule mesure partout : les **story points** (une issue sans estimation compte
+//! `projet::DEFAULT_POINTS`, comme au remplissage). Portée, avancement, burndown, rythme et
+//! retard sont en SP ; seuls `total` et `closed` comptent des issues.
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::Issue;
+use crate::{model::Issue, projet};
 
 /// Garde-fou : un sprint de plus d'un an est une donnée aberrante, pas un burndown.
 const MAX_POINTS: i64 = 366;
@@ -133,18 +137,24 @@ pub struct BurndownPoint {
     pub remaining: u32,
 }
 
-/// Issues encore ouvertes à la fin du jour `on`. `closed_on` : jour de fermeture de chaque
-/// issue de la portée, `None` si elle est ouverte.
-pub fn remaining_on(closed_on: &[Option<&str>], on: &str) -> u32 {
+/// Issue de la portée : jour de fermeture (`None` si elle est ouverte) et poids en story points.
+pub type Scoped<'a> = (Option<&'a str>, u32);
+
+/// Story points encore ouverts à la fin du jour `on`.
+pub fn remaining_on(scope: &[Scoped], on: &str) -> u32 {
     let on = day(on);
-    closed_on.iter().filter(|c| c.is_none_or(|c| day(c) > on)).count() as u32
+    scope
+        .iter()
+        .filter(|(c, _)| c.is_none_or(|c| day(c) > on))
+        .map(|(_, w)| w)
+        .sum()
 }
 
 /// Burndown jusqu'à aujourd'hui (ou l'échéance si elle est passée) : un point d'origine, le reste
 /// au début du sprint (fin de la veille), puis un point par jour écoulé, en fin de journée. Un
 /// sprint de N jours a donc N + 1 points une fois fini ; un sprint d'un jour en a deux. Vide si le
 /// sprint n'a pas commencé.
-pub fn burndown(closed_on: &[Option<&str>], start: &str, end: &str, today: &str) -> Vec<BurndownPoint> {
+pub fn burndown(scope: &[Scoped], start: &str, end: &str, today: &str) -> Vec<BurndownPoint> {
     let Some((start, _, last)) = window(start, end, today) else {
         return vec![];
     };
@@ -152,28 +162,28 @@ pub fn burndown(closed_on: &[Option<&str>], start: &str, end: &str, today: &str)
     (-1..=days)
         .filter_map(|i| add_days(start, i))
         .map(|date| BurndownPoint {
-            remaining: remaining_on(closed_on, &date),
+            remaining: remaining_on(scope, &date),
             date,
         })
         .collect()
 }
 
-/// Issues fermées par jour écoulé depuis le début du sprint, aujourd'hui compris.
-pub fn velocity(closed_on: &[Option<&str>], start: &str, end: &str, today: &str) -> f32 {
+/// Story points fermés par jour écoulé depuis le début du sprint, aujourd'hui compris.
+pub fn velocity(scope: &[Scoped], start: &str, end: &str, today: &str) -> f32 {
     let Some((start, _, last)) = window(start, end, today) else {
         return 0.0;
     };
-    let closed = closed_on
+    let closed: u32 = scope
         .iter()
-        .flatten()
-        .map(|c| day(c))
-        .filter(|c| *c >= start && *c <= last)
-        .count();
+        .filter_map(|(c, w)| c.map(|c| (day(c), w)))
+        .filter(|(c, _)| *c >= start && *c <= last)
+        .map(|(_, w)| w)
+        .sum();
     let elapsed = days_between(start, last).unwrap_or(0) + 1;
     round1(closed as f32 / elapsed.max(1) as f32)
 }
 
-/// Retard (positif) ou avance (négatif) en jours sur la droite idéale, qui va de `scope` issues
+/// Retard (positif) ou avance (négatif) en jours sur la droite idéale, qui va de `scope` SP
 /// au début du premier jour à zéro à la fin de l'échéance : écart entre le temps écoulé (jours
 /// finis avant aujourd'hui ; toute la durée une fois l'échéance passée) et le moment où la droite
 /// passe par le reste actuel.
@@ -223,6 +233,21 @@ impl StatusCounts {
         }
         c
     }
+
+    /// Story points par état (une issue sans estimation compte `DEFAULT_POINTS`).
+    pub fn points_of(issues: &[Issue]) -> Self {
+        let mut c = StatusCounts::default();
+        for i in issues {
+            let w = projet::weight(i);
+            match i.status {
+                "doing" => c.doing += w,
+                "review" => c.review += w,
+                "done" => c.done += w,
+                _ => c.todo += w,
+            }
+        }
+        c
+    }
 }
 
 /// Rythme d'un sprint, calculé sur ses issues.
@@ -236,20 +261,27 @@ pub struct Pace {
     pub days_left: Option<i64>,
     /// Jours du sprint, début et échéance compris (1 pour un sprint d'un jour).
     pub length_days: Option<i64>,
+    /// Issues de la portée, et issues fermées (compteurs seulement).
     pub total: u32,
     pub closed: u32,
+    /// Avancement en story points (`points_done` sur `points_total`), 0 → 100.
     pub progress: u8,
     pub counts: StatusCounts,
-    /// Story points de toutes les issues estimées (`sp/<n>`).
+    /// Story points par état (mêmes poids que `points_total`).
+    pub points_by_status: StatusCounts,
+    /// Portée en story points : `sp/<n>` de chaque issue, `DEFAULT_POINTS` sans estimation.
     pub points_total: u32,
     /// Story points des issues fermées.
     pub points_done: u32,
-    /// Issues sans estimation en story points.
+    /// Story points encore ouverts.
+    pub points_remaining: u32,
+    /// Issues sans estimation (comptées `DEFAULT_POINTS` chacune).
     pub unestimated: u32,
-    /// Issues fermées par jour écoulé.
+    /// Story points fermés par jour écoulé.
     pub velocity: f32,
-    /// Retard (positif) ou avance (négatif) sur la droite idéale, en jours.
+    /// Retard (positif) ou avance (négatif) sur la droite idéale des SP, en jours.
     pub delay_days: f32,
+    /// Story points restants, jour par jour.
     pub burndown: Vec<BurndownPoint>,
 }
 
@@ -263,19 +295,22 @@ pub fn pace(
     sprint_length_days: u32,
     today: &str,
 ) -> Pace {
-    let closed_on: Vec<Option<&str>> = issues
+    let scope: Vec<Scoped> = issues
         .iter()
         .map(|i| {
-            (i.state == "closed").then(|| {
+            let closed_on = (i.state == "closed").then(|| {
                 i.closed_at
                     .as_deref()
                     .or(i.updated_at.as_deref())
                     .unwrap_or(today)
-            })
+            });
+            (closed_on, projet::weight(i))
         })
         .collect();
     let total = issues.len() as u32;
-    let closed = closed_on.iter().filter(|c| c.is_some()).count() as u32;
+    let closed = scope.iter().filter(|(c, _)| c.is_some()).count() as u32;
+    let points_total: u32 = scope.iter().map(|(_, w)| w).sum();
+    let points_done: u32 = scope.iter().filter(|(c, _)| c.is_some()).map(|(_, w)| w).sum();
     let mut out = Pace {
         start_on: None,
         due_on: None,
@@ -283,14 +318,12 @@ pub fn pace(
         length_days: None,
         total,
         closed,
-        progress: progress(closed, total),
+        progress: progress(points_done, points_total),
         counts: StatusCounts::of(issues),
-        points_total: issues.iter().filter_map(|i| i.points).sum(),
-        points_done: issues
-            .iter()
-            .filter(|i| i.state == "closed")
-            .filter_map(|i| i.points)
-            .sum(),
+        points_by_status: StatusCounts::points_of(issues),
+        points_total,
+        points_done,
+        points_remaining: points_total - points_done,
         unestimated: issues.iter().filter(|i| i.points.is_none()).count() as u32,
         velocity: 0.0,
         delay_days: 0.0,
@@ -309,10 +342,10 @@ pub fn pace(
     let today = day(today);
     out.days_left = days_between(today, &due);
     out.length_days = days_between(&start, &due).map(|d| d + 1);
-    out.burndown = burndown(&closed_on, &start, &due, today);
-    out.velocity = velocity(&closed_on, &start, &due, today);
+    out.burndown = burndown(&scope, &start, &due, today);
+    out.velocity = velocity(&scope, &start, &due, today);
     let last = if today < due.as_str() { today } else { due.as_str() };
-    out.delay_days = delay_days(total, remaining_on(&closed_on, last), &start, &due, today);
+    out.delay_days = delay_days(points_total, remaining_on(&scope, last), &start, &due, today);
     out.start_on = Some(start);
     out.due_on = Some(due);
     out
@@ -325,13 +358,14 @@ mod tests {
     use serde_json::json;
 
     /// 6 issues : 2 fermées le 10, 1 le 12, 1 avant le sprint, 2 ouvertes.
-    const SCOPE: [Option<&str>; 6] = [
-        Some("2026-09-10T15:00:00Z"),
-        Some("2026-09-10T09:00:00Z"),
-        Some("2026-09-12T23:59:00Z"),
-        Some("2026-09-01T10:00:00Z"),
-        None,
-        None,
+    /// (Poids 1 : les SP valent ici des issues.)
+    const SCOPE: [Scoped; 6] = [
+        (Some("2026-09-10T15:00:00Z"), 1),
+        (Some("2026-09-10T09:00:00Z"), 1),
+        (Some("2026-09-12T23:59:00Z"), 1),
+        (Some("2026-09-01T10:00:00Z"), 1),
+        (None, 1),
+        (None, 1),
     ];
 
     #[test]
@@ -401,7 +435,7 @@ mod tests {
 
     #[test]
     fn burns_down_a_one_day_sprint() {
-        let scope = [Some("2026-09-09T10:00:00Z"), None];
+        let scope = [(Some("2026-09-09T10:00:00Z"), 1), (None, 1)];
         let points = |today: &str| -> Vec<(String, u32)> {
             burndown(&scope, "2026-09-09", "2026-09-09", today)
                 .into_iter()
@@ -426,7 +460,12 @@ mod tests {
         // 3 issues fermées en 5 jours (09 → 13).
         assert_eq!(velocity(&SCOPE, "2026-09-09", "2026-09-23", "2026-09-13"), 0.6);
         assert_eq!(
-            velocity(&[Some("2026-09-09")], "2026-09-09", "2026-09-23", "2026-09-09"),
+            velocity(
+                &[(Some("2026-09-09"), 1)],
+                "2026-09-09",
+                "2026-09-23",
+                "2026-09-09"
+            ),
             1.0
         );
         // 14 jours (09 → 22 inclus), 14 issues : la droite perd une issue par jour.
@@ -436,6 +475,35 @@ mod tests {
         assert_eq!(delay_days(14, 2, "2026-09-09", "2026-09-22", "2026-10-15"), 2.0);
         assert_eq!(delay_days(0, 0, "2026-09-09", "2026-09-22", "2026-09-16"), 0.0);
         assert_eq!((progress(11, 18), progress(0, 0), progress(5, 3)), (61, 0, 100));
+    }
+
+    /// Constat P17 (recette du 21/10) : deux issues de 8 SP ouvertes, deux de 1 SP fermées le
+    /// jour même. L'avancement, le burndown et le retard comptent les SP, pas les issues (50 %).
+    #[test]
+    fn measures_the_sprint_in_story_points() {
+        let issues = vec![
+            issue("open", &["sp/8"], None),
+            issue("open", &["sp/8", "status/doing"], None),
+            issue("closed", &["sp/1"], Some("2026-10-21T09:00:00Z")),
+            issue("closed", &["sp/1"], Some("2026-10-21T10:00:00Z")),
+        ];
+        let p = pace(&issues, Some("2026-10-19"), Some("2026-10-21"), 1, "2026-10-21");
+        assert_eq!((p.total, p.closed), (4, 2));
+        assert_eq!((p.points_total, p.points_done, p.progress), (18, 2, 11));
+        let remaining: Vec<u32> = p.burndown.iter().map(|b| b.remaining).collect();
+        assert_eq!(remaining, [18, 18, 18, 16]);
+        assert_eq!(
+            p.points_by_status,
+            StatusCounts {
+                todo: 8,
+                doing: 8,
+                review: 0,
+                done: 2
+            }
+        );
+        // 3 jours, 16 SP restants sur 18 au dernier jour : 1,7 jour de retard.
+        assert_eq!(p.delay_days, 1.7);
+        assert_eq!(p.velocity, 0.7);
     }
 
     fn issue(state: &str, labels: &[&str], closed_at: Option<&str>) -> Issue {
@@ -473,11 +541,16 @@ mod tests {
                 done: 2
             }
         );
+        // Sans estimation : 3 SP chacune, 18 SP en tout, 6 fermés.
+        assert_eq!(
+            (p.points_total, p.points_done, p.points_remaining, p.unestimated),
+            (18, 6, 12, 6)
+        );
         // L'origine (le 08) et cinq jours écoulés.
         assert_eq!(p.burndown.len(), 6);
-        assert_eq!(p.burndown.last().map(|b| b.remaining), Some(4));
-        assert_eq!(p.velocity, 0.4);
-        // 14 j, 6 issues, 4 restantes après 4 jours : la droite y passe au jour 4,7.
+        assert_eq!(p.burndown.last().map(|b| b.remaining), Some(12));
+        assert_eq!(p.velocity, 1.2);
+        // 14 j, 18 SP, 12 restants après 4 jours : la droite y passe au jour 4,7.
         assert_eq!(p.delay_days, -0.7);
 
         // Sprint de 7 jours réglé : début six jours avant l'échéance.

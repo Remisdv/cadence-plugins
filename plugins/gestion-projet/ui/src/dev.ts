@@ -20,7 +20,7 @@ import type {
   RoadmapPlan,
   Version,
 } from "./domain";
-import { sprintStart } from "./planning";
+import { issueWeight, pointsByStatus, sprintStart } from "./planning";
 // Bibliothèque de modèles du serveur, la même qu'en vrai.
 import archiTemplates from "../../server/src/templates.json";
 
@@ -28,7 +28,10 @@ const params = new URLSearchParams(location.search);
 
 /** Sprint 0.1.2 de RemiSDV/cadence : milestone n° 3 (clé du groupe de ses conversations). */
 const SPRINT = { number: 3, title: "0.1.2" };
-const SPRINT_GROUP = { id: `sprint:RemiSDV/cadence:${SPRINT.number}`, label: "Sprint 0.1.2 · RemiSDV/cadence" };
+const SPRINT_GROUP = {
+  id: `sprint:RemiSDV/cadence:${SPRINT.number}`,
+  label: "Sprint 0.1.2 · RemiSDV/cadence",
+};
 
 const issue = (repo: string, n: number, title: string, extra: Partial<Issue>): Issue => {
   const i: Issue = {
@@ -184,7 +187,7 @@ const closedIssue = (n: number, title: string, daysAgo: number, extra: Partial<I
     ...extra,
   });
 
-const sprintIssues: Issue[] = [
+let sprintIssues: Issue[] = [
   closedIssue(141, "Écran de connexion GitHub", 7),
   closedIssue(142, "Device flow GitHub", 5, {
     points: 5,
@@ -199,6 +202,17 @@ const sprintIssues: Issue[] = [
     estimate: "S",
     assignees: ["RemiSDV"],
   }),
+];
+
+/** Issues du carnet (sans version) en plus de celles de la liste « Issues ». */
+const backlogExtra: Issue[] = [
+  issue("RemiSDV/cadence", 163, "Export CSV des sprints", {
+    milestone: null,
+    points: 3,
+    priority: 4,
+    labels: ["type/feat", "sp/3", "priority/4"],
+  }),
+  issue("RemiSDV/cadence", 164, "Thème clair", { milestone: null, priority: 5 }),
 ];
 
 const count = (list: Issue[], status: Issue["status"]) =>
@@ -526,17 +540,23 @@ function sprintSummary(repo: string, title?: string) {
   }
   const list = v.title === "0.1.2" ? sprintIssues : [];
   const closed = count(list, "done");
+  const pointsTotal = list.reduce((sum, i) => sum + issueWeight(i), 0);
+  const pointsDone = list
+    .filter((i) => i.state === "closed")
+    .reduce((sum, i) => sum + issueWeight(i), 0);
   const start = v.kind === "sprint" && v.due_on ? sprintStart(v.due_on, 14) : null;
   const elapsed = start
     ? Math.min(13, Math.max(0, Math.round((Date.parse(day(0)) - Date.parse(start)) / 86_400_000)))
     : 0;
-  // Comme le serveur : l'origine (fin de la veille), puis un point par jour écoulé.
+  // Comme le serveur : l'origine (fin de la veille), puis un point par jour écoulé, en SP.
   const burndown = start
     ? Array.from({ length: elapsed + 2 }, (_, i) => {
         const date = new Date(Date.parse(start) + (i - 1) * 86_400_000).toISOString().slice(0, 10);
         return {
           date,
-          remaining: list.filter((x) => !x.closed_at || x.closed_at.slice(0, 10) > date).length,
+          remaining: list
+            .filter((x) => !x.closed_at || x.closed_at.slice(0, 10) > date)
+            .reduce((sum, x) => sum + issueWeight(x), 0),
         };
       })
     : [];
@@ -556,19 +576,19 @@ function sprintSummary(repo: string, title?: string) {
       length_days: start ? 14 : null,
       total: list.length,
       closed,
-      progress: list.length ? Math.round((closed / list.length) * 100) : 0,
+      progress: pointsTotal ? Math.round((pointsDone / pointsTotal) * 100) : 0,
       counts: {
         todo: count(list, "todo"),
         doing: count(list, "doing"),
         review: count(list, "review"),
         done: closed,
       },
-      points_total: list.reduce((sum, i) => sum + (i.points ?? 0), 0),
-      points_done: list
-        .filter((i) => i.state === "closed")
-        .reduce((sum, i) => sum + (i.points ?? 0), 0),
+      points_by_status: pointsByStatus(list),
+      points_total: pointsTotal,
+      points_done: pointsDone,
+      points_remaining: pointsTotal - pointsDone,
       unestimated: list.filter((i) => i.points === null).length,
-      velocity: 0.6,
+      velocity: 1.9,
       delay_days: 1.4,
       burndown,
     },
@@ -622,10 +642,12 @@ const pulls: PullRequest[] = [
     closes: [149],
     ci: { state: "pending", passed: 1, total: 3 },
   }),
+  // Vers la branche de release : GitHub ne relie pas « Closes #n », la branche suffit.
   pr("RemiSDV/cadence", 162, "fix(api) : pagination des issues au-delà de 100", {
     head: "fix/157-pagination",
     base: "release/0.1.2",
-    closes: [157],
+    closes: [],
+    issues: [157],
     review: "pending",
   }),
   pr("RemiSDV/cadence-plugins", 14, "feat(gestion-projet) : vue Roadmap", {
@@ -802,11 +824,77 @@ const planningTools: MockHostOptions["tools"] = {
     Object.assign(p, { status: "running", paused_since: null });
     return { repo, project: p };
   },
-  project_set_duration: ({ repo, duration_days }) => {
+  project_set_duration: ({ repo, duration_days, apply }) => {
     const p = projects[repo as string]!;
     p.duration_days = Number(duration_days);
-    p.capacity = Math.round(p.points_per_day * p.duration_days);
+    p.next_capacity = Math.max(1, Math.round(p.points_per_day * p.duration_days));
+    const cur = p.sprints[0];
+    if (apply === "current" && cur) {
+      p.capacity = p.next_capacity;
+      cur.capacity = p.next_capacity;
+      const due = new Date(`${cur.start_on}T12:00:00Z`);
+      due.setUTCDate(due.getUTCDate() + p.duration_days - 1 + cur.paused_days);
+      cur.due_on =
+        due.toISOString().slice(0, 10) < day(0) ? day(0) : due.toISOString().slice(0, 10);
+    }
     return { repo, project: p };
+  },
+  project_close_sprint: ({ repo, version: closing }) => {
+    const p = projects[repo as string]!;
+    const cur = p.sprints[0]!;
+    if (closing && closing !== cur.version)
+      throw new Error(`Le sprint en cours est ${cur.version} : rafraîchissez l'écran.`);
+    const carried = sprintIssues.filter((i) => i.state === "open").map((i) => i.number);
+    Object.assign(cur, {
+      ended_on: day(0),
+      done_points: sprintIssues
+        .filter((i) => i.state === "closed")
+        .reduce((sum, i) => sum + issueWeight(i), 0),
+      release: { status: "pending", message: "PR de release ouverte, en attente de la CI." },
+    });
+    const next = "0.1.3";
+    p.sprints.unshift({
+      version: next,
+      branch: `release/${next}`,
+      start_on: day(0),
+      due_on: day(p.duration_days - 1),
+      paused_days: 0,
+      capacity: p.next_capacity,
+      filled: true,
+      carried,
+    });
+    Object.assign(p, { current: next, release_branch: `release/${next}`, carried });
+    return { repo, closed: closing, project: p };
+  },
+  sprint_backlog: ({ repo }) => ({
+    repo,
+    issues: [...issues, ...backlogExtra]
+      .filter((i) => i.repo === repo && i.state === "open" && !i.milestone)
+      .map((i) => ({
+        ...i,
+        jalon: i.number === 163 ? { id: "mvp-prive", name: "MVP privé" } : null,
+        weight: issueWeight(i),
+      }))
+      .sort((a, b) => (a.jalon ? 0 : 1) - (b.jalon ? 0 : 1)),
+  }),
+  sprint_issues: ({ repo, add, remove }) => {
+    const added: number[] = [];
+    const removed: number[] = [];
+    for (const n of (add as number[] | undefined) ?? []) {
+      const i = [...issues, ...backlogExtra].find((x) => x.repo === repo && x.number === n);
+      if (!i) continue;
+      i.milestone = SPRINT.title;
+      if (!sprintIssues.includes(i)) sprintIssues.push(i);
+      added.push(n);
+    }
+    for (const n of (remove as number[] | undefined) ?? []) {
+      const i = sprintIssues.find((x) => x.number === n);
+      if (!i) continue;
+      i.milestone = null;
+      sprintIssues = sprintIssues.filter((x) => x !== i);
+      removed.push(n);
+    }
+    return { repo, version: SPRINT.title, added, removed, skipped: [] };
   },
   list_pull_requests: ({ repo, state }) => {
     const wanted = (state as string | undefined) ?? "open";
@@ -900,7 +988,13 @@ const sprintConversations: NonNullable<MockHostOptions["conversations"]>["conver
     updatedAt: at(4),
     turns: 4,
   },
-  { title: "Question sur les labels", state: "idle", createdAt: at(50), updatedAt: at(48), turns: 2 },
+  {
+    title: "Question sur les labels",
+    state: "idle",
+    createdAt: at(50),
+    updatedAt: at(48),
+    turns: 2,
+  },
 ];
 
 export const devHost: MockHostOptions = {

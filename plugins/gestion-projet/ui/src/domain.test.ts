@@ -12,6 +12,7 @@ import {
   issueKey,
   isStarted,
   isViewId,
+  linkedIssues,
   priorityInfo,
   pullRequestFor,
   repoShortName,
@@ -83,17 +84,24 @@ describe("groupes de conversations", () => {
 
   it("construit le contexte de la revue groupée", () => {
     const group = sprintGroup("me/app", { number: 3, title: "0.3.0" });
-    expect(reviewContext("me/app", [{ issue: 42, pr: 51 }, { issue: 43, pr: null }], group)).toEqual(
-      {
-        type: "review",
-        repo: "me/app",
-        items: [
+    expect(
+      reviewContext(
+        "me/app",
+        [
           { issue: 42, pr: 51 },
           { issue: 43, pr: null },
         ],
         group,
-      },
-    );
+      ),
+    ).toEqual({
+      type: "review",
+      repo: "me/app",
+      items: [
+        { issue: 42, pr: 51 },
+        { issue: 43, pr: null },
+      ],
+      group,
+    });
     expect(reviewContext("me/app", [])).not.toHaveProperty("group");
   });
 
@@ -109,6 +117,20 @@ describe("groupes de conversations", () => {
     expect(pullRequestFor(pulls, { repo: "me/app", number: 42 })?.number).toBe(52);
     expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 42 })?.number).toBe(51);
     expect(pullRequestFor(pulls, { repo: "me/app", number: 44 })).toBeNull();
+  });
+
+  it("relie une PR de sprint (vers release/x) par sa branche quand GitHub ne la relie pas", () => {
+    // Constat P15 : PR #18 « Closes #15 » et #19 (branche feat/16-…) vers release/0.2.0.
+    const pulls = [
+      { repo: "me/app", number: 18, state: "draft", closes: [15], issues: [15] },
+      { repo: "me/app", number: 19, state: "draft", closes: [], issues: [16] },
+      { repo: "me/app", number: 20, state: "open", closes: [16], issues: [16] },
+    ] as PullRequest[];
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 15 })?.number).toBe(18);
+    // « Closes » l'emporte sur la branche ; sans lui, la branche suffit.
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 16 })?.number).toBe(20);
+    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 16 })?.number).toBe(19);
+    expect(linkedIssues({ closes: [3] })).toEqual([3]);
   });
 
   it("décrit une conversation : issues, état, IA", () => {

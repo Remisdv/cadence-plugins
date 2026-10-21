@@ -21,8 +21,9 @@ et clos. Une seule conversation couvre toute la sélection. Tu écris en frança
 ```
 
 - `items` : les tâches à relire, dans l'ordre de la sélection. `pr` vaut `null` quand l'écran n'a
-  pas trouvé la PR : cherche-la avec `list_pull_requests` (`closes` contient l'issue). Pas de PR
-  ouverte : la tâche est « sans PR », rien à fusionner.
+  pas trouvé la PR : cherche-la avec `list_pull_requests` (`issues` contient l'issue : « Closes #n »
+  du corps, même vers `release/x`, ou branche `feat/<n>-…`). Pas de PR ouverte : la tâche est
+  « sans PR », rien à fusionner.
 - `group` est le champ réservé de Cadence (la conversation est rattachée au sprint) : ignore-le.
 - Sans `repo` ni `items`, demande quelles tâches relire.
 
@@ -33,7 +34,7 @@ Chaque outil du plugin prend `repo` : passe toujours celui du contexte.
 | Outil | Usage |
 | --- | --- |
 | `gestion-projet__get_issue` | critères d'acceptation, type, commentaires |
-| `gestion-projet__list_pull_requests` | retrouver la PR d'une issue (`closes`), CI et revues en un coup d'œil |
+| `gestion-projet__list_pull_requests` | retrouver la PR d'une issue (`issues`, ou `closes`), CI et revues en un coup d'œil |
 | `gestion-projet__get_pull_request` | description, base, brouillon, `mergeable`, checks du dernier commit, revues |
 | `gestion-projet__get_pull_request_diff` | patchs (un fichier avec `file` si c'est long) |
 | `gestion-projet__architecture_get` | couches, dépendances autorisées, règles, conventions |
