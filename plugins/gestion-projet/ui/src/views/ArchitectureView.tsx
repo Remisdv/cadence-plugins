@@ -25,13 +25,14 @@ import {
   Textarea,
   cn,
 } from "@cadence/ui";
-import type {
-  ArchiLayer,
-  ArchiService,
-  ArchiTemplate,
-  Architecture,
-  ArchitectureResponse,
-  ArchitectureSource,
+import {
+  architectureContext,
+  type ArchiLayer,
+  type ArchiService,
+  type ArchiTemplate,
+  type Architecture,
+  type ArchitectureResponse,
+  type ArchitectureSource,
 } from "../domain";
 import {
   BOX_H,
@@ -98,8 +99,9 @@ export function ArchitectureView() {
     draft &&
     update({ ...draft, services: draft.services.map((s) => (s.id === next.id ? next : s)) });
   const adapt = (serviceId?: string) =>
+    repo &&
     cadence
-      .runAction("adapter-architecture", { repo, ...(serviceId ? { service: serviceId } : {}) })
+      .runAction("adapter-architecture", architectureContext(repo, serviceId))
       .catch(notifyError);
 
   let body: ReactNode;

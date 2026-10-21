@@ -93,9 +93,17 @@ schema = "settings.schema.json"
 # group = { id = "sprint:<repo>:<n° du milestone>", label = "Sprint <version> · <repo>" } :
 # Cadence les masque du chat global, l'écran « Sprint en cours » les liste.
 
-# Contexte « document » : lancée seulement depuis l'écran Issues (ou Designs) une fois le document
-# choisi, { type = "document", repo, document = { text?, files? } } ou { …, design = "<id>" } ;
-# jamais sans document depuis la barre du plugin.
+# Toutes les actions déclarent un contexte : Cadence ne met dans la barre du plugin que les actions
+# sans contexte, qui partiraient d'un clic sans dépôt ni choix (tour d'IA lancé par erreur). Chacune
+# part de sa vue, avec `type` égal au contexte déclaré (exigé par Cadence) :
+# - document : écran Issues (ou Designs) une fois le document choisi,
+#   { type, repo, document = { text?, files? } } ou { …, design = "<id>" } ;
+# - architecture : page Architecture, { type, repo, service? } ;
+# - sprint : « Développer le sprint » de l'écran Sprint, { type, repo, group? } ;
+# - pulls : boîte « Relire les PR » (PR cochées, aucune par défaut) ou détail d'une PR,
+#   { type, repo, pulls = [numéros] } ;
+# - demande-design : boîte « Créer un design » (demande écrite), { type, repo, request, design? } ;
+# - planning : « Planifier avec l'IA » de la page Planning, { type, repo }.
 [[actions]]
 id = "extraire-issues"
 label = "Créer des issues depuis un document"
@@ -115,18 +123,21 @@ id = "adapter-architecture"
 label = "Adapter le code à l'architecture"
 skill = "adapter-architecture"
 mode = "chat"
+context = "architecture"
 
 [[actions]]
 id = "developper-sprint"
 label = "Développer le sprint"
 skill = "developper-sprint"
 mode = "chat"
+context = "sprint"
 
 [[actions]]
 id = "relire-pr"
 label = "Relire les PR"
 skill = "relire-pr"
 mode = "chat"
+context = "pulls"
 
 [[actions]]
 id = "relire-valider"
@@ -140,12 +151,14 @@ id = "creer-design"
 label = "Créer un design"
 skill = "creer-design"
 mode = "chat"
+context = "demande-design"
 
 [[actions]]
 id = "planifier"
 label = "Planifier avec l'IA"
 skill = "planifier"
 mode = "chat"
+context = "planning"
 
 [[actions]]
 id = "completer-issue"

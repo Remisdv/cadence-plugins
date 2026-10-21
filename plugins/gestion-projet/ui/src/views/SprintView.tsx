@@ -113,7 +113,9 @@ type SprintRef = Pick<Version, "number" | "title">;
 /** Lance « Développer le sprint » sur un dépôt, rattaché au sprint affiché s'il est connu. */
 function developSprint(repo: string, sprint: SprintRef | null | undefined) {
   const group = sprint ? sprintGroup(repo, sprint) : null;
-  void cadence.runAction("developper-sprint", { repo, ...withGroup(group) }).catch(notifyError);
+  void cadence
+    .runAction("developper-sprint", { type: "sprint", repo, ...withGroup(group) })
+    .catch(notifyError);
 }
 
 const DEVELOP_TITLE =

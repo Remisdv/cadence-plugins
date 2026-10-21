@@ -28,7 +28,13 @@ import {
   Textarea,
   cn,
 } from "@cadence/ui";
-import type { Planning, PlanningPerson, PlanningResponse, PlanningTask } from "../domain";
+import {
+  planningContext,
+  type Planning,
+  type PlanningPerson,
+  type PlanningResponse,
+  type PlanningTask,
+} from "../domain";
 import { EmptyCard, Loading, NoRepos, PageHeader, SegmentedTabs, ToolError } from "../components";
 import {
   addDays,
@@ -97,8 +103,9 @@ export function PlanningView() {
     }
   };
   const plan = () =>
+    repo &&
     cadence
-      .runAction("planifier", { repo })
+      .runAction("planifier", planningContext(repo))
       .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
 
   let body;

@@ -1,7 +1,8 @@
 /**
  * Détail d'une issue dans Cadence (maquette Cadence 1 « Issue-Detail ») : description rendue,
  * commentaires, et à droite les propriétés (version, jalon, labels, estimation, priorité, assignés),
- * les PR liées et les actions « Implémenter », « Relire », « Compléter » et « Ouvrir sur GitHub ».
+ * les PR liées et les actions « Implémenter », « Relire » (seulement avec une PR ouverte liée),
+ * « Compléter » et « Ouvrir sur GitHub ».
  * Route : `issue` avec `{ repo, number }` (et `from`, la vue où revenir).
  * Outils : `get_issue` (commentaires compris), `list_pull_requests`, `roadmap`.
  */
@@ -23,7 +24,14 @@ import {
   type RoadmapPlan,
 } from "../domain";
 import { CiStatus, Diffstat, Loading, PrStateIcon, ToolError, VersionBadge } from "../components";
-import { parseIssueRoute, pullRequestFor, pullsForIssue, type IssueDetail } from "../issues";
+import {
+  parseIssueRoute,
+  pullRequestFor,
+  pullsForIssue,
+  reviewBlockReason,
+  type IssueDetail,
+  type PullsLookup,
+} from "../issues";
 import { Markdown } from "../MarkdownText";
 import { formatAgo, isOpenPr, plural, prStateMeta } from "../planning";
 import { useTool } from "../useTool";
@@ -110,8 +118,9 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
   const comments = issue.comment_list ?? [];
 
   return (
-    <div className="flex min-h-0 grow">
-      <div className="flex min-w-0 grow flex-col overflow-hidden">
+    // Fenêtre étroite (moins de 640 px) : les propriétés et actions passent sous la description.
+    <div className="flex min-h-0 grow max-[640px]:flex-col max-[640px]:overflow-y-auto">
+      <div className="flex min-w-0 grow flex-col overflow-hidden max-[640px]:shrink-0 max-[640px]:grow-0 max-[640px]:overflow-visible">
         <div className="shrink-0 border-b border-line px-6 pt-5 pb-4">
           <div className="flex flex-wrap items-center gap-[9px]">
             <Badge tone={closed ? "purple" : "green"} icon={closed ? "check" : "issue"}>
@@ -134,7 +143,7 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
           </h2>
         </div>
 
-        <div className="min-h-0 grow overflow-y-auto px-6 py-[18px]">
+        <div className="min-h-0 grow overflow-y-auto px-6 py-[18px] max-[640px]:overflow-visible">
           {issue.body?.trim() ? (
             <Markdown source={issue.body} />
           ) : (
@@ -164,7 +173,7 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
         </div>
       </div>
 
-      <aside className="flex w-[320px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line bg-panel px-4 py-3">
+      <aside className="flex w-[320px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line bg-panel px-4 py-3 max-[640px]:w-full max-[640px]:overflow-visible max-[640px]:border-t max-[640px]:border-l-0">
         <dl className="flex flex-col">
           <Property label="Version">
             {issue.milestone ? <VersionBadge version={issue.milestone} /> : <Empty />}
@@ -257,6 +266,8 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
         <IssueActions
           issue={issue}
           openPr={pullRequestFor(allPulls, issue)?.number ?? null}
+          pulls={pulls.data ? "loaded" : pulls.error ? "failed" : "loading"}
+          linkedCount={linked.length}
           onChanged={() => setTick((t) => t + 1)}
         />
       </aside>
@@ -280,10 +291,16 @@ function Empty({ children = "—" }: { children?: ReactNode }) {
 function IssueActions({
   issue,
   openPr,
+  pulls,
+  linkedCount,
   onChanged,
 }: {
   issue: IssueDetail;
   openPr: number | null;
+  /** Lecture des PR : tant qu'elle court, on ne sait pas s'il y a une PR à relire. */
+  pulls: PullsLookup;
+  /** PR liées, ouvertes ou non (pour le libellé de « Relire » indisponible). */
+  linkedCount: number;
   onChanged: () => void;
 }) {
   const [run, setRun] = useState<RunUpdate | null>(null);
@@ -306,7 +323,10 @@ function IssueActions({
       notifyError(e);
     }
   };
+  // « Relire » demande une PR ouverte liée : sans elle, le tour d'IA ne servirait à rien.
+  const reviewBlocked = reviewBlockReason(openPr, pulls, linkedCount);
   const review = () =>
+    !reviewBlocked &&
     cadence
       .runAction(
         "relire-valider",
@@ -342,18 +362,26 @@ function IssueActions({
             Implémenter
           </Button>
           <div className="flex gap-2">
-            <Button
-              className="flex-1"
-              icon="review"
-              onClick={() => void review()}
+            {/* Le titre est porté par l'enveloppe : un bouton désactivé n'affiche pas d'infobulle. */}
+            <span
+              className="flex flex-1"
               title={
-                openPr
+                reviewBlocked ??
+                (openPr
                   ? `L'IA relit la PR #${openPr} (diff, CI, critères), puis, après votre accord, fusionne et ferme l'issue`
-                  : "L'IA cherche la PR de l'issue, la relit, puis, après votre accord, fusionne et ferme l'issue"
+                  : "L'IA cherche la PR de l'issue, la relit, puis, après votre accord, fusionne et ferme l'issue")
               }
             >
-              Relire
-            </Button>
+              <Button
+                className="flex-1"
+                icon="review"
+                disabled={!!reviewBlocked}
+                aria-label={reviewBlocked ? `Relire — ${reviewBlocked}` : undefined}
+                onClick={() => void review()}
+              >
+                Relire
+              </Button>
+            </span>
             <Button
               className="flex-1"
               variant="ghost"
@@ -372,9 +400,9 @@ function IssueActions({
       {!open && issue.closed_at && (
         <p className="text-center text-tiny text-tx3">Fermée {formatAgo(issue.closed_at)}.</p>
       )}
-      {open && openPr === null && issue.status === "review" && (
+      {open && pulls === "loaded" && openPr === null && issue.status === "review" && (
         <p className="text-center text-tiny leading-[1.55] text-tx3">
-          En revue, sans PR ouverte trouvée : « Relire » la cherchera.
+          En revue, mais aucune PR ouverte ne ferme cette issue ni ne part de sa branche.
         </p>
       )}
       {issue.comments > 0 && !issue.comment_list && (

@@ -10,7 +10,7 @@ qu'il fait. Tu écris en français.
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>", "service": "<identifiant>" }` — `service` facultatif : sans lui, tout le
+`{ "type": "architecture", "repo": "<owner/name>", "service": "<identifiant>" }` — `service` facultatif : sans lui, tout le
 dépôt. Sans `repo`, demande sur quel dépôt travailler.
 
 ## Outils

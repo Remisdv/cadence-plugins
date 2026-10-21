@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { parse } from "smol-toml";
 import {
   aiLabel,
+  architectureContext,
   conversationIssues,
   conversationStates,
+  designRequestContext,
   displayLabels,
   estimateLabel,
   issueContext,
@@ -12,7 +14,9 @@ import {
   issueKey,
   isStarted,
   isViewId,
+  planningContext,
   priorityInfo,
+  pullsContext,
   repoShortName,
   reviewContext,
   sprintGroup,
@@ -200,5 +204,58 @@ describe("sprints automatiques", () => {
     };
     expect(isStarted({ ...project, status: "running", sprints: [sprint] })).toBe(true);
     expect(isStarted({ ...project, status: "paused", sprints: [sprint] })).toBe(true);
+  });
+});
+
+describe("actions : jamais d'un clic depuis la barre du plugin", () => {
+  const manifest = () =>
+    parse(readFileSync(new URL("../../plugin.toml", import.meta.url), "utf8")) as {
+      actions: { id: string; context?: string }[];
+    };
+
+  it("déclare un contexte pour chaque action (la barre n'affiche que celles sans contexte)", () => {
+    const loose = manifest().actions.filter((a) => !a.context);
+    expect(loose.map((a) => a.id)).toEqual([]);
+  });
+
+  it("construit des contextes du type déclaré par l'action", () => {
+    const declared = Object.fromEntries(manifest().actions.map((a) => [a.id, a.context]));
+    expect(pullsContext("me/app", [52, 51, 52]).type).toBe(declared["relire-pr"]);
+    expect(architectureContext("me/app").type).toBe(declared["adapter-architecture"]);
+    expect(planningContext("me/app").type).toBe(declared["planifier"]);
+    expect(designRequestContext("me/app", "Écran de connexion")?.type).toBe(
+      declared["creer-design"],
+    );
+    // SprintView lance `developper-sprint` avec `{ type: "sprint", repo, group? }`.
+    expect(declared["developper-sprint"]).toBe("sprint");
+  });
+
+  it("relit seulement les PR choisies, sans doublon", () => {
+    expect(pullsContext("me/app", [52, 51, 52])).toEqual({
+      type: "pulls",
+      repo: "me/app",
+      pulls: [51, 52],
+    });
+  });
+
+  it("n'envoie le service ou le design que s'il est choisi", () => {
+    expect(architectureContext("me/app", null)).toEqual({ type: "architecture", repo: "me/app" });
+    expect(architectureContext("me/app", "api")).toEqual({
+      type: "architecture",
+      repo: "me/app",
+      service: "api",
+    });
+    expect(designRequestContext("me/app", "  ")).toBeNull();
+    expect(designRequestContext("me/app", " Accueil mobile ", "accueil")).toEqual({
+      type: "demande-design",
+      repo: "me/app",
+      request: "Accueil mobile",
+      design: "accueil",
+    });
+    expect(designRequestContext("me/app", "Accueil", "")).toEqual({
+      type: "demande-design",
+      repo: "me/app",
+      request: "Accueil",
+    });
   });
 });

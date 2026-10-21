@@ -11,7 +11,7 @@ lancement, congés en font partie. Tu écris en français.
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>" }`. Sans `repo`, demande sur quel dépôt travailler.
+`{ "type": "planning", "repo": "<owner/name>" }`. Sans `repo`, demande sur quel dépôt travailler.
 
 ## Outils
 

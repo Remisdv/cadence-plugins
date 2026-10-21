@@ -1,6 +1,6 @@
 ---
 name: creer-design
-description: Crée ou modifie un design dans Claude Design (écrans d'une fonctionnalité, d'un parcours, d'une page) à partir d'une demande, des designs existants et de l'interface actuelle de l'application, le fait valider, puis l'ajoute au projet et l'importe dans le dépôt (design/<id>/, branche et PR) pour qu'il serve de référence aux issues et à l'implémentation. À utiliser depuis le bouton « Créer un design » ou quand l'utilisateur demande un design ou une maquette.
+description: Crée ou modifie un design dans Claude Design (écrans d'une fonctionnalité, d'un parcours, d'une page) à partir d'une demande, des designs existants et de l'interface actuelle de l'application, le fait valider, puis l'ajoute au projet et l'importe dans le dépôt (design/<id>/, branche et PR) pour qu'il serve de référence aux issues et à l'implémentation. À utiliser depuis la boîte « Créer un design » (demande écrite) ou quand l'utilisateur demande un design ou une maquette.
 ---
 
 # Créer un design
@@ -10,8 +10,10 @@ qui existe, puis tu les ranges dans le projet. Tu écris en français.
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>" }`, éventuellement `"design": "<identifiant>"` pour modifier un design du
-projet. Sans `repo`, demande sur quel dépôt travailler.
+`{ "type": "demande-design", "repo": "<owner/name>", "request": "<demande écrite>" }`,
+éventuellement `"design": "<identifiant>"` pour modifier un design du projet. `request` est ce que
+l'utilisateur a écrit dans la boîte « Créer un design » : pars de là sans la redemander. Depuis le
+chat, sans contexte : demande le dépôt et la demande si elles manquent.
 
 ## Outils
 
@@ -26,8 +28,8 @@ projet. Sans `repo`, demande sur quel dépôt travailler.
 
 ## Démarche
 
-1. **Comprendre** la demande : écrans, parcours, états (vide, chargement, erreur), plateforme
-   (bureau, mobile). Une question groupée si l'essentiel manque.
+1. **Comprendre** la demande (`request`) : écrans, parcours, états (vide, chargement, erreur),
+   plateforme (bureau, mobile). Une question groupée seulement si l'essentiel manque.
 2. **Repartir de l'existant** : designs du projet (couleurs, typographie, composants), et dans le
    worktree les tokens et composants du front (thème, Tailwind, bibliothèque UI) — le design doit
    pouvoir s'implémenter avec eux. Si un design système existe sur claude.ai, utilise-le.

@@ -3,7 +3,9 @@
  * suivis (« Tous les dépôts », avec une colonne dépôt), via l'outil `list_issues`. Tri par
  * priorité (comme le remplissage des sprints), ordre de la roadmap, numéro ou activité ; un clic
  * ouvre le détail (vue `issue`). « Nouvelle issue » crée une issue à la main (`create_issue`),
- * « Depuis un document » demande le document avant de lancer l'IA.
+ * « Depuis un document » demande le document avant de lancer l'IA. Une issue créée apparaît tout
+ * de suite dans la liste (même si GitHub la renvoie avec retard) avec une confirmation qui mène
+ * à son détail.
  */
 import { useEffect, useState } from "react";
 import { cadence, isCadenceError, type RunUpdate } from "@cadence/plugin-sdk";
@@ -12,12 +14,10 @@ import {
   Button,
   Callout,
   Card,
-  Icon,
   SectionLabel,
   Select,
   Spinner,
   StatusDot,
-  cn,
 } from "@cadence/ui";
 import {
   displayLabels,
@@ -35,8 +35,24 @@ import {
   type IssueList,
   type RoadmapPlan,
 } from "../domain";
-import { NoRepos, ToolError } from "../components";
-import { isIssueSort, issueRoute, issueSorts, sortIssues, type IssueSort } from "../issues";
+import {
+  NoRepos,
+  PageHeader,
+  SegmentedTabs,
+  SelectionLabel,
+  Toast,
+  ToolError,
+  type ToastMessage,
+} from "../components";
+import {
+  isIssueSort,
+  issueRoute,
+  issueSorts,
+  sortIssues,
+  stillMissing,
+  withCreated,
+  type IssueSort,
+} from "../issues";
 import { useRepos } from "../useRepos";
 import { useTool } from "../useTool";
 import { DocumentDialog } from "./DocumentDialog";
@@ -72,7 +88,9 @@ function useJalonOrder(repos: string[], enabled: boolean): Map<string, number> |
     if (!enabled || !key) return;
     let alive = true;
     void Promise.all(
-      key.split(",").map((repo) => cadence.call<RoadmapPlan>("roadmap", { repo }).catch(() => null)),
+      key
+        .split(",")
+        .map((repo) => cadence.call<RoadmapPlan>("roadmap", { repo }).catch(() => null)),
     ).then((plans) => {
       if (!alive) return;
       const map = new Map<string, number>();
@@ -113,6 +131,9 @@ export function IssuesView() {
     ready,
   );
   const [runs, setRuns] = useState<Record<string, RunUpdate>>({});
+  // Issues créées dans cette visite, gardées tant que la liste lue sur GitHub ne les a pas.
+  const [created, setCreated] = useState<Issue[]>([]);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const implement = async (issue: Issue) => {
     try {
@@ -135,37 +156,44 @@ export function IssuesView() {
 
   // Une réponse d'une autre sélection (le temps du rechargement) n'est pas affichée.
   const current = data && (repo ? data.repo === repo : data.repo === null) ? data : null;
-  const issues = sortIssues(current?.issues ?? [], sort, (i) => jalonOrder?.get(issueKey(i)) ?? null);
+  useEffect(() => {
+    if (current) setCreated((c) => (c.length ? stillMissing(c, current.issues) : c));
+  }, [current]);
+  const listed = current ? withCreated(current.issues, created, { repo, state }) : [];
+  const issues = sortIssues(listed, sort, (i) => jalonOrder?.get(issueKey(i)) ?? null);
+
+  const onCreated = (issue: Issue) => {
+    setDialog(null);
+    setCreated((c) => [issue, ...c.filter((i) => issueKey(i) !== issueKey(issue))]);
+    setToast({
+      id: Date.now(),
+      text: (
+        <>
+          Issue <span className="mono">#{issue.number}</span> créée
+          {!repo && ` sur ${repoShortName(issue.repo)}`}.
+        </>
+      ),
+      action: {
+        label: `Voir #${issue.number}`,
+        onClick: () => void cadence.navigate("issue", issueRoute(issue, "issues")),
+      },
+    });
+    reload();
+  };
   const byStatus = statusOrder
     .map((s) => ({ status: s, items: issues.filter((i) => i.status === s) }))
     .filter((g) => g.items.length > 0);
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
-        <Icon name="issue" size={17} className="text-clay" />
-        <h1 className="font-display text-title">Issues</h1>
-        {repo && <span className="mono text-caption text-tx3">{repo}</span>}
-        {all && repos && (
-          <span className="text-caption text-tx3">Tous les dépôts · {repos.length}</span>
-        )}
-        <div className="grow" />
-        <div role="tablist" aria-label="État" className="flex gap-1 rounded-control bg-p2 p-0.5">
-          {filters.map((f) => (
-            <button
-              key={f.id}
-              role="tab"
-              aria-selected={state === f.id}
-              onClick={() => setState(f.id)}
-              className={cn(
-                "h-[26px] rounded-[6px] px-2.5 text-caption font-medium text-tx3",
-                state === f.id && "bg-p4 text-tx",
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+      <PageHeader
+        icon="issue"
+        title="Issues"
+        subtitle={
+          (repo || (all && repos)) && <SelectionLabel repo={repo} count={repos?.length ?? 0} />
+        }
+      >
+        <SegmentedTabs items={filters} value={state} onChange={setState} label="État" />
         <Select
           size="sm"
           aria-label="Trier"
@@ -207,7 +235,7 @@ export function IssuesView() {
           onClick={reload}
           disabled={!ready}
         />
-      </header>
+      </PageHeader>
 
       <main className="min-h-0 grow overflow-y-auto p-5">
         {reposError && (
@@ -263,15 +291,13 @@ export function IssuesView() {
           repos={followed}
           initialRepo={repo}
           onClose={() => setDialog(null)}
-          onCreated={() => {
-            setDialog(null);
-            reload();
-          }}
+          onCreated={onCreated}
         />
       )}
       {dialog === "document" && (
         <DocumentDialog repos={followed} initialRepo={repo} onClose={() => setDialog(null)} />
       )}
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
   );
 }
@@ -294,53 +320,57 @@ function IssueRow({
 }) {
   const running = run && (run.status === "queued" || run.status === "running");
   return (
-    <div className="group flex min-h-[46px] items-center gap-3 px-3.5 py-2">
+    <div className="group relative flex min-h-[46px] items-center gap-3 px-3.5 py-2">
       {showRepo && (
         <span className="mono w-[120px] shrink-0 truncate text-caption text-tx3" title={issue.repo}>
           {repoShortName(issue.repo)}
         </span>
       )}
       <span className="mono w-[42px] shrink-0 text-tiny text-tx3">#{issue.number}</span>
-      <div className="min-w-0 grow">
-        <button
-          className="block max-w-full truncate text-left text-body text-tx hover:text-clay"
-          onClick={onOpen}
-          title="Ouvrir le détail"
-        >
-          {issue.title}
-        </button>
-        {run && (
-          <div className="mt-0.5 flex items-center gap-1.5 text-caption text-tx3">
-            {running && <Spinner size={11} />}
-            Implémentation : {run.message ?? run.status}
-          </div>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
-        {issue.priority !== null && issue.priority !== undefined && (
-          <span title={priorityInfo(issue.priority).title}>
-            <Badge tone={priorityInfo(issue.priority).tone}>
-              {priorityInfo(issue.priority).label}
+      {/* Fenêtre étroite : les badges passent sous le titre plutôt que de l'écraser. */}
+      <div className="flex min-w-0 grow flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="min-w-[min(100%,200px)] flex-1">
+          <button
+            className="block max-w-full truncate text-left text-body text-tx hover:text-clay"
+            onClick={onOpen}
+            title="Ouvrir le détail"
+          >
+            {issue.title}
+          </button>
+          {run && (
+            <div className="mt-0.5 flex items-center gap-1.5 text-caption text-tx3">
+              {running && <Spinner size={11} />}
+              Implémentation : {run.message ?? run.status}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {issue.priority !== null && issue.priority !== undefined && (
+            <span title={priorityInfo(issue.priority).title}>
+              <Badge tone={priorityInfo(issue.priority).tone}>
+                {priorityInfo(issue.priority).label}
+              </Badge>
+            </span>
+          )}
+          {issue.type && <Badge tone={issueTypeTone[issue.type]}>{issue.type}</Badge>}
+          {displayLabels(issue.labels)
+            .slice(0, 2)
+            .map((l) => (
+              <Badge key={l} tone="muted">
+                {l}
+              </Badge>
+            ))}
+          {estimateLabel(issue) && <Badge mono>{estimateLabel(issue)}</Badge>}
+          {issue.milestone && (
+            <Badge mono tone="clay" icon="tag">
+              {issue.milestone}
             </Badge>
-          </span>
-        )}
-        {issue.type && <Badge tone={issueTypeTone[issue.type]}>{issue.type}</Badge>}
-        {displayLabels(issue.labels)
-          .slice(0, 2)
-          .map((l) => (
-            <Badge key={l} tone="muted">
-              {l}
-            </Badge>
-          ))}
-        {estimateLabel(issue) && <Badge mono>{estimateLabel(issue)}</Badge>}
-        {issue.milestone && (
-          <Badge mono tone="clay" icon="tag">
-            {issue.milestone}
-          </Badge>
-        )}
+          )}
+        </div>
       </div>
+      {/* Par-dessus la fin de la ligne au survol : invisibles, elles ne prennent pas de place. */}
       {issue.state === "open" && (
-        <div className="flex shrink-0 gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="pointer-events-none absolute top-1/2 right-3 flex -translate-y-1/2 gap-1.5 rounded-control bg-panel pl-2 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
           <Button size="xs" variant="ghost" icon="sparkle" onClick={onComplete}>
             Compléter
           </Button>
