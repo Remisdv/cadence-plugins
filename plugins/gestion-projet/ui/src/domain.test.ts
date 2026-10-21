@@ -30,7 +30,7 @@ describe("vues", () => {
     ) as any;
     const declared: string[] = [
       ...manifest.ui.views.map((v: { id: string }) => v.id),
-      ...manifest.setup.map((s: { view: string }) => s.view),
+      ...(manifest.setup ?? []).map((s: { view: string }) => s.view),
     ];
     expect(declared.filter((id) => !isViewId(id))).toEqual([]);
     for (const v of manifest.ui.views) expect(views[v.id as keyof typeof views].icon).toBe(v.icon);
@@ -45,6 +45,34 @@ describe("manifeste", () => {
     expect(manifest.category).toBe("projet");
     expect(manifest.services).toEqual(["repos"]);
     expect(manifest.secrets).toBeUndefined();
+  });
+});
+
+describe("manifeste : onboarding, détail d'issue, document", () => {
+  const manifest = () =>
+    parse(readFileSync(new URL("../../plugin.toml", import.meta.url), "utf8")) as any;
+
+  it("laisse à Cadence l'étape « Dépôts suivis » du service repos (pas de doublon)", () => {
+    const m = manifest();
+    expect(m.services).toContain("repos");
+    expect((m.setup ?? []).map((s: { view: string }) => s.view)).not.toContain("setup-depots");
+    // L'écran reste joignable (« Choisir des dépôts ») sans paraître dans la barre.
+    expect(m.ui.views.find((v: { id: string }) => v.id === "setup-depots")).toMatchObject({
+      hidden: true,
+    });
+  });
+
+  it("déclare le détail d'issue comme route cachée", () => {
+    expect(manifest().ui.views.find((v: { id: string }) => v.id === "issue")).toMatchObject({
+      hidden: true,
+      icon: "issue",
+    });
+  });
+
+  it("n'offre « Créer des issues depuis un document » qu'avec un document", () => {
+    const action = manifest().actions.find((a: { id: string }) => a.id === "extraire-issues");
+    // Un contexte typé retire l'action de la barre du plugin (lancée sans contexte).
+    expect(action).toMatchObject({ skill: "extraire-issues", mode: "chat", context: "document" });
   });
 });
 

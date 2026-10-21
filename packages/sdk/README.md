@@ -36,7 +36,7 @@ const files = await cadence.pickFiles({ multiple: true, filters: [{ name: "Cours
 | `navigate(view, params?)`, `notify(message, kind?)` | navigation et notifications de Cadence |
 | `openExternal(url)`, `pickFiles(options)` | navigateur par défaut, sélecteur de fichiers natif |
 | `theme`, `onTheme` | variables CSS injectées (`--color-*`, `--text-*`…) |
-| `route`, `onRoute` | vue affichée (`[[ui.views]]` ou étape de `[[setup]]`) |
+| `route`, `onRoute` | vue affichée (`[[ui.views]]`, `hidden = true` compris, ou étape de `[[setup]]`) |
 
 Il n'y a pas d'espace de travail : un plugin est global, ses réglages aussi, et il gère son propre
 contexte. `workspace()` a disparu en 0.2.

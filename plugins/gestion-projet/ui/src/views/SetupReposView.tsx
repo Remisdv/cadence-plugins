@@ -1,7 +1,8 @@
 /**
- * Étape de setup « Dépôts suivis » : la connexion GitHub est gérée par Cadence (service `repos`,
- * étape précédente de l'onboarding) ; cet écran choisit les dépôts que le plugin suit, avec
- * `cadence.repos.follow` / `unfollow`. Les dépôts du compte viennent de `list_account_repos`.
+ * Écran « Dépôts suivis » (route cachée `setup-depots`, ouverte par « Choisir des dépôts » quand
+ * aucun dépôt n'est suivi) : choisit les dépôts que le plugin suit, avec `cadence.repos.follow` /
+ * `unfollow`. Les dépôts du compte viennent de `list_account_repos`. À l'onboarding, c'est l'étape
+ * « Dépôts suivis » du service `repos` de Cadence qui s'en charge : le plugin n'ajoute pas d'étape.
  */
 import { useState } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
@@ -69,7 +70,7 @@ export function SetupReposView() {
                 id="repo"
                 size="md"
                 mono
-                placeholder="RemiSDV/cadence"
+                placeholder="owner/name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => {

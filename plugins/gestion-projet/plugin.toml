@@ -66,11 +66,22 @@ title = "Pull requests"
 icon = "pullRequest"
 section = "Code"
 
-# Après la connexion GitHub du service repos (étape gérée par Cadence) : choix des dépôts suivis.
-[[setup]]
-id = "depots"
+# Routes hors de la barre du plugin, ouvertes par `navigate` : détail d'une issue
+# ({ repo, number, from }) et choix des dépôts suivis (bouton « Choisir des dépôts » sans dépôt).
+[[ui.views]]
+id = "issue"
+title = "Issue"
+icon = "issue"
+hidden = true
+
+[[ui.views]]
+id = "setup-depots"
 title = "Dépôts suivis"
-view = "setup-depots"
+icon = "github"
+hidden = true
+
+# Pas de [[setup]] : l'onboarding de Cadence enchaîne déjà la connexion GitHub et les dépôts
+# suivis du service repos ; une étape du plugin les redemandait (doublon).
 
 [settings]
 schema = "settings.schema.json"
@@ -82,11 +93,15 @@ schema = "settings.schema.json"
 # group = { id = "sprint:<repo>:<n° du milestone>", label = "Sprint <version> · <repo>" } :
 # Cadence les masque du chat global, l'écran « Sprint en cours » les liste.
 
+# Contexte « document » : lancée seulement depuis l'écran Issues (ou Designs) une fois le document
+# choisi, { type = "document", repo, document = { text?, files? } } ou { …, design = "<id>" } ;
+# jamais sans document depuis la barre du plugin.
 [[actions]]
 id = "extraire-issues"
 label = "Créer des issues depuis un document"
 skill = "extraire-issues"
 mode = "chat"
+context = "document"
 
 [[actions]]
 id = "importer-design"

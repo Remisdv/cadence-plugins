@@ -179,7 +179,9 @@ export function catalogEntry(
     icon: railIcon(manifest),
     services: manifest.services ?? [],
     requires: effectiveRequires(manifest),
-    views: (manifest.ui?.views ?? []).map((v) => ({ id: v.id, title: v.title, icon: v.icon ?? "layers" })),
+    views: (manifest.ui?.views ?? [])
+      .filter((v) => !v.hidden)
+      .map((v) => ({ id: v.id, title: v.title, icon: v.icon ?? "layers" })),
     actions: (manifest.actions ?? []).map((a) => ({ id: a.id, label: a.label, mode: a.mode })),
     tools: manifest.server ? tools : [],
     targets: manifest.server ? TARGETS.map((t) => t.id) : null,

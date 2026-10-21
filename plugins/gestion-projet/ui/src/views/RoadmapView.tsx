@@ -4,7 +4,9 @@
  * les sprints restent remplis par priorité). La frise place chaque jalon sur les sprints terminés,
  * en cours et prévus ; sa date de fin est celle du sprint qui prend sa dernière issue ouverte, au
  * rythme moyen, avec une fourchette (meilleur et moins bon rythme récents) qui se resserre avec
- * l'historique. Données : `roadmap` ; modifications : `jalon_save`, `jalon_delete`, `jalon_issues`.
+ * l'historique. Les issues d'un jalon se trient par priorité (comme le remplissage des sprints),
+ * par sprint ou par numéro ; un clic ouvre leur détail.
+ * Données : `roadmap` ; modifications : `jalon_save`, `jalon_delete`, `jalon_issues`.
  */
 import { useState, type ReactNode } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
@@ -22,6 +24,7 @@ import {
   Icon,
   Input,
   ProgressBar,
+  Select,
   Textarea,
   cn,
 } from "@cadence/ui";
@@ -35,8 +38,11 @@ import {
   SelectionLabel,
   TextLink,
   ToolError,
+  openIssue,
 } from "../components";
+import { jalonSorts, sortIssues, sortJalonIssues, type JalonSort } from "../issues";
 import {
+  compareVersions,
   estimateRange,
   formatDate,
   formatDecimal,
@@ -51,6 +57,7 @@ import { useTool } from "../useTool";
 export function RoadmapView() {
   const { repos, repo, shown, ready, error } = useSelection();
   const [tick, setTick] = useState(0);
+  const [sort, setSort] = useState<JalonSort>("priority");
   return (
     <div className="flex h-full flex-col">
       <PageHeader
@@ -59,6 +66,19 @@ export function RoadmapView() {
         subtitle={repos && <SelectionLabel repo={repo} count={shown.length} />}
       >
         <Badge tone="neutral">Un jalon = un ou plusieurs sprints</Badge>
+        <Select
+          size="sm"
+          aria-label="Trier les issues des jalons"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as JalonSort)}
+          className="w-auto"
+        >
+          {jalonSorts.map((s) => (
+            <option key={s.id} value={s.id}>
+              Tri : {s.label}
+            </option>
+          ))}
+        </Select>
         <Button
           size="sm"
           variant="ghost"
@@ -74,7 +94,7 @@ export function RoadmapView() {
         {repos && repos.length === 0 && <NoRepos />}
         <div className="flex flex-col gap-8">
           {shown.map((r) => (
-            <RepoRoadmap key={r} repo={r} heading={!repo} refreshKey={String(tick)} />
+            <RepoRoadmap key={r} repo={r} heading={!repo} refreshKey={String(tick)} sort={sort} />
           ))}
         </div>
       </main>
@@ -107,10 +127,12 @@ function RepoRoadmap({
   repo,
   heading,
   refreshKey,
+  sort,
 }: {
   repo: string;
   heading: boolean;
   refreshKey: string;
+  sort: JalonSort;
 }) {
   const { data, error, loading, reload } = useTool<RoadmapPlan>("roadmap", { repo }, refreshKey);
   const plan = data?.repo === repo ? data : null;
@@ -151,6 +173,8 @@ function RepoRoadmap({
             {plan.jalons.map((j, i) => (
               <JalonCard
                 key={j.id}
+                repo={repo}
+                sort={sort}
                 jalon={j}
                 today={plan.today}
                 started={plan.started}
@@ -338,6 +362,8 @@ function SprintColumn({ sprint, today }: { sprint: RoadmapSprint; today: string 
 }
 
 function JalonCard({
+  repo,
+  sort,
   jalon,
   today,
   started,
@@ -350,6 +376,8 @@ function JalonCard({
   onMove,
   onPropose,
 }: {
+  repo: string;
+  sort: JalonSort;
   jalon: JalonView;
   today: string;
   started: boolean;
@@ -459,20 +487,23 @@ function JalonCard({
 
       {jalon.issues.length > 0 && (
         <div className="divide-y divide-line rounded-control border border-line">
-          {jalon.issues.map((i) => (
+          {sortJalonIssues(jalon.issues, sort, compareVersions).map((i) => (
             <div key={i.number} className="group flex items-center gap-2.5 px-2.5 py-1.5">
               <span className={cn("flex", i.state === "closed" ? "text-green" : "text-tx3")}>
                 <Icon name={i.state === "closed" ? "check" : "issue"} size={13} />
               </span>
               <span className="mono w-[38px] shrink-0 text-tiny text-tx3">#{i.number}</span>
-              <span
+              <button
+                type="button"
+                onClick={() => openIssue({ repo, number: i.number })}
+                title="Ouvrir le détail"
                 className={cn(
-                  "min-w-0 grow truncate text-body-sm",
+                  "min-w-0 grow truncate text-left text-body-sm hover:text-clay",
                   i.state === "closed" ? "text-tx3 line-through" : "text-tx",
                 )}
               >
                 {i.title}
-              </span>
+              </button>
               {i.priority !== null && (
                 <Badge tone={priorityInfo(i.priority).tone}>{priorityInfo(i.priority).label}</Badge>
               )}
@@ -519,15 +550,17 @@ function Unassigned({ plan }: { plan: RoadmapPlan }) {
         }
       />
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {plan.unassigned.map((i) => (
-          <span
+        {sortIssues(plan.unassigned, "priority").map((i) => (
+          <button
+            type="button"
             key={i.number}
-            className="inline-flex max-w-[320px] items-center gap-1.5 rounded-badge bg-p3 px-2 py-0.5 text-caption text-tx2"
+            onClick={() => openIssue({ repo: plan.repo, number: i.number })}
+            className="inline-flex max-w-[320px] items-center gap-1.5 rounded-badge bg-p3 px-2 py-0.5 text-caption text-tx2 hover:text-tx"
             title={i.title}
           >
             <span className="mono text-tx3">#{i.number}</span>
             <span className="truncate">{i.title}</span>
-          </span>
+          </button>
         ))}
       </div>
     </Card>
@@ -634,11 +667,17 @@ function IssuesDialog({
   const [picked, setPicked] = useState<number[]>([]);
   const { busy, error, run } = useJalonAction(onSaved);
   const rows = [
-    ...plan.unassigned.map((i) => ({ ...i, from: null as string | null })),
+    ...sortIssues(
+      plan.unassigned.map((i) => ({ ...i, from: null as string | null })),
+      "priority",
+    ),
     ...plan.jalons
       .filter((j) => j.id !== jalon.id)
       .flatMap((j) =>
-        j.issues.filter((i) => i.state === "open").map((i) => ({ ...i, from: j.name })),
+        sortIssues(
+          j.issues.filter((i) => i.state === "open").map((i) => ({ ...i, from: j.name })),
+          "priority",
+        ),
       ),
   ];
   const toggle = (n: number) =>
