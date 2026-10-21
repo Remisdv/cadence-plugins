@@ -4,6 +4,7 @@
  * checks, revues, fichiers) où une PR en brouillon passe « prête pour la revue ». Version : le
  * milestone de la PR, sinon sa branche cible `release/<version>` (PR d'un sprint automatique) ;
  * issue liée : celles qu'elle ferme, sinon celle de sa branche `<type>/<n>-…`.
+ * « Relire les PR » ouvre d'abord la boîte de choix des PR (aucune cochée d'office).
  * Outils : `list_pull_requests`, `get_pull_request`, `mark_pull_request_ready`.
  */
 import { useState } from "react";
@@ -23,6 +24,7 @@ import {
   cn,
 } from "@cadence/ui";
 import {
+  pullsContext,
   repoShortName,
   type PullRequest,
   type PullRequestDetail,
@@ -46,6 +48,7 @@ import { prIssueLinks, prVersion } from "../issues";
 import { formatAgo, isOpenPr, plural, prStateMeta, reviewSummary } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
+import { ReviewPullsDialog } from "./ReviewPullsDialog";
 
 type StateFilter = "open" | "closed" | "all";
 
@@ -68,6 +71,7 @@ export function PullRequestsView() {
   const { repos, repo, shown, ready, error: reposError } = useSelection();
   const [state, setState] = useState<StateFilter>("open");
   const [opened, setOpened] = useState<PullRequest | null>(null);
+  const [reviewing, setReviewing] = useState(false);
   const { data, error, loading, reload } = useTool<PullRequestList>(
     "list_pull_requests",
     repo ? { repo, state } : { state },
@@ -96,19 +100,9 @@ export function PullRequestsView() {
         <Button
           size="sm"
           icon="review"
-          disabled={!repo}
-          title={
-            repo
-              ? "L'IA relit les PR du sprint : critères, diff, architecture, tests, puis publie ses revues"
-              : "Choisissez un dépôt"
-          }
-          onClick={() =>
-            void cadence
-              .runAction("relire-pr", { repo })
-              .catch((e: unknown) =>
-                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
-              )
-          }
+          disabled={!ready}
+          title="Choisir les PR à relire : l'IA vérifie critères, diff, architecture et tests, puis publie ses revues"
+          onClick={() => setReviewing(true)}
         >
           Relire les PR
         </Button>
@@ -163,6 +157,9 @@ export function PullRequestsView() {
       </main>
 
       {opened && <PrDialog pr={opened} onClose={() => setOpened(null)} onChanged={reload} />}
+      {reviewing && (
+        <ReviewPullsDialog repos={shown} initialRepo={repo} onClose={() => setReviewing(false)} />
+      )}
     </div>
   );
 }
@@ -425,19 +422,22 @@ function PrDialog({
           Ouvrir sur GitHub
         </Button>
         <div className="grow" />
-        <Button
-          variant="secondary"
-          icon="sparkle"
-          onClick={() =>
-            void cadence
-              .runAction("relire-pr", { repo: pr.repo, number: pr.number })
-              .catch((e: unknown) =>
-                cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
-              )
-          }
-        >
-          Relire avec l'IA
-        </Button>
+        {isOpenPr({ state }) && (
+          <Button
+            variant="secondary"
+            icon="sparkle"
+            title="L'IA relit cette PR (critères, diff, architecture, tests) et publie sa revue"
+            onClick={() =>
+              void cadence
+                .runAction("relire-pr", pullsContext(pr.repo, [pr.number]))
+                .catch((e: unknown) =>
+                  cadence.notify(isCadenceError(e) ? e.message : String(e), "error"),
+                )
+            }
+          >
+            Relire avec l'IA
+          </Button>
+        )}
         {state === "draft" && (
           <Button variant="primary" icon="review" onClick={() => void markReady()} disabled={busy}>
             Prête pour la revue

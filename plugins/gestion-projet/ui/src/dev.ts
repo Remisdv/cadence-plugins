@@ -1006,7 +1006,7 @@ const sprintConversations: NonNullable<MockHostOptions["conversations"]>["conver
     action: "developper-sprint",
     state: "idle",
     group: SPRINT_GROUP,
-    context: { repo: "RemiSDV/cadence" },
+    context: { type: "sprint", repo: "RemiSDV/cadence" },
     createdAt: at(30),
     updatedAt: at(26),
     turns: 14,

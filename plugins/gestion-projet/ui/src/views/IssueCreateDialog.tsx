@@ -95,7 +95,7 @@ export function IssueCreateDialog({
           );
         }
       }
-      await cadence.notify(`Issue #${issue.number} créée sur ${form.repo}.`, "success");
+      // La confirmation (avec le lien vers le détail) est affichée par la vue qui ouvre la boîte.
       onCreated(issue);
     } catch (e) {
       setError(isCadenceError(e) ? e.message : String(e));

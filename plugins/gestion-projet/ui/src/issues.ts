@@ -145,6 +145,24 @@ export function pullRequestFor(
   return pullsForIssue(pulls, issue).find(isOpenPr) ?? null;
 }
 
+/** Lecture des PR du dépôt pour le détail d'une issue. */
+export type PullsLookup = "loading" | "loaded" | "failed";
+
+/**
+ * Pourquoi « Relire » (détail d'une issue) est indisponible, ou `null` s'il peut partir : il faut
+ * une PR ouverte liée, sinon le tour d'IA ne trouverait rien à relire. Si la liste des PR n'a pas
+ * pu être lue, « Relire » reste possible (le skill cherche la PR lui-même).
+ */
+export function reviewBlockReason(
+  openPr: number | null,
+  pulls: PullsLookup,
+  linkedCount: number,
+): string | null {
+  if (pulls === "loading") return "Recherche des PR liées…";
+  if (openPr !== null || pulls === "failed") return null;
+  return linkedCount === 0 ? "Aucune PR liée" : "Aucune PR ouverte liée";
+}
+
 /**
  * Issues d'une PR à afficher : celles qu'elle déclare fermer (`closes`), puis celles liées par la
  * seule branche (`issues` moins `closes`).
@@ -230,6 +248,35 @@ export function createIssueArgs(
   if (form.priority !== null) args.priority = form.priority;
   if (form.milestone.trim()) args.milestone = form.milestone.trim();
   return { ok: true, args };
+}
+
+/**
+ * Liste affichée après « Nouvelle issue » : les issues lues sur GitHub, plus celles créées dans
+ * cette visite que la liste ne contient pas encore (GitHub peut renvoyer une liste en retard de
+ * quelques secondes). Seules celles qui passent le filtre affiché (dépôt, état) sont ajoutées.
+ */
+export function withCreated<T extends Pick<Issue, "repo" | "number" | "state">>(
+  listed: readonly T[],
+  created: readonly T[],
+  filter: { repo: string | null; state: "open" | "closed" | "all" },
+): T[] {
+  const known = new Set(listed.map((i) => `${i.repo}#${i.number}`));
+  const extra = created.filter(
+    (i) =>
+      !known.has(`${i.repo}#${i.number}`) &&
+      (filter.repo === null || i.repo === filter.repo) &&
+      (filter.state === "all" || i.state === filter.state),
+  );
+  return [...extra, ...listed];
+}
+
+/** Issues créées encore absentes de la liste lue (celles à garder en attendant GitHub). */
+export function stillMissing<T extends Pick<Issue, "repo" | "number">>(
+  created: readonly T[],
+  listed: readonly T[],
+): T[] {
+  const known = new Set(listed.map((i) => `${i.repo}#${i.number}`));
+  return created.filter((i) => !known.has(`${i.repo}#${i.number}`));
 }
 
 /* ---------- « Créer des issues depuis un document » ---------- */

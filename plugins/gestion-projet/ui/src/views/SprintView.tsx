@@ -130,7 +130,7 @@ type SprintRef = Pick<Version, "number" | "title">;
 function developSprint(repo: string, sprint: SprintRef | null | undefined, onDone: () => void) {
   const group = sprint ? sprintGroup(repo, sprint) : null;
   cadence
-    .runAction("developper-sprint", { repo, ...withGroup(group) })
+    .runAction("developper-sprint", { type: "sprint", repo, ...withGroup(group) })
     .then((runId) => refreshWhenDone(runId, onDone))
     .catch(notifyError);
 }

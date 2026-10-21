@@ -2,7 +2,7 @@
  * Composants partagés des vues du plugin, repris des composants de domaine de Cadence 1
  * (src/components/domain : Stats, Burndown, IssueCard, Inline, Badges) avec le kit `@cadence/ui`.
  */
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { cadence } from "@cadence/plugin-sdk";
 import {
   Badge,
@@ -41,7 +41,11 @@ import {
 
 /* ---------- Mise en page ---------- */
 
-/** En-tête de vue : icône clay, titre, sous-titre (dépôt, période), actions à droite. */
+/**
+ * En-tête de vue : icône clay, titre, sous-titre (dépôt, période), actions à droite. Fenêtre
+ * étroite : les actions passent à la ligne (alignées à droite) au lieu de déborder, le
+ * sous-titre se tronque sur une ligne ; aucune largeur fixe.
+ */
 export function PageHeader({
   icon,
   title,
@@ -54,13 +58,77 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
-      <Icon name={icon} size={17} className="text-clay" />
-      <h1 className="truncate font-display text-title">{title}</h1>
-      {subtitle && <span className="truncate text-caption text-tx3">{subtitle}</span>}
-      <div className="grow" />
-      {children}
+    <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-5 py-2.5">
+      <div className="flex max-w-full min-w-0 shrink items-center gap-3">
+        <span className="flex shrink-0 text-clay">
+          <Icon name={icon} size={17} />
+        </span>
+        <h1 className="truncate font-display text-title whitespace-nowrap">{title}</h1>
+        {subtitle && (
+          <span className="min-w-0 truncate text-caption whitespace-nowrap text-tx3">
+            {subtitle}
+          </span>
+        )}
+      </div>
+      {children && (
+        <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+          {children}
+        </div>
+      )}
     </header>
+  );
+}
+
+/**
+ * Confirmation dans la vue (« #20 créée », lien vers le détail), en bas à droite de l'iframe ;
+ * se ferme seule après 8 s. Les toasts de Cadence (`cadence.notify`) n'ont pas de lien.
+ */
+export interface ToastMessage {
+  /** Change à chaque message : relance le délai de fermeture. */
+  id: number;
+  text: ReactNode;
+  action?: { label: string; onClick: () => void };
+}
+
+export function Toast({ toast, onClose }: { toast: ToastMessage; onClose: () => void }) {
+  // `onClose` change à chaque rendu du parent : seul un nouveau message relance le délai.
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const timer = setTimeout(() => close.current(), 8000);
+    return () => clearTimeout(timer);
+  }, [toast.id]);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed right-4 bottom-4 z-30 flex max-w-[calc(100vw-32px)] items-center gap-3 rounded-card border border-line2 bg-panel py-2 pr-2 pl-3.5 shadow-modal"
+    >
+      <span className="flex shrink-0 text-green">
+        <Icon name="check" size={14} />
+      </span>
+      <span className="min-w-0 text-body-sm text-tx">{toast.text}</span>
+      {toast.action && (
+        <Button
+          size="xs"
+          variant="secondary"
+          onClick={() => {
+            toast.action!.onClick();
+            onClose();
+          }}
+        >
+          {toast.action.label}
+        </Button>
+      )}
+      <Button
+        size="xs"
+        variant="quiet"
+        icon="close"
+        iconOnly
+        aria-label="Fermer"
+        onClick={onClose}
+      />
+    </div>
   );
 }
 

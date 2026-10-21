@@ -117,6 +117,50 @@ export function reviewContext(
   return { type: "review", repo, items, ...withGroup(group) };
 }
 
+/* ---------- Contextes des actions lancées depuis les vues ---------- */
+
+/*
+ * Toute action déclare un `context` dans le manifeste : Cadence ne montre dans la barre du plugin
+ * que les actions sans contexte, qui partiraient d'un clic, sans dépôt ni choix. Chacune part donc
+ * de sa vue avec le contexte ci-dessous (`type` = le `context` déclaré, exigé par Cadence) ;
+ * « Développer le sprint » (`context = "sprint"`) part de l'écran Sprint, `{ type, repo, group? }`.
+ */
+
+/** `relire-pr` (`context = "pulls"`) : les PR choisies, jamais « toutes » implicitement. */
+export function pullsContext(
+  repo: string,
+  pulls: readonly number[],
+): { type: "pulls"; repo: string; pulls: number[] } {
+  return { type: "pulls", repo, pulls: [...new Set(pulls)].sort((a, b) => a - b) };
+}
+
+/** `adapter-architecture` (`context = "architecture"`) : tout le dépôt, ou un service. */
+export function architectureContext(
+  repo: string,
+  service?: string | null,
+): { type: "architecture"; repo: string; service?: string } {
+  return { type: "architecture", repo, ...(service ? { service } : {}) };
+}
+
+/** `planifier` (`context = "planning"`). */
+export function planningContext(repo: string): { type: "planning"; repo: string } {
+  return { type: "planning", repo };
+}
+
+/**
+ * `creer-design` (`context = "demande-design"`) : la demande écrite dans la boîte, et le design
+ * à modifier s'il y en a un. `null` sans demande : rien n'est lancé.
+ */
+export function designRequestContext(
+  repo: string,
+  request: string,
+  design?: string | null,
+): { type: "demande-design"; repo: string; request: string; design?: string } | null {
+  const text = request.trim();
+  if (!text) return null;
+  return { type: "demande-design", repo, request: text, ...(design ? { design } : {}) };
+}
+
 export const conversationStates: Record<
   ConversationState,
   { label: string; dot: DotTone; tone: BadgeTone }

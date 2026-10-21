@@ -1,6 +1,6 @@
 ---
 name: relire-pr
-description: Relit les pull requests en revue (une PR donnée, ou toutes celles du sprint en cours) — critères d'acceptation de l'issue, diff, architecture, build et tests dans un worktree — publie une revue (approbation, changements demandés ou commentaires, avec remarques sur les lignes), puis, si l'utilisateur l'a demandé, fusionne les PR approuvées dans la branche de release et ferme leurs issues. À utiliser depuis le bouton « Relire les PR » ou quand l'utilisateur demande de faire les reviews.
+description: Relit les pull requests choisies par l'utilisateur — critères d'acceptation de l'issue, diff, architecture, build et tests dans un worktree — publie une revue (approbation, changements demandés ou commentaires, avec remarques sur les lignes), puis, si l'utilisateur l'a demandé, fusionne les PR approuvées dans la branche de release et ferme leurs issues. À utiliser depuis la boîte « Relire les PR » (PR cochées) ou le détail d'une PR, ou quand l'utilisateur demande de faire les reviews.
 ---
 
 # Relire les pull requests
@@ -10,9 +10,14 @@ son issue demande, proprement, dans l'architecture du projet. Tu écris en fran�
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>", "number": <PR> }` — `number` facultatif. Sans `number` : toutes les PR
-ouvertes du **sprint en cours** (base = la branche de release du sprint, ou issue liée dans le
-sprint), brouillons compris. Sans `repo`, demande sur quel dépôt travailler.
+`{ "type": "pulls", "repo": "<owner/name>", "pulls": [<numéros>] }` — les PR que l'utilisateur a
+cochées dans la boîte « Relire les PR » (ou la PR du détail ouvert). Relis **exactement** celles-ci,
+pas les autres PR du dépôt. Une PR de la liste déjà fusionnée ou fermée : dis-le et passe à la
+suivante.
+
+Demande depuis le chat, sans contexte : demande le dépôt et les PR à relire (liste les PR ouvertes
+avec `list_pull_requests` pour l'aider à choisir) et attends sa réponse ; ne relis jamais « toutes
+les PR » sans qu'il l'ait dit.
 
 L'utilisateur peut ajouter « et fusionne ce qui est bon » : sans cette demande explicite, tu ne
 fusionnes rien.

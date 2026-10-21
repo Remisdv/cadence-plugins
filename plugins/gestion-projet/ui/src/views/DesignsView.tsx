@@ -31,6 +31,7 @@ import { documentContext } from "../issues";
 import { formatDay } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
+import { DesignRequestDialog } from "./DesignRequestDialog";
 
 /** Nom lisible d'une page : `project/V2-Chat.dc.html` → `V2-Chat`. */
 const pageLabel = (path: string) => (path.split("/").pop() ?? path).replace(/(\.dc)?\.html?$/i, "");
@@ -42,6 +43,7 @@ export function DesignsView() {
   const { repos, repo, ready, error } = useSelection();
   const [tick, setTick] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [requesting, setRequesting] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const {
     data,
@@ -104,8 +106,8 @@ export function DesignsView() {
           size="sm"
           icon="sparkle"
           disabled={!repo}
-          title="L'IA dessine les écrans dans Claude Design, vous les validez, puis elle les importe"
-          onClick={() => void cadence.runAction("creer-design", { repo }).catch(notifyError)}
+          title="Décrire les écrans à dessiner : l'IA les crée dans Claude Design, vous les validez, puis elle les importe"
+          onClick={() => setRequesting(true)}
         >
           Créer un design
         </Button>
@@ -129,6 +131,13 @@ export function DesignsView() {
         />
       </PageHeader>
       <main className="flex min-h-0 grow flex-col overflow-y-auto p-5">{body}</main>
+      {requesting && repo && (
+        <DesignRequestDialog
+          repo={repo}
+          designs={designs ?? []}
+          onClose={() => setRequesting(false)}
+        />
+      )}
       {adding && repo && (
         <AddDialog
           repo={repo}

@@ -72,8 +72,12 @@ pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données 
 ## Actions et skills
 
 Le contexte d'une action porte toujours le dépôt concerné (`repo`, celui de l'issue ou de la
-version) et, pour une action qui déclare un type de contexte, `type` égal à ce type (`issue`,
-`version`, `jalon`, `design`, `review`, `document`) : Cadence refuse sinon de la lancer.
+version) et `type`, égal au type de contexte que l'action déclare (`issue`, `version`, `jalon`,
+`design`, `review`, `document`, `sprint`, `pulls`, `architecture`, `planning`, `demande-design`) :
+Cadence refuse sinon de la lancer. **Toutes les actions déclarent un type** : Cadence ne met dans la
+barre du plugin que les actions sans contexte, qui partiraient d'un clic sans dépôt ni choix (un
+tour d'IA lancé par erreur). Chacune part donc de sa vue, après une boîte de choix quand il faut
+choisir quelque chose (PR à relire, demande de design, document).
 
 | Action              | Skill               | Mode | Contexte                                   | Ex-agent    |
 | ------------------- | ------------------- | ---- | ------------------------------------------ | ----------- |
@@ -83,12 +87,12 @@ version) et, pour une action qui déclare un type de contexte, `type` égal à c
 | Implémenter         | `implementer-issue` | fond | `{ "type": "issue", "repo", "issue": 42 }` | développeur |
 | Proposer des issues | `proposer-issues`   | chat | `{ "type": "jalon", "repo", "jalon": "mvp" }` | CEO      |
 | Importer un design  | `importer-design`   | chat | `{ "type": "design", "repo", "design", "url", "name" }` | — |
-| Planifier avec l'IA | `planifier`         | chat | `{ "repo": "me/app" }`                     | —           |
-| Développer le sprint | `developper-sprint` | chat | `{ "repo": "me/app", "group" }` (ou `issues`) | développeur |
-| Relire les PR       | `relire-pr`         | chat | `{ "repo", "number" }` (`number` facultatif : tout le sprint) | relecteur |
+| Planifier avec l'IA | `planifier`         | chat | `{ "type": "planning", "repo": "me/app" }` (page Planning) | — |
+| Développer le sprint | `developper-sprint` | chat | `{ "type": "sprint", "repo": "me/app", "group" }` (ou `issues` ; écran Sprint) | développeur |
+| Relire les PR       | `relire-pr`         | chat | `{ "type": "pulls", "repo", "pulls": [51, 52] }` (PR cochées dans la boîte, aucune d'office, ou PR du détail) | relecteur |
 | Relire et valider   | `relire-valider`    | chat | `{ "type": "review", "repo", "items": [{ "issue": 42, "pr": 51 }], "group" }` | relecteur |
-| Créer un design     | `creer-design`      | chat | `{ "repo", "design" }` (`design` pour modifier) | —      |
-| Adapter le code à l'architecture | `adapter-architecture` | chat | `{ "repo", "service" }` (service facultatif) | — |
+| Créer un design     | `creer-design`      | chat | `{ "type": "demande-design", "repo", "request", "design"? }` (boîte de demande ; `design` pour modifier) | — |
+| Adapter le code à l'architecture | `adapter-architecture` | chat | `{ "type": "architecture", "repo", "service"? }` (page Architecture) | — |
 | Préparer la release | `preparer-release`  | fond | `{ "type": "version", "repo", "version" }` | déploiement |
 
 ### Conversations du sprint
@@ -115,7 +119,7 @@ tâche validée : `review_pull_request` (APPROVE), sortie du brouillon, `merge_p
 du réglage `merge_method`, squash par défaut ; `delete_branch`, `close_issues`), issue fermée et
 passée en terminé ; une tâche refusée reçoit une revue « changes requested » et repasse en cours.
 Une PR à la CI rouge n'est jamais fusionnée. L'écran Pull requests liste des PR, pas des tâches :
-il garde « Relire les PR » (`relire-pr`).
+il garde « Relire les PR » (`relire-pr`), qui ouvre d'abord la liste des PR ouvertes à cocher.
 
 L'IA tourne toujours dans un dossier neutre de Cadence, jamais dans un dépôt. Les skills qui lisent
 ou modifient le code demandent d'abord un worktree avec l'outil du cœur `cadence__repo_checkout`

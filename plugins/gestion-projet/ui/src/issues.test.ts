@@ -13,8 +13,11 @@ import {
   pullRequestFor,
   pullsForIssue,
   releaseVersion,
+  reviewBlockReason,
   sortIssues,
   sortJalonIssues,
+  stillMissing,
+  withCreated,
   type IssueForm,
 } from "./issues";
 import { compareVersions } from "./planning";
@@ -293,5 +296,54 @@ describe("créer des issues depuis un document", () => {
     });
     expect(fileName("C:\\docs\\cdc.pdf")).toBe("cdc.pdf");
     expect(fileName("/home/me/notes.md")).toBe("notes.md");
+  });
+});
+
+describe("nouvelle issue : affichée sans attendre GitHub", () => {
+  const issue = (repo: string, number: number, state: "open" | "closed" = "open") => ({
+    repo,
+    number,
+    state,
+  });
+  const listed = [issue("me/app", 3), issue("me/app", 2)];
+
+  it("ajoute en tête l'issue créée que la liste lue n'a pas encore", () => {
+    const created = [issue("me/app", 20)];
+    expect(withCreated(listed, created, { repo: "me/app", state: "open" })).toEqual([
+      issue("me/app", 20),
+      ...listed,
+    ]);
+    // « Tous les dépôts » : elle apparaît aussi.
+    expect(withCreated(listed, created, { repo: null, state: "all" })[0]).toEqual(
+      issue("me/app", 20),
+    );
+  });
+
+  it("ne la double pas quand GitHub la renvoie, et respecte le filtre affiché", () => {
+    const created = [issue("me/app", 3)];
+    expect(withCreated(listed, created, { repo: "me/app", state: "open" })).toEqual(listed);
+    expect(withCreated(listed, [issue("me/lib", 9)], { repo: "me/app", state: "open" })).toEqual(
+      listed,
+    );
+    expect(withCreated([], [issue("me/app", 20)], { repo: "me/app", state: "closed" })).toEqual([]);
+  });
+
+  it("oublie les issues créées une fois la liste à jour", () => {
+    const created = [issue("me/app", 20), issue("me/app", 3)];
+    expect(stillMissing(created, listed)).toEqual([issue("me/app", 20)]);
+    expect(stillMissing(created, [...listed, issue("me/app", 20)])).toEqual([]);
+  });
+});
+
+describe("détail d'issue : « Relire » seulement avec une PR ouverte", () => {
+  it("attend la liste des PR, puis bloque sans PR ouverte liée", () => {
+    expect(reviewBlockReason(null, "loading", 0)).toBe("Recherche des PR liées…");
+    expect(reviewBlockReason(null, "loaded", 0)).toBe("Aucune PR liée");
+    expect(reviewBlockReason(null, "loaded", 1)).toBe("Aucune PR ouverte liée");
+    expect(reviewBlockReason(51, "loaded", 1)).toBeNull();
+  });
+
+  it("laisse « Relire » chercher la PR si la liste n'a pas pu être lue", () => {
+    expect(reviewBlockReason(null, "failed", 0)).toBeNull();
   });
 });
