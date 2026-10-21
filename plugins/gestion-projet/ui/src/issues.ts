@@ -4,6 +4,7 @@
  * depuis un document ». Fonctions pures, testées dans `issues.test.ts`.
  */
 import type { Issue, IssueType, PullRequest } from "./domain";
+import { isOpenPr } from "./planning";
 
 /* ---------- Tri ---------- */
 
@@ -112,39 +113,47 @@ export function prVersion(pr: Pick<PullRequest, "milestone" | "base">): string |
   return pr.milestone ?? releaseVersion(pr.base);
 }
 
-/** Issue d'une branche de travail `<type>/<n>-…` (convention des skills) : `feat/15-bonjour` → 15. */
-export function branchIssue(head: string): number | null {
-  const m = /^[a-z]+\/(\d+)(?:[-_].*)?$/.exec(head.trim());
-  if (!m) return null;
-  const n = Number(m[1]);
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
-
-/**
- * Issues liées à une PR : celles qu'elle déclare fermer (GitHub ne les lit que pour les PR vers la
- * branche par défaut) et celle de sa branche `<type>/<n>-…`.
- */
-export function linkedIssues(pr: Pick<PullRequest, "closes" | "head">): number[] {
-  const out = [...pr.closes];
-  const fromBranch = branchIssue(pr.head);
-  if (fromBranch !== null && !out.includes(fromBranch)) out.push(fromBranch);
-  return out;
-}
-
 const prOrder: Record<PullRequest["state"], number> = { open: 0, draft: 0, merged: 1, closed: 2 };
 
-/** PR liées à une issue : ouvertes (brouillons compris) d'abord, puis fusionnées, puis fermées. */
+/**
+ * PR liées à une issue, d'après les champs du serveur : `issues` (« Closes #n », même vers une
+ * branche `release/x`, liens manuels, plus l'issue que nomme la branche `feat/<n>-…`). Ouvertes
+ * (brouillons compris) d'abord, puis fusionnées, puis fermées ; à état égal, celles qui déclarent
+ * fermer l'issue (`closes`) avant celles liées par leur seule branche, puis la plus récente.
+ * Source unique du lien : détail d'issue, PR d'une tâche « En revue ».
+ */
 export function pullsForIssue(
   pulls: readonly PullRequest[],
   issue: Pick<Issue, "repo" | "number">,
 ): PullRequest[] {
+  const closing = (p: PullRequest) => (p.closes.includes(issue.number) ? 0 : 1);
   return pulls
-    .filter((p) => p.repo === issue.repo && linkedIssues(p).includes(issue.number))
+    .filter((p) => p.repo === issue.repo && p.issues.includes(issue.number))
     .sort(
       (a, b) =>
         prOrder[a.state] - prOrder[b.state] ||
+        closing(a) - closing(b) ||
         (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
     );
+}
+
+/** PR ouverte (brouillon compris) de l'issue : la première de `pullsForIssue`, `null` sans. */
+export function pullRequestFor(
+  pulls: readonly PullRequest[],
+  issue: Pick<Issue, "repo" | "number">,
+): PullRequest | null {
+  return pullsForIssue(pulls, issue).find(isOpenPr) ?? null;
+}
+
+/**
+ * Issues d'une PR à afficher : celles qu'elle déclare fermer (`closes`), puis celles liées par la
+ * seule branche (`issues` moins `closes`).
+ */
+export function prIssueLinks(pr: Pick<PullRequest, "closes" | "issues">): {
+  closes: number[];
+  branch: number[];
+} {
+  return { closes: pr.closes, branch: pr.issues.filter((n) => !pr.closes.includes(n)) };
 }
 
 /* ---------- Détail d'une issue (`get_issue`) ---------- */

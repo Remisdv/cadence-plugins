@@ -117,31 +117,6 @@ export function reviewContext(
   return { type: "review", repo, items, ...withGroup(group) };
 }
 
-/** Issues liées à une PR : `issues` du serveur (closes + branche `feat/<n>-…`), sinon `closes`. */
-export function linkedIssues(pr: Pick<PullRequest, "closes" | "issues">): number[] {
-  return pr.issues ?? pr.closes;
-}
-
-/**
- * PR ouverte (brouillon compris) liée à l'issue : celle qui déclare la fermer (« Closes #n », même
- * vers une branche `release/x`), sinon celle de sa branche (`feat/<n>-…`) ; la plus récente s'il y
- * en a plusieurs.
- */
-export function pullRequestFor(
-  pulls: PullRequest[],
-  issue: Pick<Issue, "repo" | "number">,
-): PullRequest | null {
-  const open = pulls.filter(
-    (p) => p.repo === issue.repo && (p.state === "open" || p.state === "draft"),
-  );
-  const recent = (list: PullRequest[]) =>
-    [...list].sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0] ?? null;
-  return (
-    recent(open.filter((p) => p.closes.includes(issue.number))) ??
-    recent(open.filter((p) => linkedIssues(p).includes(issue.number)))
-  );
-}
-
 export const conversationStates: Record<
   ConversationState,
   { label: string; dot: DotTone; tone: BadgeTone }
@@ -660,8 +635,9 @@ export interface PullRequest {
   labels: string[];
   /** Issues que la PR déclare fermer (« Closes #n », même vers `release/x`, liens manuels). */
   closes: number[];
-  /** Issues liées : `closes` plus l'issue de la branche (`feat/42-…`). */
-  issues?: number[];
+  /** Issues liées : `closes` plus l'issue de la branche (`feat/42-…`). Source du lien PR ↔ issue
+   * (`pullsForIssue` dans `issues.ts`). */
+  issues: number[];
   ci: { state: CiState; passed: number; total: number };
   review: ReviewState | null;
   approvals: number;

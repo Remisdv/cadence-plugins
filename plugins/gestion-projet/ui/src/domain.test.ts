@@ -12,15 +12,12 @@ import {
   issueKey,
   isStarted,
   isViewId,
-  linkedIssues,
   priorityInfo,
-  pullRequestFor,
   repoShortName,
   reviewContext,
   sprintGroup,
   views,
   withGroup,
-  type PullRequest,
 } from "./domain";
 
 describe("vues", () => {
@@ -131,34 +128,6 @@ describe("groupes de conversations", () => {
       group,
     });
     expect(reviewContext("me/app", [])).not.toHaveProperty("group");
-  });
-
-  it("trouve la PR ouverte d'une tâche en revue", () => {
-    const pr = (number: number, state: PullRequest["state"], closes: number[], updated: string) =>
-      ({ repo: "me/app", number, state, closes, updated_at: updated }) as PullRequest;
-    const pulls = [
-      pr(50, "merged", [42], "2026-10-19T10:00:00Z"),
-      pr(51, "draft", [42], "2026-10-18T10:00:00Z"),
-      pr(52, "open", [42, 43], "2026-10-20T10:00:00Z"),
-      { ...pr(53, "open", [44], "2026-10-20T10:00:00Z"), repo: "me/site" },
-    ];
-    expect(pullRequestFor(pulls, { repo: "me/app", number: 42 })?.number).toBe(52);
-    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 42 })?.number).toBe(51);
-    expect(pullRequestFor(pulls, { repo: "me/app", number: 44 })).toBeNull();
-  });
-
-  it("relie une PR de sprint (vers release/x) par sa branche quand GitHub ne la relie pas", () => {
-    // Constat P15 : PR #18 « Closes #15 » et #19 (branche feat/16-…) vers release/0.2.0.
-    const pulls = [
-      { repo: "me/app", number: 18, state: "draft", closes: [15], issues: [15] },
-      { repo: "me/app", number: 19, state: "draft", closes: [], issues: [16] },
-      { repo: "me/app", number: 20, state: "open", closes: [16], issues: [16] },
-    ] as PullRequest[];
-    expect(pullRequestFor(pulls, { repo: "me/app", number: 15 })?.number).toBe(18);
-    // « Closes » l'emporte sur la branche ; sans lui, la branche suffit.
-    expect(pullRequestFor(pulls, { repo: "me/app", number: 16 })?.number).toBe(20);
-    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 16 })?.number).toBe(19);
-    expect(linkedIssues({ closes: [3] })).toEqual([3]);
   });
 
   it("décrit une conversation : issues, état, IA", () => {

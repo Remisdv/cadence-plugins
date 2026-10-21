@@ -27,7 +27,6 @@ import {
 import {
   issueStatuses,
   issueTypeTone,
-  linkedIssues,
   type Issue,
   type PullRequestList,
   type ReleaseList,
@@ -283,8 +282,7 @@ function VersionDetail({ repo, version, onBack }: Selected & { onBack: () => voi
   const pace = s?.pace;
   const issues = s?.issues ?? [];
   const versionPulls = (pulls.data?.pull_requests ?? []).filter(
-    (p) =>
-      p.milestone === v?.title || linkedIssues(p).some((n) => issues.some((i) => i.number === n)),
+    (p) => p.milestone === v?.title || p.issues.some((n) => issues.some((i) => i.number === n)),
   );
   const release = releases.data?.releases.find((r) => v && r.version === v.title) ?? null;
 

@@ -42,12 +42,14 @@ import {
   ToolError,
   VersionBadge,
 } from "../components";
-import { linkedIssues, prVersion } from "../issues";
+import { prIssueLinks, prVersion } from "../issues";
 import { formatAgo, isOpenPr, plural, prStateMeta, reviewSummary } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
 
 type StateFilter = "open" | "closed" | "all";
+
+const refs = (numbers: number[]) => numbers.map((n) => `#${n}`).join(", ");
 
 const filters: { id: StateFilter; label: string }[] = [
   { id: "open", label: "Ouvertes" },
@@ -176,7 +178,7 @@ function PrLine({
 }) {
   const review = reviewSummary(pr);
   const closesVerb = pr.state === "merged" ? "a fermé" : "ferme";
-  const issues = linkedIssues(pr);
+  const links = prIssueLinks(pr);
   const version = prVersion(pr);
   return (
     <div
@@ -208,10 +210,15 @@ function PrLine({
           </span>
           <span className="text-line2">→</span>
           <span className="mono">{pr.base}</span>
-          {issues.length > 0 && (
+          {pr.issues.length > 0 && (
             <span className="inline-flex items-center gap-1 text-tiny">
               <Icon name="link" size={12} />
-              {pr.closes.length > 0 ? closesVerb : "issue"} {issues.map((n) => `#${n}`).join(", ")}
+              {[
+                links.closes.length > 0 && `${closesVerb} ${refs(links.closes)}`,
+                links.branch.length > 0 && `issue ${refs(links.branch)}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
           )}
           <Diffstat additions={pr.additions} deletions={pr.deletions} plain />

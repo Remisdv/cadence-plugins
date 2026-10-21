@@ -1,12 +1,17 @@
 /**
  * Roadmap par jalons : un jalon est un objectif nommé (« MVP privé », « Bêta publique ») réalisé
- * en un ou plusieurs sprints. Les jalons vivent dans l'issue d'état partagée (affichage seulement :
- * les sprints restent remplis par priorité). La frise place chaque jalon sur les sprints terminés,
- * en cours et prévus ; sa date de fin est celle du sprint qui prend sa dernière issue ouverte, au
- * rythme moyen, avec une fourchette (meilleur et moins bon rythme récents) qui se resserre avec
- * l'historique. Les issues d'un jalon se trient par priorité (comme le remplissage des sprints),
- * par sprint ou par numéro ; un clic ouvre leur détail.
- * Données : `roadmap` ; modifications : `jalon_save`, `jalon_delete`, `jalon_issues`.
+ * en un ou plusieurs sprints. Les jalons vivent dans l'issue d'état partagée et leur ordre décide
+ * du remplissage des sprints : les issues du premier jalon passent avant celles du suivant, puis
+ * celles sans jalon ; la priorité ne départage qu'à l'intérieur d'un même rang (même ordre que le
+ * carnet du sprint). La frise place chaque jalon sur les sprints terminés, en cours et prévus ; sa
+ * date de fin est celle du sprint qui prend sa dernière issue ouverte, au rythme moyen, avec une
+ * fourchette (meilleur et moins bon rythme récents) qui se resserre avec l'historique. Les issues
+ * d'un jalon se trient par priorité (leur ordre de remplissage dans le jalon), par sprint ou par
+ * numéro ; un clic ouvre leur détail. « Mettre dans le sprint en cours » ajoute d'un coup les
+ * issues ouvertes d'un jalon au sprint en cours, après confirmation, et dit ce qui a été ajouté ou
+ * refusé.
+ * Données : `roadmap` ; modifications : `jalon_save`, `jalon_delete`, `jalon_issues`,
+ * `sprint_issues`.
  */
 import { useState, type ReactNode } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
@@ -28,7 +33,13 @@ import {
   Textarea,
   cn,
 } from "@cadence/ui";
-import { priorityInfo, type JalonView, type RoadmapPlan, type RoadmapSprint } from "../domain";
+import {
+  priorityInfo,
+  type JalonView,
+  type RoadmapPlan,
+  type RoadmapSprint,
+  type SprintIssuesResult,
+} from "../domain";
 import {
   EmptyCard,
   Loading,
@@ -121,7 +132,10 @@ function useJalonAction(onDone: () => void) {
   return { busy, error, run };
 }
 
-type Editing = { kind: "jalon"; jalon: JalonView | null } | { kind: "issues"; jalon: JalonView };
+type Editing =
+  | { kind: "jalon"; jalon: JalonView | null }
+  | { kind: "issues"; jalon: JalonView }
+  | { kind: "sprint"; jalon: JalonView; version: string };
 
 function RepoRoadmap({
   repo,
@@ -138,6 +152,9 @@ function RepoRoadmap({
   const plan = data?.repo === repo ? data : null;
   const action = useJalonAction(reload);
   const [editing, setEditing] = useState<Editing | null>(null);
+  const current = plan?.started
+    ? (plan.sprints.find((s) => s.state === "current")?.version ?? null)
+    : null;
 
   const move = (j: JalonView, by: number) => {
     const at = (plan?.jalons.findIndex((x) => x.id === j.id) ?? 0) + by;
@@ -188,6 +205,10 @@ function RepoRoadmap({
                 }
                 onMove={(by) => move(j, by)}
                 onPropose={() => void propose(j)}
+                currentSprint={current}
+                onToSprint={() =>
+                  current && setEditing({ kind: "sprint", jalon: j, version: current })
+                }
               />
             ))}
           </>
@@ -215,6 +236,15 @@ function RepoRoadmap({
           plan={plan}
           onClose={() => setEditing(null)}
           onSaved={closeAndReload}
+        />
+      )}
+      {editing?.kind === "sprint" && (
+        <ToSprintDialog
+          repo={repo}
+          jalon={editing.jalon}
+          version={editing.version}
+          onClose={() => setEditing(null)}
+          onChanged={reload}
         />
       )}
     </section>
@@ -375,6 +405,8 @@ function JalonCard({
   onRemoveIssue,
   onMove,
   onPropose,
+  currentSprint,
+  onToSprint,
 }: {
   repo: string;
   sort: JalonSort;
@@ -389,8 +421,13 @@ function JalonCard({
   onRemoveIssue: (n: number) => void;
   onMove: (by: number) => void;
   onPropose: () => void;
+  /** Version du sprint en cours ; `null` : sprints pas démarrés ou aucun en cours. */
+  currentSprint: string | null;
+  onToSprint: () => void;
 }) {
   const meta = jalonStatusMeta[jalon.status];
+  // Pour une issue ouverte, `sprint` égal au sprint en cours veut dire qu'elle y est déjà.
+  const toSprint = jalon.issues.filter((i) => i.state === "open" && i.sprint !== currentSprint);
   const progress = jalon.points_total
     ? Math.round((jalon.points_done / jalon.points_total) * 100)
     : 0;
@@ -533,6 +570,18 @@ function JalonCard({
         <Button size="xs" variant="ghost" icon="sparkle" onClick={onPropose}>
           Proposer des issues
         </Button>
+        {currentSprint && toSprint.length > 0 && (
+          <Button
+            size="xs"
+            variant="ghost"
+            icon="tag"
+            disabled={busy}
+            title={`Ajouter les issues ouvertes du jalon au sprint ${currentSprint}`}
+            onClick={onToSprint}
+          >
+            Mettre dans le sprint en cours
+          </Button>
+        )}
       </div>
     </Card>
   );
@@ -647,6 +696,155 @@ function JalonDialog({
         </Button>
       </DialogFooter>
     </Dialog>
+  );
+}
+
+/**
+ * « Mettre dans le sprint en cours » : confirme les issues ouvertes du jalon à ajouter, appelle
+ * `sprint_issues`, puis dit ce qui a été ajouté et ce que le serveur a refusé (déjà dans le
+ * sprint, fermée, introuvable).
+ */
+function ToSprintDialog({
+  repo,
+  jalon,
+  version,
+  onClose,
+  onChanged,
+}: {
+  repo: string;
+  jalon: JalonView;
+  version: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const open = jalon.issues.filter((i) => i.state === "open");
+  const candidates = open.filter((i) => i.sprint !== version);
+  const already = open.length - candidates.length;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<SprintIssuesResult | null>(null);
+  const titleOf = (n: number) => candidates.find((i) => i.number === n)?.title ?? "";
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await cadence.call<SprintIssuesResult>("sprint_issues", {
+        repo,
+        add: candidates.map((i) => i.number),
+      });
+      setResult(r);
+      if (r.added.length > 0) onChanged();
+    } catch (e) {
+      setError(isCadenceError(e) ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()} width={560}>
+      <DialogHeader
+        title={
+          result
+            ? `Sprint ${result.version} : ${jalon.name}`
+            : `Mettre « ${jalon.name} » dans le sprint ${version} ?`
+        }
+        icon="tag"
+      />
+      <DialogBody className="flex flex-col gap-3">
+        {result ? (
+          <>
+            <p className="text-body-sm leading-[1.6] text-tx2">
+              {result.added.length > 0
+                ? `${plural(result.added.length, "issue ajoutée", "issues ajoutées")} au sprint ${result.version}.`
+                : `Aucune issue ajoutée au sprint ${result.version}.`}
+            </p>
+            {result.added.length > 0 && (
+              <IssueLines
+                items={result.added.map((n) => ({ number: n, title: titleOf(n) }))}
+                tone="text-green"
+              />
+            )}
+            {result.skipped.length > 0 && (
+              <>
+                <p className="text-body-sm text-tx2">
+                  {plural(result.skipped.length, "issue laissée", "issues laissées")} de côté :
+                </p>
+                <IssueLines
+                  items={result.skipped.map((s) => ({
+                    number: s.issue,
+                    title: titleOf(s.issue),
+                    note: s.reason,
+                  }))}
+                  tone="text-amber"
+                />
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-body-sm leading-[1.6] text-tx2">
+              {plural(candidates.length, "issue ouverte", "issues ouvertes")} du jalon{" "}
+              {candidates.length > 1 ? "prennent" : "prend"} la version {version} du sprint en
+              cours, en plus de ce qu'il porte déjà (sa capacité n'est pas vérifiée)
+              {already > 0
+                ? ` ; ${plural(already, "autre y est déjà", "autres y sont déjà")}.`
+                : "."}
+            </p>
+            <IssueLines items={candidates} tone="text-tx3" />
+          </>
+        )}
+        {error && <Callout tone="danger">{error}</Callout>}
+      </DialogBody>
+      <DialogFooter>
+        <div className="grow" />
+        {result ? (
+          <Button size="md" variant="primary" onClick={onClose}>
+            Fermer
+          </Button>
+        ) : (
+          <>
+            <Button size="md" variant="ghost" onClick={onClose} disabled={busy}>
+              Annuler
+            </Button>
+            <Button
+              size="md"
+              variant="primary"
+              icon="tag"
+              disabled={busy || candidates.length === 0}
+              onClick={() => void confirm()}
+            >
+              {busy ? "Ajout…" : `Ajouter au sprint ${version}`}
+            </Button>
+          </>
+        )}
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
+/** Liste compacte d'issues : numéro, titre, story points, remarque (raison d'un refus). */
+function IssueLines({
+  items,
+  tone,
+}: {
+  items: { number: number; title: string; points?: number | null; note?: string }[];
+  tone: string;
+}) {
+  return (
+    <div className="max-h-[260px] divide-y divide-line overflow-y-auto rounded-control border border-line">
+      {items.map((i) => (
+        <div key={i.number} className="flex items-center gap-2.5 px-2.5 py-1.5">
+          <span className={cn("flex", tone)}>
+            <Icon name="issue" size={13} />
+          </span>
+          <span className="mono w-[38px] shrink-0 text-tiny text-tx3">#{i.number}</span>
+          <span className="min-w-0 grow truncate text-body-sm text-tx">{i.title}</span>
+          {i.points != null && <Badge mono>{i.points} SP</Badge>}
+          {i.note && <span className="shrink-0 text-caption text-tx3">{i.note}</span>}
+        </div>
+      ))}
+    </div>
   );
 }
 

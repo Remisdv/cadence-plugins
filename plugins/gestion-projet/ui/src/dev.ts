@@ -613,6 +613,7 @@ const pr = (
   milestone: "0.1.2",
   labels: [],
   closes: [],
+  issues: [],
   ci: { state: "success", passed: 4, total: 4 },
   review: null,
   approvals: 0,
@@ -632,6 +633,7 @@ const pulls: PullRequest[] = [
   pr("RemiSDV/cadence", 160, "fix(api) : message clair quand le quota est épuisé", {
     head: "fix/156-quota",
     closes: [156],
+    issues: [156],
     ci: { state: "failure", passed: 3, total: 4 },
     review: "pending",
     reviewers: ["marc"],
@@ -641,6 +643,7 @@ const pulls: PullRequest[] = [
     state: "draft",
     head: "feat/149-device-flow",
     closes: [149],
+    issues: [149],
     ci: { state: "pending", passed: 1, total: 3 },
   }),
   // Vers la branche de release : GitHub ne relie pas « Closes #n », la branche suffit.
@@ -653,6 +656,7 @@ const pulls: PullRequest[] = [
   }),
   pr("RemiSDV/cadence-plugins", 14, "feat(gestion-projet) : vue Roadmap", {
     head: "feat/12-roadmap",
+    issues: [12],
     milestone: "0.3.0",
     review: "approved",
     approvals: 1,
@@ -661,6 +665,7 @@ const pulls: PullRequest[] = [
     state: "merged",
     head: "feat/145-appairage",
     closes: [145],
+    issues: [145],
     review: "approved",
     approvals: 2,
     updated_at: `${day(-2)}T09:00:00Z`,
@@ -881,21 +886,31 @@ const planningTools: MockHostOptions["tools"] = {
   sprint_issues: ({ repo, add, remove }) => {
     const added: number[] = [];
     const removed: number[] = [];
+    // Comme le serveur : une issue inconnue, fermée ou déjà à sa place est signalée, pas bloquante.
+    const skipped: { issue: number; reason: string }[] = [];
     for (const n of (add as number[] | undefined) ?? []) {
       const i = [...issues, ...backlogExtra].find((x) => x.repo === repo && x.number === n);
-      if (!i) continue;
-      i.milestone = SPRINT.title;
-      if (!sprintIssues.includes(i)) sprintIssues.push(i);
-      added.push(n);
+      if (!i) skipped.push({ issue: n, reason: "issue introuvable" });
+      else if (i.state !== "open") skipped.push({ issue: n, reason: "issue fermée" });
+      else if (i.milestone === SPRINT.title)
+        skipped.push({ issue: n, reason: "déjà dans le sprint" });
+      else {
+        i.milestone = SPRINT.title;
+        if (!sprintIssues.includes(i)) sprintIssues.push(i);
+        added.push(n);
+      }
     }
     for (const n of (remove as number[] | undefined) ?? []) {
       const i = sprintIssues.find((x) => x.number === n);
-      if (!i) continue;
+      if (!i) {
+        skipped.push({ issue: n, reason: "pas dans le sprint" });
+        continue;
+      }
       i.milestone = null;
       sprintIssues = sprintIssues.filter((x) => x !== i);
       removed.push(n);
     }
-    return { repo, version: SPRINT.title, added, removed, skipped: [] };
+    return { repo, version: SPRINT.title, added, removed, skipped };
   },
   list_pull_requests: ({ repo, state }) => {
     const wanted = (state as string | undefined) ?? "open";

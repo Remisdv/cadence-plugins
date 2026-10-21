@@ -53,7 +53,6 @@ import {
   conversationStates,
   isStarted,
   priorityInfo,
-  pullRequestFor,
   reviewContext,
   sprintGroup,
   withGroup,
@@ -101,6 +100,7 @@ import {
   sprintBoard,
   statusMeters,
 } from "../planning";
+import { pullRequestFor } from "../issues";
 import { useConversations } from "../useConversations";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";

@@ -77,6 +77,7 @@ const pr = (extra: Partial<PullRequest> = {}): PullRequest => ({
   milestone: null,
   labels: [],
   closes: [],
+  issues: [1],
   ci: { state: "none", passed: 0, total: 0 },
   review: null,
   approvals: 0,

@@ -23,7 +23,7 @@ import {
   type RoadmapPlan,
 } from "../domain";
 import { CiStatus, Diffstat, Loading, PrStateIcon, ToolError, VersionBadge } from "../components";
-import { parseIssueRoute, pullsForIssue, type IssueDetail } from "../issues";
+import { parseIssueRoute, pullRequestFor, pullsForIssue, type IssueDetail } from "../issues";
 import { Markdown } from "../MarkdownText";
 import { formatAgo, isOpenPr, plural, prStateMeta } from "../planning";
 import { useTool } from "../useTool";
@@ -102,7 +102,8 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
     );
   }
 
-  const linked = pullsForIssue(pulls.data?.pull_requests ?? [], issue);
+  const allPulls = pulls.data?.pull_requests ?? [];
+  const linked = pullsForIssue(allPulls, issue);
   const jalon =
     plan.data?.jalons.find((j) => j.issues.some((i) => i.number === issue.number)) ?? null;
   const closed = issue.state === "closed";
@@ -255,7 +256,7 @@ function IssueDetailPane({ repo, number }: { repo: string; number: number }) {
         <div className="grow" />
         <IssueActions
           issue={issue}
-          openPr={linked.find(isOpenPr)?.number ?? null}
+          openPr={pullRequestFor(allPulls, issue)?.number ?? null}
           onChanged={() => setTick((t) => t + 1)}
         />
       </aside>

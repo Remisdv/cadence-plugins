@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { PullRequest } from "./domain";
 import {
-  branchIssue,
   createIssueArgs,
   documentContext,
   fileName,
   isIssueSort,
   issueRoute,
-  linkedIssues,
   parseIssueRoute,
   priorityRank,
+  prIssueLinks,
   prVersion,
+  pullRequestFor,
   pullsForIssue,
   releaseVersion,
   sortIssues,
@@ -108,6 +108,8 @@ const pr = (extra: Partial<PullRequest>): PullRequest => ({
   milestone: null,
   labels: [],
   closes: [],
+  // Comme le serveur : `closes` plus l'issue de la branche `feat/15-…`.
+  issues: [15],
   ci: { state: "none", passed: 0, total: 0 },
   review: null,
   approvals: 0,
@@ -132,26 +134,75 @@ describe("pull requests", () => {
     expect(prVersion(pr({ base: "main" }))).toBeNull();
   });
 
-  it("lie une PR à l'issue de sa branche quand GitHub ne lit pas « Closes » (base ≠ défaut)", () => {
-    expect(branchIssue("feat/15-bonjour")).toBe(15);
-    expect(branchIssue("fix/7")).toBe(7);
-    expect(branchIssue("release/0.2.0")).toBeNull();
-    expect(branchIssue("design/accueil")).toBeNull();
-    expect(linkedIssues(pr({}))).toEqual([15]);
-    expect(linkedIssues(pr({ closes: [15, 20] }))).toEqual([15, 20]);
-    expect(linkedIssues(pr({ head: "chore/maj", closes: [] }))).toEqual([]);
+  it("sépare les issues fermées par la PR de celles liées par sa seule branche", () => {
+    expect(prIssueLinks(pr({}))).toEqual({ closes: [], branch: [15] });
+    expect(prIssueLinks(pr({ closes: [15, 20], issues: [15, 20] }))).toEqual({
+      closes: [15, 20],
+      branch: [],
+    });
+    expect(prIssueLinks(pr({ closes: [20], issues: [20, 15] }))).toEqual({
+      closes: [20],
+      branch: [15],
+    });
+    expect(prIssueLinks(pr({ head: "chore/maj", issues: [] }))).toEqual({ closes: [], branch: [] });
   });
 
-  it("liste les PR d'une issue, ouvertes d'abord", () => {
+  it("liste les PR d'une issue d'après `issues` du serveur, ouvertes d'abord", () => {
     const pulls = [
       pr({ number: 10, state: "closed", head: "feat/15-essai" }),
       pr({ number: 11, state: "merged", closes: [15], head: "feat/15-v1" }),
       pr({ number: 18 }),
-      pr({ number: 19, head: "feat/16-nom" }),
+      pr({ number: 19, head: "feat/16-nom", issues: [16] }),
       pr({ number: 20, repo: "me/autre" }),
+      // La branche nomme #15 mais le serveur ne la lie pas : l'écran ne la relit pas.
+      pr({ number: 21, head: "feat/15-ailleurs", issues: [] }),
     ];
     expect(pullsForIssue(pulls, { repo: "me/app", number: 15 }).map((p) => p.number)).toEqual([
       18, 11, 10,
+    ]);
+  });
+
+  it("trouve la PR ouverte d'une tâche en revue, même source que le détail d'issue", () => {
+    const at = (number: number, state: PullRequest["state"], closes: number[], updated: string) =>
+      pr({ number, state, closes, issues: closes, head: "chore/x", updated_at: updated });
+    const pulls = [
+      at(50, "merged", [42], "2026-10-19T10:00:00Z"),
+      at(51, "draft", [42], "2026-10-18T10:00:00Z"),
+      at(52, "open", [42, 43], "2026-10-20T10:00:00Z"),
+      { ...at(53, "open", [44], "2026-10-20T10:00:00Z"), repo: "me/site" },
+    ];
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 42 })?.number).toBe(52);
+    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 42 })?.number).toBe(51);
+    expect(pullRequestFor(pulls.slice(0, 1), { repo: "me/app", number: 42 })).toBeNull();
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 44 })).toBeNull();
+    for (const n of [42, 43]) {
+      expect(pullRequestFor(pulls, { repo: "me/app", number: n })).toBe(
+        pullsForIssue(pulls, { repo: "me/app", number: n }).find(
+          (p) => p.state === "open" || p.state === "draft",
+        ) ?? null,
+      );
+    }
+  });
+
+  it("relie une PR de sprint (vers release/x) : « Closes » l'emporte sur la branche", () => {
+    // Constat P15 : PR #18 « Closes #15 » et #19 (branche feat/16-…) vers release/0.2.0.
+    const pulls = [
+      pr({ number: 18, closes: [15], issues: [15], updated_at: "2026-10-18T10:00:00Z" }),
+      pr({ number: 19, head: "feat/16-nom", issues: [16], updated_at: "2026-10-20T10:00:00Z" }),
+      pr({
+        number: 20,
+        state: "open",
+        head: "chore/x",
+        closes: [16],
+        issues: [16],
+        updated_at: "2026-10-19T10:00:00Z",
+      }),
+    ];
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 15 })?.number).toBe(18);
+    expect(pullRequestFor(pulls, { repo: "me/app", number: 16 })?.number).toBe(20);
+    expect(pullRequestFor(pulls.slice(0, 2), { repo: "me/app", number: 16 })?.number).toBe(19);
+    expect(pullsForIssue(pulls, { repo: "me/app", number: 16 }).map((p) => p.number)).toEqual([
+      20, 19,
     ]);
   });
 });
