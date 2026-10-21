@@ -485,6 +485,8 @@ describe("catalogue", () => {
         views: [
           { id: "bibliotheque", title: "Bibliothèque", icon: "book", section: "Cours" },
           { id: "entrainement", title: "Entraînement" },
+          // Route de détail hors de la barre : absente de la fiche du catalogue.
+          { id: "chapitre", title: "Chapitre", icon: "book", hidden: true },
         ],
       },
       actions: [{ id: "generer-qcm", label: "Générer un QCM", skill: "generer-qcm", mode: "background", context: "chapitre" }],

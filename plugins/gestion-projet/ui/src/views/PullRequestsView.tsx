@@ -1,7 +1,9 @@
 /**
  * Pull requests (maquette Pull-Requests.dc.html de Cadence 1) : PR du dépôt choisi ou de tous les
  * dépôts suivis, avec l'état des checks et des revues. Une ligne ouvre le détail (description,
- * checks, revues, fichiers) où une PR en brouillon passe « prête pour la revue ».
+ * checks, revues, fichiers) où une PR en brouillon passe « prête pour la revue ». Version : le
+ * milestone de la PR, sinon sa branche cible `release/<version>` (PR d'un sprint automatique) ;
+ * issue liée : celles qu'elle ferme, sinon celle de sa branche `<type>/<n>-…`.
  * Outils : `list_pull_requests`, `get_pull_request`, `mark_pull_request_ready`.
  */
 import { useState } from "react";
@@ -40,6 +42,7 @@ import {
   ToolError,
   VersionBadge,
 } from "../components";
+import { linkedIssues, prVersion } from "../issues";
 import { formatAgo, isOpenPr, plural, prStateMeta, reviewSummary } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
@@ -173,6 +176,8 @@ function PrLine({
 }) {
   const review = reviewSummary(pr);
   const closesVerb = pr.state === "merged" ? "a fermé" : "ferme";
+  const issues = linkedIssues(pr);
+  const version = prVersion(pr);
   return (
     <div
       role="row"
@@ -203,15 +208,13 @@ function PrLine({
           </span>
           <span className="text-line2">→</span>
           <span className="mono">{pr.base}</span>
-          {pr.closes.length > 0 && (
+          {issues.length > 0 && (
             <span className="inline-flex items-center gap-1 text-tiny">
               <Icon name="link" size={12} />
-              {closesVerb} {pr.closes.map((n) => `#${n}`).join(", ")}
+              {pr.closes.length > 0 ? closesVerb : "issue"} {issues.map((n) => `#${n}`).join(", ")}
             </span>
           )}
-          {pr.state !== "draft" && (
-            <Diffstat additions={pr.additions} deletions={pr.deletions} plain />
-          )}
+          <Diffstat additions={pr.additions} deletions={pr.deletions} plain />
           <span className="text-tiny">{formatAgo(pr.updated_at)}</span>
         </div>
       </div>
@@ -226,8 +229,8 @@ function PrLine({
         )}
       </span>
       <span className="flex w-14 shrink-0 justify-end">
-        {pr.milestone ? (
-          <VersionBadge version={pr.milestone} />
+        {version ? (
+          <VersionBadge version={version} />
         ) : (
           <span className="text-caption text-tx3">—</span>
         )}
@@ -305,7 +308,7 @@ function PrDialog({
           <Diffstat additions={pr.additions} deletions={pr.deletions} />
           <span>{plural(pr.changed_files, "fichier")}</span>
           {d?.mergeable === "conflicting" && <Badge tone="red">conflits</Badge>}
-          {pr.milestone && <VersionBadge version={pr.milestone} />}
+          {prVersion(pr) && <VersionBadge version={prVersion(pr)!} />}
         </div>
 
         {error && <ToolError message={error.message} className="mb-0" />}

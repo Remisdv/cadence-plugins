@@ -230,7 +230,7 @@ export function estimateLabel(issue: Pick<Issue, "points" | "estimate">): string
   return issue.estimate;
 }
 
-/** Vues du plugin : celles de la barre du plugin (plugin.toml) et l'étape de setup. */
+/** Vues du plugin : celles de la barre du plugin (plugin.toml) et les routes ouvertes par lien. */
 export interface ViewMeta {
   title: string;
   icon: IconName;
@@ -239,6 +239,8 @@ export interface ViewMeta {
 export const views = {
   sprint: { title: "Sprint en cours", icon: "sprint" },
   issues: { title: "Issues", icon: "issue" },
+  /** Détail d'une issue (`{ repo, number }`), hors de la barre du plugin. */
+  issue: { title: "Issue", icon: "issue" },
   roadmap: { title: "Roadmap", icon: "roadmap" },
   versions: { title: "Versions", icon: "tag" },
   planning: { title: "Planning", icon: "calendar" },

@@ -64,6 +64,8 @@ export interface ViewDecl {
   title: string;
   icon?: string;
   section?: string;
+  /** Route hors de la barre du plugin (détail ouvert par `navigate`). */
+  hidden?: boolean;
 }
 
 export interface Manifest {

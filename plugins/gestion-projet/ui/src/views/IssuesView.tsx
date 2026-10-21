@@ -1,8 +1,11 @@
 /**
  * Vue « Issues » : issues du dépôt choisi dans le sélecteur de Cadence, ou de tous les dépôts
- * suivis (« Tous les dépôts », avec une colonne dépôt), via l'outil `list_issues`.
+ * suivis (« Tous les dépôts », avec une colonne dépôt), via l'outil `list_issues`. Tri par
+ * priorité (comme le remplissage des sprints), ordre de la roadmap, numéro ou activité ; un clic
+ * ouvre le détail (vue `issue`). « Nouvelle issue » crée une issue à la main (`create_issue`),
+ * « Depuis un document » demande le document avant de lancer l'IA.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cadence, isCadenceError, type RunUpdate } from "@cadence/plugin-sdk";
 import {
   Badge,
@@ -11,6 +14,7 @@ import {
   Card,
   Icon,
   SectionLabel,
+  Select,
   Spinner,
   StatusDot,
   cn,
@@ -29,10 +33,14 @@ import {
   withGroup,
   type Issue,
   type IssueList,
+  type RoadmapPlan,
 } from "../domain";
 import { NoRepos, ToolError } from "../components";
+import { isIssueSort, issueRoute, issueSorts, sortIssues, type IssueSort } from "../issues";
 import { useRepos } from "../useRepos";
 import { useTool } from "../useTool";
+import { DocumentDialog } from "./DocumentDialog";
+import { IssueCreateDialog } from "./IssueCreateDialog";
 
 type StateFilter = "open" | "closed" | "all";
 
@@ -42,8 +50,58 @@ const filters: { id: StateFilter; label: string }[] = [
   { id: "all", label: "Toutes" },
 ];
 
+const SORT_KEY = "gestion-projet.issues.sort";
+
+function savedSort(): IssueSort {
+  try {
+    const v = localStorage.getItem(SORT_KEY);
+    return isIssueSort(v) ? v : "priority";
+  } catch {
+    return "priority";
+  }
+}
+
+/**
+ * Position du jalon de chaque issue (`owner/name#n` → index dans la Roadmap) pour le tri
+ * « Roadmap » ; lue seulement quand ce tri est choisi.
+ */
+function useJalonOrder(repos: string[], enabled: boolean): Map<string, number> | null {
+  const [order, setOrder] = useState<Map<string, number> | null>(null);
+  const key = repos.join(",");
+  useEffect(() => {
+    if (!enabled || !key) return;
+    let alive = true;
+    void Promise.all(
+      key.split(",").map((repo) => cadence.call<RoadmapPlan>("roadmap", { repo }).catch(() => null)),
+    ).then((plans) => {
+      if (!alive) return;
+      const map = new Map<string, number>();
+      for (const plan of plans) {
+        plan?.jalons.forEach((j, index) => {
+          for (const i of j.issues) map.set(issueKey({ repo: plan.repo, number: i.number }), index);
+        });
+      }
+      setOrder(map);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [key, enabled]);
+  return enabled ? order : null;
+}
+
 export function IssuesView() {
   const [state, setState] = useState<StateFilter>("open");
+  const [sort, setSortState] = useState<IssueSort>(savedSort);
+  const setSort = (next: IssueSort) => {
+    setSortState(next);
+    try {
+      localStorage.setItem(SORT_KEY, next);
+    } catch {
+      // Stockage indisponible dans l'iframe : le tri vaut pour cette visite.
+    }
+  };
+  const [dialog, setDialog] = useState<"create" | "document" | null>(null);
   const { repos, selection, error: reposError } = useRepos();
   const repo = selection?.kind === "one" ? selection.repo : null;
   const all = selection?.kind === "all";
@@ -72,15 +130,12 @@ export function IssuesView() {
     cadence
       .runAction("completer-issue", issueContext(issue))
       .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
-  // Ouvre le chat : l'IA demande le document (texte collé ou fichiers joints), puis crée les issues.
-  const fromDocument = () =>
-    cadence
-      .runAction("extraire-issues", repo ? { repo } : { repos: repos ?? [] })
-      .catch((e: unknown) => cadence.notify(isCadenceError(e) ? e.message : String(e), "error"));
+  const followed = (repos ?? []).map((r) => r.fullName);
+  const jalonOrder = useJalonOrder(repo ? [repo] : followed, ready && sort === "roadmap");
 
   // Une réponse d'une autre sélection (le temps du rechargement) n'est pas affichée.
   const current = data && (repo ? data.repo === repo : data.repo === null) ? data : null;
-  const issues = current?.issues ?? [];
+  const issues = sortIssues(current?.issues ?? [], sort, (i) => jalonOrder?.get(issueKey(i)) ?? null);
   const byStatus = statusOrder
     .map((s) => ({ status: s, items: issues.filter((i) => i.status === s) }))
     .filter((g) => g.items.length > 0);
@@ -111,14 +166,37 @@ export function IssuesView() {
             </button>
           ))}
         </div>
+        <Select
+          size="sm"
+          aria-label="Trier"
+          title={issueSorts.find((s) => s.id === sort)?.title}
+          value={sort}
+          onChange={(e) => setSort(e.target.value as IssueSort)}
+          className="w-auto"
+        >
+          {issueSorts.map((s) => (
+            <option key={s.id} value={s.id}>
+              Tri : {s.label}
+            </option>
+          ))}
+        </Select>
         <Button
           size="sm"
           icon="file"
-          onClick={() => void fromDocument()}
+          onClick={() => setDialog("document")}
           disabled={!ready}
-          title="Décrire une fonctionnalité (texte, PDF, artefact…) : l'IA vérifie le code et les issues existantes, puis crée les issues chiffrées en story points"
+          title="Choisir un document (fichier ou texte collé) : l'IA vérifie le code et les issues existantes, puis crée les issues chiffrées en story points"
         >
           Depuis un document
+        </Button>
+        <Button
+          size="sm"
+          variant="primary"
+          icon="plus"
+          onClick={() => setDialog("create")}
+          disabled={!ready}
+        >
+          Nouvelle issue
         </Button>
         <Button
           size="sm"
@@ -169,6 +247,7 @@ export function IssuesView() {
                     issue={issue}
                     showRepo={!repo}
                     run={runs[issueKey(issue)]}
+                    onOpen={() => void cadence.navigate("issue", issueRoute(issue, "issues"))}
                     onComplete={() => void complete(issue)}
                     onImplement={() => void implement(issue)}
                   />
@@ -178,6 +257,21 @@ export function IssuesView() {
           ))}
         </div>
       </main>
+
+      {dialog === "create" && (
+        <IssueCreateDialog
+          repos={followed}
+          initialRepo={repo}
+          onClose={() => setDialog(null)}
+          onCreated={() => {
+            setDialog(null);
+            reload();
+          }}
+        />
+      )}
+      {dialog === "document" && (
+        <DocumentDialog repos={followed} initialRepo={repo} onClose={() => setDialog(null)} />
+      )}
     </div>
   );
 }
@@ -186,6 +280,7 @@ function IssueRow({
   issue,
   showRepo,
   run,
+  onOpen,
   onComplete,
   onImplement,
 }: {
@@ -193,6 +288,7 @@ function IssueRow({
   /** Colonne dépôt (mode « Tous les dépôts »). */
   showRepo: boolean;
   run?: RunUpdate;
+  onOpen: () => void;
   onComplete: () => void;
   onImplement: () => void;
 }) {
@@ -208,8 +304,8 @@ function IssueRow({
       <div className="min-w-0 grow">
         <button
           className="block max-w-full truncate text-left text-body text-tx hover:text-clay"
-          onClick={() => void cadence.openExternal(issue.url)}
-          title="Ouvrir sur GitHub"
+          onClick={onOpen}
+          title="Ouvrir le détail"
         >
           {issue.title}
         </button>

@@ -12,14 +12,20 @@ points et classée par priorité, sans jamais recréer ce qui existe déjà, pui
 
 ## Contexte reçu
 
-`{ "repo": "<owner/name>" }` quand un dépôt est sélectionné. Sans `repo` (sélection « Tous les
-dépôts » : le contexte porte alors `repos`, la liste des dépôts suivis ; ou lancement depuis la
-barre du plugin, sans contexte), demande à l'utilisateur sur quel dépôt travailler avant tout.
+`{ "type": "document", "repo": "<owner/name>", "document": { "text"?, "files"? } }` : l'écran
+Issues fait choisir le dépôt et le document **avant** de lancer l'action, qui ne part jamais sans
+document. Depuis l'écran Designs, le contexte porte `"design": "<id>"` (et un `document` vide).
+Dans une conversation ouverte autrement (sans contexte), demande d'abord le dépôt s'il n'est pas
+clair.
 
 ## Le document source
 
 Il peut arriver de plusieurs façons, toutes valables, seules ou ensemble :
 
+- `document.text` du contexte : le **texte collé** dans l'écran Issues ;
+- `document.files` du contexte : **chemins absolus** des fichiers choisis sur la machine (PDF,
+  Markdown, Word…). Lis-les directement à ces chemins avec ton outil de lecture de fichiers, sans
+  les copier ni les modifier ;
 - du **texte dans le message** : description d'une fonctionnalité, cahier des charges, compte rendu,
   artefact collé (spécification, maquette décrite, extrait de conversation…) ;
 - des **fichiers joints** : Cadence les copie dans le dossier `pieces-jointes/` de ton dossier de
@@ -33,8 +39,9 @@ Il peut arriver de plusieurs façons, toutes valables, seules ou ensemble :
   chaque écran ou composant visible devient un besoin. Cite le design dans le corps des issues
   (« Design : `design/<id>/<page>.html` ») pour que « Implémenter » s'y réfère.
 
-S'il n'y a encore aucun document (lancement par le bouton, message vide), demande à l'utilisateur de
-coller le texte ou de joindre ses fichiers avec le trombone du chat, puis attends sa réponse.
+S'il n'y a vraiment aucun document (conversation ouverte sans contexte, message vide), demande à
+l'utilisateur de coller le texte ou de joindre ses fichiers avec le trombone du chat, puis attends
+sa réponse — sans rien lire avant (ni issues, ni code).
 
 ## Outils
 

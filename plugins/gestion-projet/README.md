@@ -12,8 +12,10 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
 - **Connexion GitHub** (gh CLI, navigateur, code d'appairage ou jeton personnel) : gérée par Cadence,
   dans l'onboarding ou les réglages ; le jeton reste au trousseau et arrive au serveur en
   `CADENCE_GITHUB_TOKEN`.
-- **Dépôts suivis** (étape de setup `setup-depots`) : l'écran propose les dépôts du compte et ajoute
-  ou retire des dépôts avec `cadence.repos.follow` / `unfollow`. Le serveur reçoit la liste en
+- **Dépôts suivis** : choisis à l'onboarding par l'étape du service `repos` de Cadence (le plugin
+  n'ajoute pas d'étape `[[setup]]`, qui faisait doublon), puis dans Réglages › Dépôts. Sans dépôt
+  suivi, « Choisir des dépôts » ouvre la route cachée `setup-depots`, qui propose les dépôts du
+  compte et ajoute ou retire des dépôts avec `cadence.repos.follow` / `unfollow`. Le serveur reçoit la liste en
   `CADENCE_REPOS`, puis `notifications/cadence/repos` à chaque changement.
 - **Réglages globaux** (`settings.schema.json`, reçus en `CADENCE_SETTINGS` puis
   `notifications/cadence/settings`) :
@@ -45,21 +47,25 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 | Vue                             | Section        | État                                                                                                                                                                                                   |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée, capacité), KPI, kanban par état, burndown, progression, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; colonne « En revue » sélectionnable (« Relire », « Relire la sélection (n) ») ; **Conversations du sprint** ; un sprint par dépôt en mode « Tous les dépôts » |
-| Issues (`issues`)               | Pilotage       | liste par état, filtres, mode « Tous les dépôts », boutons « Compléter » et « Implémenter »                                                                                                            |
-| Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
+| Issues (`issues`)               | Pilotage       | liste par état, filtres, tri (priorité, roadmap, numéro, activité), mode « Tous les dépôts », « Nouvelle issue » (`create_issue`, jalon par `jalon_issues`), « Depuis un document » (fichiers ou texte, puis l'IA), « Compléter » et « Implémenter » |
+| Issue (`issue`, cachée)         | —              | détail ouvert depuis les listes, le kanban, la Roadmap et les Versions : description et commentaires rendus, version, jalon, labels, estimation, priorité, PR liées ; « Implémenter », « Relire », « Compléter », « Ouvrir sur GitHub » |
+| Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues triées par priorité, sprint ou numéro), nouveau jalon, ranger des issues, « Proposer des issues » ; issues sans jalon |
 | Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
 | Versions (`versions`)           | Planification  | liste des versions ouvertes et livrées ; détail : KPI, portée, notes de version, PR, release, burndown, conditions de clôture, « Clôturer la version » (`update_milestone`) et « Préparer la release » |
 | Architecture (`architecture`)   | Conception     | système (services et liens, schéma automatique) puis couches d'un service (rôles, dépendances autorisées, règles, conventions) ; modèles prêts ; enregistrement par PR ; « Adapter le code » |
 | Designs (`designs`)             | Conception     | designs de Claude Design : ajout par lien claude.ai (import par l'IA), visionneuse des pages, « Créer des issues depuis ce design » |
-| Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
-| Dépôts suivis (`setup-depots`)  | étape de setup | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
+| Pull requests (`pull-requests`) | Code           | PR ouvertes / fermées, CI, revues, version (milestone ou branche cible `release/<version>`), +/−, issue liée (« Closes » ou branche `<type>/<n>-…`) ; détail (description, checks, revues, fichiers) et « Prête pour la revue » (`mark_pull_request_ready`)                                                     |
+| Dépôts suivis (`setup-depots`, cachée) | —       | dépôts suivis, dépôts du compte à suivre                                                                                                                                                               |
 
 Paramètres de route de `versions` : `{ "repo", "version" }` ouvre le détail d'une version (liens
-depuis la Roadmap et le Sprint en cours).
+depuis la Roadmap et le Sprint en cours). Route `issue` : `{ "repo", "number", "from"? }`
+(`from` : vue où ramène « Retour »). Les routes cachées sont déclarées `hidden = true` dans
+`[[ui.views]]` : Cadence les affiche sans les mettre dans la barre du plugin.
 
 ```sh
 pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données d'exemple
 # ?view=sprint|roadmap|versions|pull-requests|setup-depots ; &version=0.1.2 : détail d'une version
+# ?view=issue&number=156 : détail d'une issue
 # ?repo=all : « Tous les dépôts »
 ```
 
@@ -67,11 +73,11 @@ pnpm --dir plugins/gestion-projet/ui dev   # hors de Cadence, avec des données 
 
 Le contexte d'une action porte toujours le dépôt concerné (`repo`, celui de l'issue ou de la
 version) et, pour une action qui déclare un type de contexte, `type` égal à ce type (`issue`,
-`version`, `jalon`, `design`) : Cadence refuse sinon de la lancer.
+`version`, `jalon`, `design`, `review`, `document`) : Cadence refuse sinon de la lancer.
 
 | Action              | Skill               | Mode | Contexte                                   | Ex-agent    |
 | ------------------- | ------------------- | ---- | ------------------------------------------ | ----------- |
-| Créer des issues depuis un document | `extraire-issues` | chat | `{ "repo": "me/app" }` (ou rien depuis la barre du plugin) | — |
+| Créer des issues depuis un document | `extraire-issues` | chat | `{ "type": "document", "repo", "document": { "text"?, "files"? } }` ou `{ …, "design": "accueil" }` (jamais sans document : absente de la barre du plugin) | — |
 | Compléter l'issue   | `completer-issue`   | chat | `{ "type": "issue", "repo", "issue": 42 }` | CTO         |
 | Découper l'issue    | `decouper-issue`    | chat | `{ "type": "issue", "repo", "issue": 42 }` | —           |
 | Implémenter         | `implementer-issue` | fond | `{ "type": "issue", "repo", "issue": 42 }` | développeur |

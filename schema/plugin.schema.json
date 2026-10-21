@@ -139,7 +139,11 @@
                 "type": "string",
                 "pattern": "^[a-zA-Z]+$"
               },
-              "section": { "type": "string", "minLength": 1, "maxLength": 40 }
+              "section": { "type": "string", "minLength": 1, "maxLength": 40 },
+              "hidden": {
+                "description": "Route hors de la barre du plugin (détail ouvert par lien ou par `navigate`, avec ses paramètres).",
+                "type": "boolean"
+              }
             }
           }
         }

@@ -27,6 +27,7 @@ import {
 import { clampZoom, fitZoom, previewSize, stepZoom, type Size } from "../artboard";
 import type { Design, DesignDetail, DesignList } from "../domain";
 import { EmptyCard, Loading, NoRepos, PageHeader, ToolError } from "../components";
+import { documentContext } from "../issues";
 import { formatDay } from "../planning";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
@@ -211,7 +212,10 @@ function Viewer({
       })
       .catch(notifyError);
   const toIssues = () =>
-    cadence.runAction("extraire-issues", { repo, design: design.id }).catch(notifyError);
+    // Le design est le document : contexte « document » exigé par l'action.
+    cadence
+      .runAction("extraire-issues", documentContext(repo, {}, { design: design.id }))
+      .catch(notifyError);
   const remove = async () => {
     try {
       await cadence.call("design_delete", { repo, id: design.id });

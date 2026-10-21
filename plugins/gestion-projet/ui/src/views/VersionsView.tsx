@@ -42,6 +42,7 @@ import {
   NoRepos,
   PageHeader,
   PrStateIcon,
+  openIssue,
   RepoHeading,
   SegmentedTabs,
   SelectionLabel,
@@ -553,8 +554,8 @@ function Scope({ issues, version }: { issues: Issue[]; version: Version }) {
         <button
           key={issue.number}
           type="button"
-          onClick={() => void cadence.openExternal(issue.url)}
-          title="Ouvrir sur GitHub"
+          onClick={() => openIssue(issue)}
+          title="Ouvrir le détail"
           className="flex min-h-10 w-full items-center gap-[11px] px-3.5 py-2 text-left hover:bg-p2"
         >
           <StatusDot tone={issueStatuses[issue.status].dot} size={6} />

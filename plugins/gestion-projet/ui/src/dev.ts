@@ -2,7 +2,8 @@
  * Hôte simulé pour `pnpm dev` hors de Cadence : deux dépôts suivis (service `repos` simulé) et
  * des issues, versions, pull requests et releases d'exemple, sans réseau. `?view=sprint`,
  * `roadmap`, `versions`, `pull-requests` ou `setup-depots` ouvre une vue (`&version=0.1.2` : détail
- * d'une version) ; `?repo=all` démarre sur « Tous les dépôts ». Dans Cadence (iframe), ce module
+ * d'une version ; `?view=issue&number=156` : détail d'une issue) ; `?repo=all` démarre sur « Tous
+ * les dépôts ». Dans Cadence (iframe), ce module
  * n'est pas utilisé.
  */
 import type { MockHostOptions } from "@cadence/plugin-sdk";
@@ -909,8 +910,12 @@ export const devHost: MockHostOptions = {
     view: params.get("view") ?? "issues",
     params: params.get("version")
       ? { repo: "RemiSDV/cadence", version: params.get("version")! }
-      : {},
+      : params.get("number")
+        ? { repo: "RemiSDV/cadence", number: params.get("number")! }
+        : {},
   },
+  // « Créer des issues depuis un document » : un fichier choisi.
+  pickFiles: () => ["C:/Users/moi/Documents/cahier-des-charges.pdf"],
   settings: { tag_prefix: "v", sprint_length_days: 14, merge_method: "squash" },
   conversations: {
     modes: { "implementer-issue": "background", "preparer-release": "background" },
@@ -933,6 +938,45 @@ export const devHost: MockHostOptions = {
         page: 1,
         has_more: false,
       };
+    },
+    get_issue: ({ repo, number }) => {
+      const found = issues.find((i) => i.repo === repo && i.number === number);
+      if (!found) throw new Error(`Issue #${String(number)} introuvable dans ${String(repo)}.`);
+      return {
+        ...found,
+        created_at: "2026-10-10T09:00:00Z",
+        body: [
+          "## Contexte",
+          "Quand le quota de l'API GitHub est épuisé, l'écran affiche une **erreur réseau** au lieu",
+          "d'un message clair (voir `src/lib/github/errors.ts`).",
+          "",
+          "## Critères d'acceptation",
+          "- [x] Détecter la réponse 403 `rate limit`",
+          "- [ ] Afficher l'heure de remise à zéro",
+          "- [ ] Tests unitaires",
+          "",
+          "Dépend de #149. [Doc GitHub](https://docs.github.com/rest/rate-limit)",
+        ].join("\n"),
+        comments: 1,
+        comment_list: [
+          {
+            author: "marc",
+            created_at: `${day(-1)}T10:00:00Z`,
+            body: "Penser au mode **hors ligne** : `offline` ne doit pas masquer le quota.",
+          },
+        ],
+      };
+    },
+    create_issue: ({ repo, title, type, points, priority, milestone }) => {
+      const created = issue(String(repo), 170 + issues.length, String(title), {
+        type: (type as Issue["type"]) ?? null,
+        points: (points as number | undefined) ?? null,
+        priority: (priority as number | undefined) ?? null,
+        milestone: (milestone as string | undefined) ?? null,
+        updated_at: new Date().toISOString(),
+      });
+      issues.unshift(created);
+      return created;
     },
     get_account: () => ({ login: "RemiSDV", name: "Rémi Lhuillier", avatar_url: null, repos: [] }),
     list_account_repos: () => ({ repos: accountRepos.map((r) => ({ ...r, followed: false })) }),

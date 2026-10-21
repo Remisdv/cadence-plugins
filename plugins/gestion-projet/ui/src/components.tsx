@@ -28,6 +28,7 @@ import {
   type PrState,
   type PullRequest,
 } from "./domain";
+import { issueRoute } from "./issues";
 import {
   ciLabel,
   ciMeta,
@@ -370,13 +371,18 @@ export function Burndown({
 
 /* ---------- Issues ---------- */
 
+/** Ouvre le détail d'une issue dans Cadence (vue `issue`) ; « Retour » ramène à la vue courante. */
+export function openIssue(issue: Pick<Issue, "repo" | "number">) {
+  void cadence.navigate("issue", issueRoute(issue, cadence.route?.view));
+}
+
 /** Carte du kanban : n°, type, titre, puis assignés et estimation. */
 export function IssueCard({ issue, showRepo }: { issue: Issue; showRepo?: boolean }) {
   return (
     <button
       type="button"
-      onClick={() => void cadence.openExternal(issue.url)}
-      title="Ouvrir sur GitHub"
+      onClick={() => openIssue(issue)}
+      title="Ouvrir le détail"
       className="block w-full rounded-field border border-line bg-p2 px-[11px] py-2.5 text-left transition-colors hover:border-line2"
     >
       <div className="flex items-center gap-[7px]">
@@ -445,8 +451,8 @@ export function ReviewCard({ issue, review }: { issue: Issue; review: ReviewCont
       </div>
       <button
         type="button"
-        onClick={() => void cadence.openExternal(issue.url)}
-        title="Ouvrir sur GitHub"
+        onClick={() => openIssue(issue)}
+        title="Ouvrir le détail"
         className="mt-1.5 block text-left text-body-sm leading-[1.45] text-tx hover:text-clay"
       >
         {issue.title}

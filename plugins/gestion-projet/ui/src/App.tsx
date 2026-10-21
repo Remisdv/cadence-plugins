@@ -5,6 +5,7 @@ import { isViewId } from "./domain";
 import { ArchitectureView } from "./views/ArchitectureView";
 import { DesignsView } from "./views/DesignsView";
 import { IssuesView } from "./views/IssuesView";
+import { IssueView } from "./views/IssueView";
 import { PlanningView } from "./views/PlanningView";
 import { PullRequestsView } from "./views/PullRequestsView";
 import { RoadmapView } from "./views/RoadmapView";
@@ -46,6 +47,8 @@ export function App() {
       return <SprintView />;
     case "issues":
       return <IssuesView />;
+    case "issue":
+      return <IssueView params={route.params ?? {}} />;
     case "roadmap":
       return <RoadmapView />;
     case "versions":
