@@ -18,7 +18,7 @@ use crate::{
         self, Jalon, ProjectState, ReleaseRecord, ReleaseStatus, RunStatus, STATE_LABEL, STATE_TITLE,
         SprintRecord,
     },
-    server::GestionProjet,
+    server::{GestionProjet, RELEASE_EVENT, SYNC_EVENT},
     sprint,
 };
 
@@ -370,6 +370,7 @@ impl GestionProjet {
         }
 
         // 4. Sprints terminés : fusion de release/x dans la branche par défaut, puis tag.
+        let mut shipped: Vec<(String, ReleaseRecord)> = Vec::new();
         let last = project.state.sprints.len().saturating_sub(1);
         for i in 0..last {
             let pending = project.state.sprints[i]
@@ -379,6 +380,9 @@ impl GestionProjet {
             if pending {
                 let record = project.state.sprints[i].clone();
                 let next = self.ship(repo, &record, false).await;
+                if next.status == ReleaseStatus::Merged {
+                    shipped.push((record.version.clone(), next.clone()));
+                }
                 project.state.sprints[i].release = Some(next);
             }
         }
@@ -388,8 +392,31 @@ impl GestionProjet {
 
         if project.state != before {
             self.save_project(repo, &project).await?;
+            // Passe de fond comprise : les écrans se relisent (N14, R09).
+            self.emit(SYNC_EVENT, json!({ "repo": repo, "tool": "sprints" }))
+                .await;
+        }
+        for (version, release) in &shipped {
+            self.announce_release(repo, version, release).await;
         }
         Ok(project)
+    }
+
+    /// Release livrée (fusion de la PR de release et tag), en fond comme à la demande : événement
+    /// `release.shipped` pour les écrans (toast et bandeau de la vue Sprint, R09).
+    async fn announce_release(&self, repo: &str, version: &str, release: &ReleaseRecord) {
+        tracing::info!(repo, version, pr = ?release.pull_request, tag = ?release.tag, "release livrée");
+        self.emit(
+            RELEASE_EVENT,
+            json!({
+                "repo": repo,
+                "version": version,
+                "pull_request": release.pull_request,
+                "tag": release.tag,
+                "merged_at": release.merged_at,
+            }),
+        )
+        .await;
     }
 
     /// Portée des sprints clos avant qu'elle soit relevée à la clôture : issues restées dans leur
@@ -644,6 +671,7 @@ impl GestionProjet {
             tag: None,
             message,
             no_ci: false,
+            merged_at: None,
         };
 
         let owner = repo.split_once('/').map(|(o, _)| o).unwrap_or(repo);
@@ -663,7 +691,11 @@ impl GestionProjet {
         if let Some(merged) = prs.iter().find(|p| !p["merged_at"].is_null()) {
             let sha = merged["merge_commit_sha"].as_str().unwrap_or("").to_string();
             let n = merged["number"].as_u64().map(|n| n as u32);
-            return self.tag_release(repo, record, &tag, &sha, n).await;
+            let at = previous
+                .merged_at
+                .clone()
+                .or_else(|| merged["merged_at"].as_str().map(str::to_string));
+            return self.tag_release(repo, record, &tag, &sha, n, at).await;
         }
 
         if self.branch_sha(repo, &branch).await?.is_none() {
@@ -828,7 +860,7 @@ impl GestionProjet {
             .await?;
         let merge_sha = merged["sha"].as_str().unwrap_or("").to_string();
         tracing::info!(repo, version = record.version, pr = number, "release fusionnée");
-        self.tag_release(repo, record, &tag, &merge_sha, Some(number))
+        self.tag_release(repo, record, &tag, &merge_sha, Some(number), None)
             .await
     }
 
@@ -839,6 +871,7 @@ impl GestionProjet {
         tag: &str,
         sha: &str,
         pr: Option<u32>,
+        merged_at: Option<String>,
     ) -> Result<ReleaseRecord> {
         let exists = self
             .releases(repo)
@@ -864,6 +897,7 @@ impl GestionProjet {
             tag: Some(tag.to_string()),
             message: None,
             no_ci: false,
+            merged_at: Some(merged_at.unwrap_or_else(sprint::now_iso)),
         })
     }
 
@@ -904,8 +938,11 @@ impl GestionProjet {
             bail!("La release {version} est déjà livrée.");
         }
         let next = self.ship(repo, &record, true).await;
-        project.state.sprints[index].release = Some(next);
+        project.state.sprints[index].release = Some(next.clone());
         self.save_project(repo, &project).await?;
+        if next.status == ReleaseStatus::Merged {
+            self.announce_release(repo, version, &next).await;
+        }
         Ok(project)
     }
 

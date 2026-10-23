@@ -79,6 +79,10 @@ pub struct ReleaseRecord {
     /// fusionner tout de suite plutôt que d'attendre une CI qui ne viendra pas.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_ci: bool,
+    /// Instant (ISO, UTC) où Cadence a constaté la fusion de la PR de release : historique des
+    /// sprints terminés et bandeau « Release livrée » de l'écran (R09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_at: Option<String>,
 }
 
 impl ReleaseRecord {
@@ -89,6 +93,7 @@ impl ReleaseRecord {
             tag: None,
             message: None,
             no_ci: false,
+            merged_at: None,
         }
     }
 }

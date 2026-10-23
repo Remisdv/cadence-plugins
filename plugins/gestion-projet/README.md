@@ -208,12 +208,23 @@ Roadmap) : le démarrage la reprend. Ensuite, Cadence fait tout seul :
 
 L'état est partagé par toute l'équipe dans une issue du dépôt, label `cadence/sprints`, masquée
 dans l'écran Issues (texte lisible + bloc JSON). Chaque Cadence ouvert fait avancer les sprints :
-à l'ouverture de l'écran Sprint et toutes les dix minutes ; toutes les étapes sont idempotentes.
+à l'ouverture de l'écran Sprint et toutes les dix minutes (toutes les minutes tant qu'une release
+attend sa fusion) ; toutes les étapes sont idempotentes.
+
+**Livraison** : à la clôture, la PR de release (`release/x` → branche par défaut) est ouverte puis
+fusionnée et la version taguée dans la foulée si rien ne l'empêche (le serveur relit la PR le
+temps que GitHub calcule si elle est fusionnable) ; sinon « Fusionner maintenant » est proposé dès
+qu'aucune vérification n'est requise. Toute release livrée, à la clôture, à la demande ou par une
+passe de fond, est annoncée (événement `release.shipped` `{ repo, version, pull_request, tag,
+merged_at }`) : toast « Release 0.2.0 livrée : PR #25 fusionnée, tag v0.2.0. », bandeau dans la vue
+Sprint pendant 24 h (masquable), et « PR #25 fusionnée le … à … » dans « Sprints terminés », qui
+affichent tous « fait / portée SP » (portée reconstituée pour les sprints clos avant son relevé).
 
 L'écran Sprint se met à jour seul : après chacune de ses écritures, quand un outil écrit sur le
 dépôt (événement `sync.updated` `{ repo, tool }` émis par le serveur, y compris pour les outils
-appelés par l'IA), à la fin d'une conversation ou d'une exécution du sprint, toutes les 20 s tant
-qu'une conversation du sprint est en cours, et au retour sur la vue. Les listes de GitHub ayant
+appelés par l'IA et les passes du moteur qui changent l'état, `tool: "sprints"`), à la fin d'une
+conversation ou d'une exécution du sprint, toutes les 20 s tant qu'une conversation du sprint est
+en cours ou qu'une release attend, et au retour sur la vue. Les listes de GitHub ayant
 quelques secondes de retard, le serveur corrige ses lectures avec ses propres écritures récentes.
 Outils `project_start`, `project_pause`, `project_resume`, `project_set_duration`,
 `project_close_sprint` (l'IA ne s'en sert qu'à la demande explicite de l'utilisateur),

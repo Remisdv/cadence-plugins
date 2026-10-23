@@ -27,7 +27,7 @@
  * exécution, toutes les 20 s tant qu'une conversation du sprint tourne, et au retour sur la vue
  * (`useLiveRefresh`).
  */
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   cadence,
   isCadenceError,
@@ -109,18 +109,55 @@ import {
   plural,
   pointsByStatus,
   releaseInfo,
+  releaseShippedMessage,
+  recentReleases,
+  type ReleaseShipped,
   requiredPace,
   sprintBoard,
   statusMeters,
 } from "../planning";
 import { pullRequestFor } from "../issues";
 import { useConversations, type ConversationsState } from "../useConversations";
-import { POLL_MS, refreshWhenDone, useLiveRefresh } from "../useLiveRefresh";
+import { isSyncFor, POLL_MS, refreshWhenDone, useLiveRefresh } from "../useLiveRefresh";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
 
 const notifyError = (e: unknown) =>
   void cadence.notify(isCadenceError(e) ? e.message : String(e), "error");
+
+/** Événement du serveur : release d'un sprint terminé livrée (R09). */
+const RELEASE_EVENT = "release.shipped";
+
+/** Releases déjà annoncées par un toast (`<dépôt>@<version>`) : un seul toast par livraison. */
+const announced = new Set<string>();
+
+/** Toast « Release 0.2.0 livrée : PR #25 fusionnée, tag v0.2.0. », une fois par livraison. */
+function announceRelease(r: ReleaseShipped) {
+  const key = `${r.repo.toLowerCase()}@${r.version}`;
+  if (announced.has(key)) return;
+  announced.add(key);
+  void cadence.notify(releaseShippedMessage(r.version, r), "success");
+}
+
+/** Bandeaux « Release livrée » fermés : ne reviennent pas (préférence locale, facultative). */
+const SEEN_KEY = "gestion-projet.releases-vues";
+
+function readSeen(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(SEEN_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSeen(seen: Set<string>) {
+  try {
+    window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen].slice(-50)));
+  } catch {
+    // Stockage indisponible : le bandeau reviendra à la prochaine ouverture.
+  }
+}
 
 type SprintRef = Pick<Version, "number" | "title">;
 
@@ -155,6 +192,17 @@ export function SprintView() {
     });
   }, []);
   useLiveRefresh(shown, refresh, ready && shown.some((r) => running.has(r)));
+  // Release livrée (à la clôture, par « Fusionner maintenant » ou en fond) : toast, et le bandeau
+  // du sprint apparaît à la relecture que déclenche `sync.updated` (R09).
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  useEffect(
+    () =>
+      cadence.on(RELEASE_EVENT, (data) => {
+        if (isSyncFor(data, shownRef.current)) announceRelease(data as ReleaseShipped);
+      }),
+    [],
+  );
   // Sprint affiché par dépôt : « Développer le sprint » rattache sa conversation à ce sprint.
   const [sprints, setSprints] = useState<Record<string, SprintRef | null>>({});
   const onSprint = useCallback((r: string, v: SprintRef | null) => {
@@ -259,6 +307,14 @@ function SprintPanel({
     const timer = setInterval(onRefresh, POLL_MS);
     return () => clearInterval(timer);
   }, [releasePending, onRefresh]);
+  // Releases livrées depuis moins de 24 h : bandeau jusqu'à ce qu'on le ferme (R09).
+  const [seen, setSeen] = useState<ReadonlySet<string>>(readSeen);
+  const shipped = project ? recentReleases(repo, project.sprints, seen) : [];
+  const dismiss = (key: string) => {
+    const next = new Set(seen).add(key);
+    writeSeen(next);
+    setSeen(next);
+  };
 
   let body;
   if (error) body = <ToolError message={error.message} className="mb-0" />;
@@ -294,6 +350,16 @@ function SprintPanel({
       {current?.project_error && (
         <Callout tone="warning">Sprints automatiques : {current.project_error}</Callout>
       )}
+      {shipped.map((r) => (
+        <Callout key={r.key} tone="success" icon="tag">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="grow">{r.message}</span>
+            <Button size="xs" variant="ghost" onClick={() => dismiss(r.key)}>
+              Masquer
+            </Button>
+          </div>
+        </Callout>
+      ))}
       {current && !project && (
         <StartProject
           repo={repo}
@@ -825,12 +891,8 @@ function Deliveries({
         version,
       });
       const info = releaseInfo(r.release);
-      void cadence.notify(
-        r.release?.status === "merged"
-          ? `Release ${version} fusionnée${r.release.tag ? `, ${r.release.tag} publiée` : ""}.`
-          : `Release ${version} : ${info.detail ?? info.label}`,
-        r.release?.status === "merged" ? "success" : "warning",
-      );
+      if (r.release?.status === "merged") announceRelease({ repo, version, ...r.release });
+      else void cadence.notify(`Release ${version} : ${info.detail ?? info.label}`, "warning");
       onDone();
     } catch (e) {
       notifyError(e);

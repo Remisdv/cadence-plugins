@@ -70,8 +70,12 @@ pub const REPOS_NOTIFICATION: &str = "notifications/cadence/repos";
 pub const SETTINGS_NOTIFICATION: &str = "notifications/cadence/settings";
 /// Notification vers Cadence, relayée aux écrans du plugin (`cadence.on(event, …)`).
 pub const EVENT_NOTIFICATION: &str = "notifications/cadence/event";
-/// Événement des écrans : un outil vient d'écrire sur GitHub (`{ repo, tool }`).
+/// Événement des écrans : un outil vient d'écrire sur GitHub (`{ repo, tool }`) ; `tool` vaut
+/// `sprints` pour une passe du moteur qui a changé l'état (release fusionnée en fond…).
 pub const SYNC_EVENT: &str = "sync.updated";
+/// Événement des écrans : release d'un sprint terminé livrée, PR fusionnée et version taguée
+/// (`{ repo, version, pull_request, tag, merged_at }`), en fond comme à la demande (R09).
+pub const RELEASE_EVENT: &str = "release.shipped";
 /// Outils qui écrivent sur un dépôt (issues, sprint, PR) : `sync.updated` après chacun.
 const WRITE_TOOLS: &[&str] = &[
     "create_issue",
@@ -630,6 +634,9 @@ pub struct GestionProjet {
     /// GitHub mettent quelques secondes à refléter un changement de milestone, de labels ou
     /// d'état ; on les corrige avec ces réponses (voir `patch_listing`).
     recent_issues: Arc<Mutex<RecentIssues>>,
+    /// Session MCP avec Cadence, connue dès `notifications/initialized` : le moteur de fond y
+    /// envoie ses événements (`notifications/cadence/event`).
+    peer: Arc<Mutex<Option<rmcp::Peer<RoleServer>>>>,
     #[allow(dead_code)] // lu par #[tool_handler]
     tool_router: ToolRouter<Self>,
 }
@@ -652,8 +659,30 @@ impl GestionProjet {
             engine_lock: Arc::default(),
             hidden_issues: Arc::default(),
             recent_issues: Arc::default(),
+            peer: Arc::default(),
             tool_router: Self::tool_router(),
         })
+    }
+
+    fn remember_peer(&self, peer: &rmcp::Peer<RoleServer>) {
+        *self.peer.lock().unwrap_or_else(|e| e.into_inner()) = Some(peer.clone());
+    }
+
+    /// Événement pour les écrans du plugin (`cadence.on(event, …)`), relayé par Cadence. Sans
+    /// session (tests, avant l'initialisation), il est seulement journalisé.
+    pub(crate) async fn emit(&self, event: &str, data: Value) {
+        let peer = self.peer.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(peer) = peer else {
+            tracing::debug!(event, "événement non envoyé : pas encore de session");
+            return;
+        };
+        let notification = rmcp::model::ServerNotification::CustomNotification(CustomNotification::new(
+            EVENT_NOTIFICATION,
+            Some(json!({ "event": event, "data": data })),
+        ));
+        if let Err(err) = peer.send_notification(notification).await {
+            tracing::debug!(event, "événement non envoyé : {err}");
+        }
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, State> {
@@ -2667,6 +2696,7 @@ impl ServerHandler for GestionProjet {
             .and_then(Value::as_str)
             .map(str::to_string);
         let peer = context.peer.clone();
+        self.remember_peer(&peer);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let response = self.tool_router.call(tcc).await?;
         let ok = match &response {
@@ -2687,6 +2717,14 @@ impl ServerHandler for GestionProjet {
             }
         }
         Ok(response)
+    }
+
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + Send + '_ {
+        self.remember_peer(&context.peer);
+        std::future::ready(())
     }
 
     fn on_custom_notification(
@@ -3193,11 +3231,11 @@ mod tests {
 
     /* ---------- Sprints automatiques sur un faux GitHub ---------- */
 
-    const CRM: &str = "Remisdv/Go-Alternance-CRM-POC";
+    pub(super) const CRM: &str = "Remisdv/Go-Alternance-CRM-POC";
 
     /// Dépôt réel Remisdv/Go-Alternance-CRM-POC : 23 issues sans version (V1 et V2), une PR, et
     /// l'issue d'état #24 « idle » créée par les jalons de la roadmap, sprints jamais démarrés.
-    async fn crm() -> (GestionProjet, Arc<Mutex<crate::fake_github::Repo>>) {
+    pub(super) async fn crm() -> (GestionProjet, Arc<Mutex<crate::fake_github::Repo>>) {
         let mut issues: Vec<Value> =
             serde_json::from_str(include_str!("../fixtures/go-alternance-crm-poc/issues.json")).unwrap();
         for i in &mut issues {
@@ -3743,7 +3781,7 @@ mod tests {
     }
 
     /// Démarre des sprints d'un jour de capacité `capacity` (sprint 0.1.0 avec l'issue #1).
-    async fn start_one_day(s: &GestionProjet, capacity: u32) {
+    pub(super) async fn start_one_day(s: &GestionProjet, capacity: u32) {
         data(
             &s.project_start(Parameters(ProjectStartParams {
                 repo: CRM.into(),
@@ -4152,5 +4190,71 @@ mod events {
             [&json!({ "event": SYNC_EVENT, "data": { "repo": REPO, "tool": "update_issue" } })],
             "{out:#?}"
         );
+    }
+
+    /// R09 : la release fusionnée (à la clôture, ou plus tard par une passe de fond) est annoncée
+    /// aux écrans (`release.shipped`), et l'historique garde l'instant de la fusion.
+    #[tokio::test]
+    async fn announces_shipped_releases() {
+        use super::tests::{CRM, crm, start_one_day};
+        let (s, fake) = crm().await;
+        start_one_day(&s, 1).await;
+        {
+            let mut f = fake.lock().unwrap();
+            f.branches.insert("release/0.1.0".into(), "travail".into());
+            // Encore en calcul à la clôture : une passe suivante fusionne.
+            f.mergeable_lag = 100;
+        }
+        let out = session(
+            s.clone(),
+            &[call(
+                1,
+                "project_close_sprint",
+                json!({ "repo": CRM, "version": "0.1.0" }),
+            )],
+        )
+        .await;
+        let shipped = |out: &[Value]| -> Vec<Value> {
+            out.iter()
+                .filter(|m| m["method"] == EVENT_NOTIFICATION && m["params"]["event"] == RELEASE_EVENT)
+                .map(|m| m["params"]["data"].clone())
+                .collect()
+        };
+        assert!(shipped(&out).is_empty(), "{out:#?}");
+
+        // GitHub a fini son calcul : la passe suivante (de fond, ou l'écran) fusionne et l'annonce.
+        {
+            let mut f = fake.lock().unwrap();
+            f.mergeable_lag = 0;
+            for p in f.pulls.iter_mut() {
+                p["mergeable"] = json!(true);
+            }
+        }
+        s.last_pass.lock().unwrap().clear();
+        let out = session(s.clone(), &[call(2, "sprint_summary", json!({ "repo": CRM }))]).await;
+        let events = shipped(&out);
+        assert_eq!(events.len(), 1, "{out:#?}");
+        let e = &events[0];
+        assert_eq!(
+            (&e["repo"], &e["version"], &e["tag"]),
+            (&json!(CRM), &json!("0.1.0"), &json!("v0.1.0")),
+            "{e}"
+        );
+        assert!(e["pull_request"].as_u64().is_some(), "{e}");
+        assert!(e["merged_at"].as_str().is_some_and(|t| t.ends_with('Z')), "{e}");
+        // Les écrans se relisent aussi (passe du moteur qui a changé l'état).
+        assert!(
+            out.iter().any(|m| m["method"] == EVENT_NOTIFICATION
+                && m["params"]["event"] == SYNC_EVENT
+                && m["params"]["data"]["tool"] == "sprints"),
+            "{out:#?}"
+        );
+        let state = {
+            let f = fake.lock().unwrap();
+            projet::parse_body(f.issue(24).unwrap()["body"].as_str().unwrap()).unwrap()
+        };
+        let release = state.sprints[0].release.clone().unwrap();
+        assert_eq!(release.status, projet::ReleaseStatus::Merged);
+        assert_eq!(release.merged_at.as_deref(), e["merged_at"].as_str());
     }
 }

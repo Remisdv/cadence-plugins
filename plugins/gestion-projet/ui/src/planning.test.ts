@@ -25,6 +25,8 @@ import {
   formatRange,
   gainedToday,
   releaseInfo,
+  releaseShippedMessage,
+  recentReleases,
   releaseNotes,
   requiredPace,
   reviewSummary,
@@ -300,6 +302,15 @@ describe("sprints automatiques", () => {
       detail: "CI en échec sur la PR #12.",
     });
     expect(releaseInfo({ status: "pending" }).tone).toBe("amber");
+    // R09 : historique de la livraison dans les sprints terminés.
+    expect(releaseInfo({ status: "merged", tag: "v0.2.0", pull_request: 25 }).detail).toBe(
+      "PR #25 fusionnée",
+    );
+    expect(
+      releaseInfo({ status: "merged", tag: "v0.2.0", pull_request: 25, merged_at: "2026-10-21T12:42:00Z" })
+        .detail,
+    ).toMatch(/^PR #25 fusionnée le 21 oct\. à \d{2}:\d{2}$/);
+    expect(releaseInfo({ status: "merged" }).detail).toBeNull();
     expect(releaseInfo(null).label).toBe("En cours");
   });
   it("ne garde au sprint suivant que ce qui tient dans sa capacité (N13)", () => {
@@ -344,6 +355,34 @@ describe("sprints automatiques", () => {
     expect(deliveredLabel({ done_points: 4, scope_points: 4 })).toBe("4 / 4 SP");
     expect(deliveredLabel({ done_points: 5 })).toBe("5 / — SP");
     expect(deliveredLabel({})).toBe("0 / — SP");
+  });
+
+  it("annonce une release livrée, en fond comme à la demande (R09)", () => {
+    expect(releaseShippedMessage("0.2.0", { pull_request: 25, tag: "v0.2.0" })).toBe(
+      "Release 0.2.0 livrée : PR #25 fusionnée, tag v0.2.0.",
+    );
+    expect(releaseShippedMessage("0.2.0", {})).toBe(
+      "Release 0.2.0 livrée : branche de release fusionnée.",
+    );
+    const now = new Date("2026-10-21T15:00:00Z");
+    const sprints = [
+      { version: "0.1.0", ended_on: "2026-10-10", release: { status: "merged" as const, tag: "v0.1.0" } },
+      {
+        version: "0.2.0",
+        ended_on: "2026-10-20",
+        release: { status: "merged" as const, tag: "v0.2.0", pull_request: 25, merged_at: "2026-10-21T12:42:00Z" },
+      },
+      {
+        version: "0.3.0",
+        ended_on: "2026-10-21",
+        release: { status: "merged" as const, pull_request: 30, merged_at: "2026-10-19T12:00:00Z" },
+      },
+      { version: "0.4.0", ended_on: null, release: null },
+    ];
+    expect(recentReleases("Me/App", sprints, new Set(), now)).toEqual([
+      { key: "me/app@0.2.0", version: "0.2.0", message: "Release 0.2.0 livrée : PR #25 fusionnée, tag v0.2.0." },
+    ]);
+    expect(recentReleases("me/app", sprints, new Set(["me/app@0.2.0"]), now)).toEqual([]);
   });
 
   it("résume un ajout ou un retrait d'issues du sprint (N08)", () => {

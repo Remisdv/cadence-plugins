@@ -90,6 +90,22 @@ pub fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Instant présent (UTC), `AAAA-MM-JJTHH:MM:SSZ`.
+pub fn now_iso() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
+    let t = secs.rem_euclid(86_400);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        t / 3_600,
+        t % 3_600 / 60,
+        t % 60
+    )
+}
+
 /// Secondes écoulées depuis un instant ISO `AAAA-MM-JJTHH:MM:SSZ` (UTC) ; `None` s'il est illisible.
 pub fn seconds_since(iso: &str) -> Option<i64> {
     let days = day_number(iso)?;

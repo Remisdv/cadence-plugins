@@ -224,7 +224,7 @@ export function releaseInfo(release: SprintRecord["release"]): {
       return {
         label: release.tag ? `${release.tag} publiée` : "Fusionnée",
         tone: "green",
-        detail: null,
+        detail: mergedDetail(release),
       };
     case "blocked":
       return { label: "Livraison bloquée", tone: "red", detail: release.message ?? null };
@@ -235,6 +235,71 @@ export function releaseInfo(release: SprintRecord["release"]): {
     default:
       return { label: "En cours", tone: "muted", detail: null };
   }
+}
+
+/** Jour et heure locaux d'un instant (historique des livraisons). */
+const localDay = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
+const localTime = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+/** Historique d'une release livrée (R09) : « PR #25 fusionnée le 21 oct. à 14:42 ». */
+export function mergedDetail(release: {
+  pull_request?: number;
+  merged_at?: string;
+}): string | null {
+  const at = release.merged_at ? new Date(release.merged_at) : null;
+  const when =
+    at && !Number.isNaN(at.getTime()) ? ` le ${localDay.format(at)} à ${localTime.format(at)}` : "";
+  if (release.pull_request != null) return `PR #${release.pull_request} fusionnée${when}`;
+  return when ? `Fusionnée${when}` : null;
+}
+
+/** Événement `release.shipped` du serveur : release d'un sprint terminé livrée (R09). */
+export interface ReleaseShipped {
+  repo: string;
+  version: string;
+  pull_request?: number | null;
+  tag?: string | null;
+  merged_at?: string | null;
+}
+
+/** « Release 0.2.0 livrée : PR #25 fusionnée, tag v0.2.0. » (toast et bandeau de la vue Sprint). */
+export function releaseShippedMessage(
+  version: string,
+  r: { pull_request?: number | null; tag?: string | null },
+): string {
+  const parts = [
+    r.pull_request != null ? `PR #${r.pull_request} fusionnée` : "branche de release fusionnée",
+    r.tag ? `tag ${r.tag}` : null,
+  ].filter(Boolean);
+  return `Release ${version} livrée : ${parts.join(", ")}.`;
+}
+
+/** Durée pendant laquelle une release livrée est signalée en tête de la vue Sprint. */
+export const RECENT_RELEASE_MS = 24 * 3600 * 1000;
+
+/**
+ * Releases livrées depuis moins de 24 h et pas encore vues (`seen` : `<dépôt>@<version>`) : le
+ * bandeau de la vue Sprint les signale même si l'événement est parti vue fermée (fusion au
+ * démarrage du plugin, en fond).
+ */
+export function recentReleases(
+  repo: string,
+  sprints: Pick<SprintRecord, "version" | "ended_on" | "release">[],
+  seen: ReadonlySet<string>,
+  now: Date = new Date(),
+): { key: string; version: string; message: string }[] {
+  return sprints
+    .filter((s) => s.ended_on && s.release?.status === "merged" && s.release.merged_at)
+    .filter((s) => {
+      const at = new Date(s.release!.merged_at!).getTime();
+      return now.getTime() - at < RECENT_RELEASE_MS && at <= now.getTime() + 60_000;
+    })
+    .map((s) => ({
+      key: `${repo.toLowerCase()}@${s.version}`,
+      version: s.version,
+      message: releaseShippedMessage(s.version, s.release!),
+    }))
+    .filter((r) => !seen.has(r.key));
 }
 
 /** « 9 sept. » (jour civil, sans décalage horaire). */

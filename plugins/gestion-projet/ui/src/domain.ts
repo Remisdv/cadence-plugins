@@ -386,6 +386,8 @@ export interface SprintRecord {
     message?: string;
     /** Aucune vérification sur la PR de release : « Fusionner maintenant » est proposé. */
     no_ci?: boolean;
+    /** Instant ISO de la fusion constatée par Cadence (historique, bandeau « Release livrée »). */
+    merged_at?: string;
   } | null;
 }
 
