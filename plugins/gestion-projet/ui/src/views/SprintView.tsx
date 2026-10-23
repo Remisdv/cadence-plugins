@@ -94,6 +94,7 @@ import {
   daysLeftLabel,
   deliveredLabel,
   delayLabel,
+  delayTile,
   dueFor,
   durationLabel,
   durationOptions,
@@ -1054,7 +1055,8 @@ function Sprint({
   const pointsRemaining = pace.points_remaining ?? pace.points_total - pace.points_done;
   const required = requiredPace(pointsRemaining, pace.days_left);
   const delay = delayLabel(pace.delay_days);
-  const gain = gainedToday(pace.burndown, pace.points_total);
+  const gain = gainedToday(pace.burndown);
+  const delayKpi = delayTile(pace.delay_days);
   const capacityLeft = project?.capacity != null ? project.capacity - pace.points_total : null;
   const openVersion = () =>
     void cadence.navigate("versions", { repo: summary.repo, version: v.title });
@@ -1098,7 +1100,7 @@ function Sprint({
           value={formatPercent(pace.progress)}
           hint={[
             `${pace.points_done} / ${pace.points_total} SP`,
-            pace.burndown.length > 1 ? `+${gain} aujourd'hui` : null,
+            pace.burndown.length > 1 ? `+${formatDecimal(gain)} SP aujourd'hui` : null,
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -1121,10 +1123,10 @@ function Sprint({
           tone="blue"
         />
         <StatCard
-          label="Retard"
-          value={pace.burndown.length > 0 ? formatDecimal(Math.abs(pace.delay_days)) : "—"}
-          hint={pace.burndown.length > 0 ? delay.text : "pas encore commencé"}
-          tone={delay.tone === "amber" ? "amber" : delay.tone === "green" ? "green" : "tx"}
+          label={pace.burndown.length > 0 ? delayKpi.label : "Retard"}
+          value={pace.burndown.length > 0 ? delayKpi.value : "—"}
+          hint={pace.burndown.length > 0 ? delayKpi.hint : "pas encore commencé"}
+          tone={pace.burndown.length > 0 ? delayKpi.tone : "tx"}
         />
       </div>
 

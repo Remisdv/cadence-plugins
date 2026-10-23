@@ -16,6 +16,7 @@ import {
   currentVersion,
   daysLeftLabel,
   delayLabel,
+  delayTile,
   durationLabel,
   durationOptions,
   estimateRange,
@@ -127,7 +128,15 @@ describe("sprint", () => {
     expect(requiredPace(3, 0)).toBe(3);
     expect(requiredPace(7, -1)).toBeNull();
     expect(requiredPace(7, null)).toBeNull();
-    expect(gainedToday([{ remaining: 8 }, { remaining: 6 }], 10)).toBe(20);
+    // Delta en story points, jamais en points de pourcentage (R07 : « +11 aujourd'hui » pour 2 SP / 18).
+    expect(gainedToday([{ remaining: 18 }, { remaining: 16 }])).toBe(2);
+    expect(gainedToday([{ remaining: 8 }, { remaining: 10 }])).toBe(0);
+    expect(gainedToday([{ remaining: 8 }])).toBe(0);
+    // Retard avec son unité, cohérent avec l'état affiché.
+    expect(delayTile(0.1)).toEqual({ label: "Retard", value: "0 j", hint: "dans les temps", tone: "tx" });
+    expect(delayTile(-0.3).value).toBe("0 j");
+    expect(delayTile(1.5)).toEqual({ label: "Retard", value: "1,5 j", hint: "sur la droite idéale", tone: "amber" });
+    expect(delayTile(-2)).toEqual({ label: "Avance", value: "2 j", hint: "sur la droite idéale", tone: "green" });
   });
 
   it("calcule le début du sprint et les jauges", () => {

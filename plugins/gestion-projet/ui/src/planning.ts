@@ -351,11 +351,34 @@ export function requiredPace(remaining: number, daysLeft: number | null): number
   return Math.round((remaining / (daysLeft + 1)) * 10) / 10;
 }
 
-/** Points de pourcentage gagnés depuis la veille (« +3 aujourd'hui »), dans l'unité du burndown. */
-export function gainedToday(burndown: { remaining: number }[], scope: number): number {
+/**
+ * Story points fermés depuis la veille (« +2 SP aujourd'hui »), lus dans le burndown (SP restants
+ * jour par jour) ; un ajout à la portée n'est pas compté comme un recul.
+ */
+export function gainedToday(burndown: { remaining: number }[]): number {
   const [prev, last] = burndown.slice(-2);
-  if (!prev || !last || scope === 0) return 0;
-  return Math.round((Math.max(0, prev.remaining - last.remaining) / scope) * 100);
+  if (!prev || !last) return 0;
+  return Math.max(0, Math.round((prev.remaining - last.remaining) * 10) / 10);
+}
+
+/**
+ * Tuile « Retard » du sprint (R07) : l'écart à la droite idéale, en jours avec son unité, et un
+ * libellé qui ne contredit pas la valeur (« 0 j · dans les temps » sous une demi-journée d'écart).
+ */
+export function delayTile(delayDays: number): {
+  label: string;
+  value: string;
+  hint: string;
+  tone: "amber" | "green" | "tx";
+} {
+  const d = delayLabel(delayDays);
+  if (d.tone === "amber") {
+    return { label: "Retard", value: `${formatDecimal(delayDays)} j`, hint: "sur la droite idéale", tone: "amber" };
+  }
+  if (d.tone === "green") {
+    return { label: "Avance", value: `${formatDecimal(-delayDays)} j`, hint: "sur la droite idéale", tone: "green" };
+  }
+  return { label: "Retard", value: "0 j", hint: "dans les temps", tone: "tx" };
 }
 
 /* ---------- Notes de version ---------- */
