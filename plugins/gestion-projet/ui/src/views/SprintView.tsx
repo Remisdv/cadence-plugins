@@ -115,7 +115,7 @@ import {
 } from "../planning";
 import { pullRequestFor } from "../issues";
 import { useConversations, type ConversationsState } from "../useConversations";
-import { refreshWhenDone, useLiveRefresh } from "../useLiveRefresh";
+import { POLL_MS, refreshWhenDone, useLiveRefresh } from "../useLiveRefresh";
 import { useSelection } from "../useRepos";
 import { useTool } from "../useTool";
 
@@ -250,6 +250,15 @@ function SprintPanel({
   // Une issue d'état « idle » (créée par les jalons de la roadmap) n'est pas un projet démarré :
   // l'écran propose alors « Démarrer le projet », pas la barre des sprints.
   const project = isStarted(current?.project) ? current.project : null;
+  // Release d'un sprint terminé en attente de fusion (CI, calcul de GitHub) : relecture toutes les
+  // 20 s, la fusion et le tag s'affichent sans « Rafraîchir » (N14).
+  const releasePending =
+    project?.sprints.some((s) => s.ended_on && s.release?.status === "pending") ?? false;
+  useEffect(() => {
+    if (!releasePending) return;
+    const timer = setInterval(onRefresh, POLL_MS);
+    return () => clearInterval(timer);
+  }, [releasePending, onRefresh]);
 
   let body;
   if (error) body = <ToolError message={error.message} className="mb-0" />;
@@ -849,7 +858,11 @@ function Deliveries({
                 </span>
                 <span
                   className="mono text-caption text-tx2"
-                  title="Story points livrés sur la portée du sprint à sa clôture"
+                  title={
+                    s.scope_points == null
+                      ? "Story points livrés (portée du sprint non relevée)"
+                      : "Story points livrés sur la portée du sprint à sa clôture"
+                  }
                 >
                   {deliveredLabel(s)}
                 </span>

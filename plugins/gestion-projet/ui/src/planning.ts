@@ -180,15 +180,12 @@ export function closeSprintLead(due: string, today: string): string {
 }
 
 /**
- * Story points livrés d'un sprint terminé (N14) : « 4 / 20 SP » sur la portée relevée à la clôture ;
- * à défaut sur la capacité visée si elle est connue, sinon « 4 SP livrés ».
+ * Story points livrés d'un sprint terminé (N14) : toujours « fait / portée SP » (« 4 / 20 SP »),
+ * sur la portée relevée à la clôture ou reconstituée par le serveur pour les anciens sprints ;
+ * « 4 / — SP » si elle reste inconnue (jamais la capacité visée, qui n'est pas la portée).
  */
-export function deliveredLabel(
-  s: Pick<SprintRecord, "done_points" | "scope_points" | "capacity">,
-): string {
-  const done = s.done_points ?? 0;
-  const of = s.scope_points ?? (s.capacity > 0 ? s.capacity : null);
-  return of === null ? `${done} SP livrés` : `${done} / ${of} SP`;
+export function deliveredLabel(s: Pick<SprintRecord, "done_points" | "scope_points">): string {
+  return `${s.done_points ?? 0} / ${s.scope_points ?? "—"} SP`;
 }
 
 /** Retour d'un ajout / retrait d'issues du sprint (`sprint_issues`) : message et ton du toast. */

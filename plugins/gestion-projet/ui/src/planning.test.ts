@@ -339,10 +339,11 @@ describe("sprints automatiques", () => {
   });
 
   it("compte les SP livrés sur la portée du sprint terminé (N14)", () => {
-    expect(deliveredLabel({ done_points: 4, scope_points: 20, capacity: 0 })).toBe("4 / 20 SP");
-    expect(deliveredLabel({ done_points: 5, capacity: 21 })).toBe("5 / 21 SP");
-    expect(deliveredLabel({ done_points: 4, capacity: 0 })).toBe("4 SP livrés");
-    expect(deliveredLabel({ capacity: 0 })).toBe("0 SP livrés");
+    // Même format pour tous les sprints terminés (recette 3 : « 4 SP livrés » / « 5 / 21 SP »).
+    expect(deliveredLabel({ done_points: 4, scope_points: 20 })).toBe("4 / 20 SP");
+    expect(deliveredLabel({ done_points: 4, scope_points: 4 })).toBe("4 / 4 SP");
+    expect(deliveredLabel({ done_points: 5 })).toBe("5 / — SP");
+    expect(deliveredLabel({})).toBe("0 / — SP");
   });
 
   it("résume un ajout ou un retrait d'issues du sprint (N08)", () => {

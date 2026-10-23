@@ -28,6 +28,19 @@ pub const TICK: Duration = Duration::from_secs(600);
 const THROTTLE: Duration = Duration::from_secs(60);
 /// Délai laissé à la CI pour s'annoncer sur une PR de release toute neuve.
 const CI_GRACE_SECS: i64 = 300;
+/// Passe de fond plus rapprochée tant qu'une release attend sa fusion (N14).
+const PENDING_TICK: Duration = Duration::from_secs(60);
+/// Relectures d'une PR dont GitHub calcule encore `mergeable` (quelques secondes après sa
+/// création) : la release d'un dépôt sans CI est fusionnée dès la clôture (N14).
+#[cfg(not(test))]
+const MERGEABLE_WAITS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(3),
+    Duration::from_secs(4),
+];
+#[cfg(test)]
+const MERGEABLE_WAITS: [Duration; 4] = [Duration::ZERO; 4];
 
 /// Issue d'état lue sur GitHub.
 #[derive(Debug, Clone)]
@@ -370,10 +383,56 @@ impl GestionProjet {
             }
         }
 
+        // 5. Sprints terminés avant le relevé de la portée : « fait / portée » pour tous (N14).
+        self.backfill_scope(repo, &mut project).await;
+
         if project.state != before {
             self.save_project(repo, &project).await?;
         }
         Ok(project)
+    }
+
+    /// Portée des sprints clos avant qu'elle soit relevée à la clôture : issues restées dans leur
+    /// milestone plus celles reportées au sprint suivant (`carried`). Une erreur laisse la portée
+    /// inconnue, sans bloquer la passe.
+    async fn backfill_scope(&self, repo: &str, project: &mut Project) {
+        let last = project.state.sprints.len().saturating_sub(1);
+        for i in 0..last {
+            let s = &project.state.sprints[i];
+            if s.ended_on.is_none() || s.scope_points.is_some() {
+                continue;
+            }
+            let version = s.version.clone();
+            let carried = project.state.sprints[i + 1].carried.clone();
+            match self.measure_ended(repo, &version, &carried).await {
+                Ok(Some((done, scope))) => {
+                    let s = &mut project.state.sprints[i];
+                    let done = *s.done_points.get_or_insert(done);
+                    s.scope_points = Some(scope.max(done));
+                }
+                Ok(None) => {}
+                Err(err) => tracing::debug!(repo, version, "portée du sprint terminé : {err:#}"),
+            }
+        }
+    }
+
+    /// (SP fermés, portée) d'un sprint terminé, d'après son milestone et ses issues reportées.
+    async fn measure_ended(&self, repo: &str, version: &str, carried: &[u32]) -> Result<Option<(u32, u32)>> {
+        let Some(number) = self.find_milestone_number(repo, version).await? else {
+            return Ok(None);
+        };
+        let issues = self.milestone_issues(repo, number).await?;
+        let done: u32 = issues
+            .iter()
+            .filter(|i| i.state == "closed")
+            .map(projet::weight)
+            .sum();
+        let mut scope: u32 = issues.iter().map(projet::weight).sum();
+        for n in carried.iter().filter(|n| !issues.iter().any(|i| i.number == **n)) {
+            let raw = self.raw_issue(repo, *n).await?;
+            scope += projet::weight(&model::issue_from(&raw, false));
+        }
+        Ok(Some((done, scope)))
     }
 
     /// Prépare le sprint en cours ; rend le numéro de son milestone.
@@ -679,14 +738,15 @@ impl GestionProjet {
             .map(|n| n as u32)
             .context("numéro de PR illisible")?;
         // Détail : `mergeable` n'est calculé que sur une PR lue seule.
-        let detail = self.gh.get(&format!("/repos/{repo}/pulls/{number}"), &[]).await?;
+        let mut detail = self.gh.get(&format!("/repos/{repo}/pulls/{number}"), &[]).await?;
         let sha = detail["head"]["sha"].as_str().unwrap_or("").to_string();
         let age = detail["created_at"]
             .as_str()
             .and_then(sprint::seconds_since)
             .unwrap_or(i64::MAX);
 
-        match self.ci_state(repo, &sha).await? {
+        let ci = self.ci_state(repo, &sha).await?;
+        match ci {
             Ci::Failure => {
                 return Ok(status(
                     ReleaseStatus::Blocked,
@@ -716,13 +776,37 @@ impl GestionProjet {
             }
             Ci::None | Ci::Success => {}
         }
+        // GitHub calcule `mergeable` en arrière-plan après la création ou un push : on relit la PR
+        // quelques secondes plutôt que d'attendre la passe suivante (N14).
+        for wait in MERGEABLE_WAITS {
+            if !detail["mergeable"].is_null() {
+                break;
+            }
+            tokio::time::sleep(wait).await;
+            detail = self.gh.get(&format!("/repos/{repo}/pulls/{number}"), &[]).await?;
+        }
+        if detail["head"]["sha"].as_str().unwrap_or("") != sha {
+            return Ok(status(
+                ReleaseStatus::Pending,
+                Some(number),
+                Some(format!(
+                    "Nouveaux commits sur la PR #{number} : vérification à la prochaine passe."
+                )),
+            ));
+        }
         match detail["mergeable"].as_bool() {
+            // « Fusionner maintenant » : GitHub vérifie lui-même à la fusion.
+            None if now => {}
             None => {
-                return Ok(status(
-                    ReleaseStatus::Pending,
-                    Some(number),
-                    Some(format!("GitHub vérifie que la PR #{number} peut être fusionnée.")),
-                ));
+                // Sans vérification requise, l'écran propose de fusionner tout de suite.
+                return Ok(ReleaseRecord {
+                    no_ci: ci == Ci::None,
+                    ..status(
+                        ReleaseStatus::Pending,
+                        Some(number),
+                        Some(format!("GitHub vérifie que la PR #{number} peut être fusionnée.")),
+                    )
+                });
             }
             Some(false) => {
                 return Ok(status(
@@ -1586,18 +1670,32 @@ impl GestionProjet {
         })
     }
 
-    /// Passe de fond sur tous les dépôts suivis, toutes les dix minutes.
+    /// Passe de fond sur tous les dépôts suivis, toutes les dix minutes ; toutes les minutes tant
+    /// qu'une release attend sa fusion (N14).
     pub async fn run_engine(self) {
         tokio::time::sleep(Duration::from_secs(30)).await;
         loop {
+            let mut waiting = false;
             for repo in self.followed() {
-                if let Err(err) = self.reconcile(&repo).await {
-                    tracing::warn!(repo, "sprints automatiques : {err:#}");
+                match self.reconcile(&repo).await {
+                    Ok(Some(project)) => waiting |= release_waiting(&project),
+                    Ok(None) => {}
+                    Err(err) => tracing::warn!(repo, "sprints automatiques : {err:#}"),
                 }
             }
-            tokio::time::sleep(TICK).await;
+            tokio::time::sleep(if waiting { PENDING_TICK } else { TICK }).await;
         }
     }
+}
+
+/// Un sprint terminé attend encore la fusion de sa release (CI, calcul de `mergeable`).
+fn release_waiting(project: &Project) -> bool {
+    let sprints = &project.state.sprints;
+    sprints[..sprints.len().saturating_sub(1)].iter().any(|s| {
+        s.release
+            .as_ref()
+            .is_some_and(|r| r.status == ReleaseStatus::Pending)
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

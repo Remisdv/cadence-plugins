@@ -32,6 +32,11 @@ pub struct Repo {
     /// Listes en retard (comme GitHub, quelques secondes) : `GET /issues` rend encore le
     /// milestone d'avant pour les issues déplacées depuis que ce drapeau est levé.
     pub listing_lag: bool,
+    /// Lectures `GET /pulls/{n}` d'une PR toute neuve qui rendent encore `mergeable: null`
+    /// (GitHub calcule la fusionnabilité en arrière-plan) ; 0 : connue tout de suite.
+    pub mergeable_lag: u32,
+    /// Lectures restantes avant que `mergeable` soit calculé, par PR créée.
+    computing: HashMap<u64, u32>,
     /// Milestone d'avant des issues déplacées pendant `listing_lag`.
     lagging: HashMap<u64, Value>,
     /// Écritures d'issues reçues : horodatage `updated_at` croissant.
@@ -60,6 +65,8 @@ impl Repo {
             requests: Vec::new(),
             workflows: 0,
             listing_lag: false,
+            mergeable_lag: 0,
+            computing: HashMap::new(),
             lagging: HashMap::new(),
             writes: 0,
         }
@@ -278,10 +285,25 @@ impl Repo {
                     .collect();
                 (200, Value::Array(list))
             }
-            ("GET", ["pulls", n]) => match self.pull_mut(n) {
-                Some(p) => (200, p.clone()),
-                None => not_found(path),
-            },
+            ("GET", ["pulls", n]) => {
+                let number = n.parse::<u64>().unwrap_or(0);
+                let computed = match self.computing.get_mut(&number) {
+                    Some(left) if *left > 0 => {
+                        *left -= 1;
+                        false
+                    }
+                    _ => true,
+                };
+                match self.pull_mut(n) {
+                    Some(p) => {
+                        if computed && p["mergeable"].is_null() && p["state"] == "open" {
+                            p["mergeable"] = json!(true);
+                        }
+                        (200, p.clone())
+                    }
+                    None => not_found(path),
+                }
+            }
             ("POST", ["pulls"]) => {
                 let number = self
                     .pulls
@@ -305,6 +327,12 @@ impl Repo {
                 pr["draft"] = json!(body["draft"].as_bool().unwrap_or(false));
                 // Toute neuve (fin de journée : jamais « vieille » de plus que le délai de la CI).
                 pr["created_at"] = json!(format!("{}T23:59:59Z", crate::sprint::today()));
+                if self.mergeable_lag > 0 {
+                    pr["mergeable"] = Value::Null;
+                    let created = pr.clone();
+                    self.computing.insert(number, self.mergeable_lag);
+                    return (201, created);
+                }
                 (201, pr.clone())
             }
             ("PATCH", ["pulls", n]) => {

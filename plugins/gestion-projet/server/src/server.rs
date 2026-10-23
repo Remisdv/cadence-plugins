@@ -783,7 +783,7 @@ impl GestionProjet {
     }
 
     /// Numéro du milestone d'une version (titre, avec ou sans préfixe de tag), s'il existe.
-    async fn find_milestone_number(&self, repo: &str, title: &str) -> Result<Option<u32>> {
+    pub(crate) async fn find_milestone_number(&self, repo: &str, title: &str) -> Result<Option<u32>> {
         let all = self.milestones(repo, "all").await?;
         let Some(m) = model::find_milestone(&all, title, &self.settings().tag_prefix) else {
             return Ok(None);
@@ -801,7 +801,7 @@ impl GestionProjet {
         })
     }
 
-    async fn raw_issue(&self, repo: &str, number: u32) -> Result<Value> {
+    pub(crate) async fn raw_issue(&self, repo: &str, number: u32) -> Result<Value> {
         self.gh.get(&format!("/repos/{repo}/issues/{number}"), &[]).await
     }
 
@@ -3917,10 +3917,15 @@ mod tests {
     /// N13 / N14 : clôture avec l'excédent rendu au carnet, portée relevée (« fait / portée »),
     /// numéro de milestone des sprints terminés (conversations), release fusionnée tout de suite
     /// sur un dépôt sans CI ; avec des workflows, attente puis « Fusionner maintenant ».
+    /// N14 (recette 3) : GitHub calcule encore `mergeable` juste après la création de la PR de
+    /// release ; elle est relue et fusionnée dans la foulée, sinon « Fusionner maintenant » est
+    /// proposé tout de suite (dépôt sans vérification).
     #[tokio::test]
     async fn closes_a_sprint_and_ships_without_ci() {
-        for workflows in [0, 1] {
+        // (workflows, lectures de la PR avant que `mergeable` soit calculé)
+        for (workflows, lag) in [(0, 0), (0, 3), (1, 0), (0, 100)] {
             let (s, fake) = crm().await;
+            fake.lock().unwrap().mergeable_lag = lag;
             start_one_day(&s, 1).await;
             data(
                 &s.sprint_issues(Parameters(SprintIssuesParams {
@@ -3974,12 +3979,21 @@ mod tests {
                 .clone();
             assert_eq!(ended["milestone"], 1, "{ended}");
             let release = &ended["release"];
-            if workflows == 0 {
+            if workflows == 0 && lag < 100 {
                 assert_eq!(release["status"], "merged", "{release}");
                 assert_eq!(release["tag"], "v0.1.0");
             } else {
                 assert_eq!(release["status"], "pending", "{release}");
-                assert_eq!(release["no_ci"], true);
+                assert_eq!(
+                    release["no_ci"], true,
+                    "« Fusionner maintenant » proposé : {release}"
+                );
+                if lag == 100 {
+                    assert!(
+                        release["message"].as_str().unwrap().contains("GitHub vérifie"),
+                        "{release}"
+                    );
+                }
                 let shipped = data(
                     &s.project_ship_release(Parameters(ShipReleaseParams {
                         repo: CRM.into(),
@@ -3991,6 +4005,59 @@ mod tests {
                 assert_eq!(shipped["release"]["status"], "merged", "{shipped}");
             }
         }
+    }
+
+    /// N14 : un sprint clos avant le relevé de la portée retrouve « fait / portée » (issues de son
+    /// milestone et issues reportées au sprint suivant), comme les sprints récents.
+    #[tokio::test]
+    async fn backfills_the_scope_of_old_sprints() {
+        let (s, fake) = crm().await;
+        start_one_day(&s, 1).await;
+        data(
+            &s.sprint_issues(Parameters(SprintIssuesParams {
+                repo: CRM.into(),
+                add: vec![2],
+                remove: vec![],
+            }))
+            .await
+            .unwrap(),
+        );
+        {
+            let mut f = fake.lock().unwrap();
+            let one = f.issues.iter_mut().find(|i| i["number"] == 1).unwrap();
+            one["state"] = json!("closed");
+            one["updated_at"] = json!("2026-10-21T08:00:00Z");
+        }
+        data(
+            &s.project_close_sprint(Parameters(CloseSprintParams {
+                repo: CRM.into(),
+                version: Some("0.1.0".into()),
+                to_backlog: vec![],
+            }))
+            .await
+            .unwrap(),
+        );
+        let state_of = |fake: &Mutex<crate::fake_github::Repo>| {
+            let f = fake.lock().unwrap();
+            projet::parse_body(f.issue(24).unwrap()["body"].as_str().unwrap()).unwrap()
+        };
+        let recorded = state_of(&fake).sprints[0].scope_points.unwrap();
+        // État d'un plugin d'avant le relevé : ni portée ni SP livrés.
+        {
+            let mut state = state_of(&fake);
+            state.sprints[0].scope_points = None;
+            state.sprints[0].done_points = None;
+            let mut f = fake.lock().unwrap();
+            let issue = f.issues.iter_mut().find(|i| i["number"] == 24).unwrap();
+            issue["body"] = json!(projet::render_body(&state));
+        }
+        s.reconcile(CRM).await.unwrap();
+        let old = state_of(&fake).sprints[0].clone();
+        let weight =
+            |n: u64| projet::weight(&model::issue_from(fake.lock().unwrap().issue(n).unwrap(), false));
+        assert_eq!(old.done_points, Some(weight(1)), "{old:?}");
+        assert_eq!(old.scope_points, Some(weight(1) + weight(2)), "{old:?}");
+        assert_eq!(old.scope_points, Some(recorded));
     }
 }
 
