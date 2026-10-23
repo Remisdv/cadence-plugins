@@ -18,7 +18,7 @@ import { compareLooseVersion, compareSemver } from "./semver";
 import { checkSkill } from "./skill";
 import { TARGETS } from "./targets";
 import { exposedTools, scanTools } from "./tools";
-import { validatePlugin } from "./validate";
+import { missingReadOnlyHints, validatePlugin } from "./validate";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -560,11 +560,46 @@ describe("catalogue", () => {
       `#[tool(name = "lire", description = "x")]\npub fn read_impl() {}\n`,
     ];
     expect(scanTools(sources)).toEqual([
-      { name: "incrementer", ui: false },
-      { name: "etat", ui: true },
-      { name: "lire", ui: false },
+      { name: "incrementer", ui: false, readOnly: null },
+      { name: "etat", ui: true, readOnly: null },
+      { name: "lire", ui: false, readOnly: null },
     ]);
     expect(exposedTools(sources)).toEqual(["incrementer", "lire"]);
+  });
+
+  it("lit readOnlyHint et avertit d'un outil exposé qui ne le déclare pas (R01)", () => {
+    const sources = [
+      `#[tool(\n        description = "Lit.",\n        annotations(read_only_hint = true)\n    )]\n    async fn lire(&self) {}\n` +
+        `#[tool(description = "Écrit.", annotations(read_only_hint = false, destructive_hint = true))]\n    async fn ecrire(&self) {}\n` +
+        `#[tool(description = "Oublié.")]\n    async fn oublie(&self) {}\n` +
+        `#[tool(description = "Écran.", meta = ui_only())]\n    async fn ecran(&self) {}\n`,
+    ];
+    const tools = scanTools(sources);
+    expect(tools.map((t) => [t.name, t.readOnly])).toEqual([
+      ["lire", true],
+      ["ecrire", false],
+      ["oublie", null],
+      ["ecran", null],
+    ]);
+    // Les outils réservés à l'interface ne passent jamais par l'IA : pas d'accord à demander.
+    expect(missingReadOnlyHints(tools)).toEqual(["oublie"]);
+
+    const base = readFileSync(join(fixture(), "plugin.toml"), "utf8");
+    const dir = fixture({
+      "plugin.toml": base.replace('min_cadence = "0.3.0"\n', 'min_cadence = "0.3.0"\n\n[server]\nbin = "exemple-serveur"\n'),
+      "server/Cargo.toml": `[package]\nname = "exemple-serveur"\nversion = "0.1.0"\n`,
+      "server/src/server.rs": sources[0]!,
+    });
+    const report = validatePlugin(dir);
+    expect(report.errors).toEqual([]);
+    const warnings = report.warnings.join("\n");
+    expect(warnings).toContain("1 outil(s) MCP sans readOnlyHint explicite");
+    expect(warnings).toContain(": oublie —");
+  });
+
+  it("chaque outil du serveur gestion-projet déclare readOnlyHint", () => {
+    const report = validatePlugin(join(REPO_ROOT, "plugins", "gestion-projet"));
+    expect(report.warnings.filter((w) => w.includes("readOnlyHint"))).toEqual([]);
   });
 
   it("liste les dépendances externes, services compris", () => {

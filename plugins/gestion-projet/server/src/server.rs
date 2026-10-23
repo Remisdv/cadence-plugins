@@ -1798,7 +1798,8 @@ fn no_repos_message() -> String {
 impl GestionProjet {
     #[tool(
         description = "Compte GitHub connecté dans Cadence (login, nom, avatar) et dépôts suivis : sert à l'écran « Dépôts suivis ».",
-        meta = ui_only()
+        meta = ui_only(),
+        annotations(read_only_hint = true)
     )]
     async fn get_account(&self, Parameters(_): Parameters<Empty>) -> ToolResult {
         respond(
@@ -1817,7 +1818,8 @@ impl GestionProjet {
 
     #[tool(
         description = "Dépôts accessibles au compte GitHub connecté (les 100 plus récents), pour choisir ceux à suivre.",
-        meta = ui_only()
+        meta = ui_only(),
+        annotations(read_only_hint = true)
     )]
     async fn list_account_repos(&self, Parameters(p): Parameters<ListAccountReposParams>) -> ToolResult {
         respond(
@@ -1859,7 +1861,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Dépôt GitHub suivi : nom complet, branche par défaut, visibilité, URL, préfixe de tag et, si les sprints automatiques sont démarrés, la branche de release du sprint en cours (`sprints.release_branch`). À lire avant de créer une branche ou une PR."
+        description = "Dépôt GitHub suivi : nom complet, branche par défaut, visibilité, URL, préfixe de tag et, si les sprints automatiques sont démarrés, la branche de release du sprint en cours (`sprints.release_branch`). À lire avant de créer une branche ou une PR.",
+        annotations(read_only_hint = true)
     )]
     async fn get_repository(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -1901,35 +1904,40 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Liste les issues (sans les pull requests), triées par dernière mise à jour. Avec `repo` : ce dépôt ; sans `repo` : tous les dépôts suivis, chaque issue portant son champ `repo`. Chaque issue porte son type (label type/*), son état (todo, doing, review, done), son estimation et sa version (milestone)."
+        description = "Liste les issues (sans les pull requests), triées par dernière mise à jour. Avec `repo` : ce dépôt ; sans `repo` : tous les dépôts suivis, chaque issue portant son champ `repo`. Chaque issue porte son type (label type/*), son état (todo, doing, review, done), son estimation et sa version (milestone).",
+        annotations(read_only_hint = true)
     )]
     async fn list_issues(&self, Parameters(p): Parameters<ListIssuesParams>) -> ToolResult {
         respond(self.do_list_issues(p).await)
     }
 
     #[tool(
-        description = "Lit une issue d'un dépôt suivi : titre, description markdown, labels, version, assignés et commentaires."
+        description = "Lit une issue d'un dépôt suivi : titre, description markdown, labels, version, assignés et commentaires.",
+        annotations(read_only_hint = true)
     )]
     async fn get_issue(&self, Parameters(p): Parameters<GetIssueParams>) -> ToolResult {
         respond(self.do_get_issue(p).await)
     }
 
     #[tool(
-        description = "Crée une issue dans un dépôt suivi. Le type et l'état deviennent des labels type/* et status/* ; la version est le titre d'un milestone existant."
+        description = "Crée une issue dans un dépôt suivi. Le type et l'état deviennent des labels type/* et status/* ; la version est le titre d'un milestone existant.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn create_issue(&self, Parameters(p): Parameters<CreateIssueParams>) -> ToolResult {
         respond(self.do_create_issue(p).await)
     }
 
     #[tool(
-        description = "Modifie une issue d'un dépôt suivi : titre, description, état ouvert/fermé, état d'avancement (status), labels (remplacer, ajouter, retirer), version, assignés."
+        description = "Modifie une issue d'un dépôt suivi : titre, description, état ouvert/fermé, état d'avancement (status), labels (remplacer, ajouter, retirer), version, assignés.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
     )]
     async fn update_issue(&self, Parameters(p): Parameters<UpdateIssueParams>) -> ToolResult {
         respond(self.do_update_issue(p).await)
     }
 
     #[tool(
-        description = "Ajoute un commentaire markdown à une issue ou à une pull request d'un dépôt suivi."
+        description = "Ajoute un commentaire markdown à une issue ou à une pull request d'un dépôt suivi.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn add_comment(&self, Parameters(p): Parameters<AddCommentParams>) -> ToolResult {
         respond(
@@ -1952,7 +1960,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Liste les versions (milestones) d'un dépôt suivi : un milestone daté est un sprint, un milestone sans date un palier de roadmap. La description d'un palier liste ses thèmes."
+        description = "Liste les versions (milestones) d'un dépôt suivi : un milestone daté est un sprint, un milestone sans date un palier de roadmap. La description d'un palier liste ses thèmes.",
+        annotations(read_only_hint = true)
     )]
     async fn list_milestones(&self, Parameters(p): Parameters<ListMilestonesParams>) -> ToolResult {
         respond(
@@ -1971,54 +1980,64 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Crée une version (milestone) dans un dépôt suivi. Avec une échéance (AAAA-MM-JJ), c'est un sprint ; sans date, un palier de roadmap. La description peut commencer par « # Nom » et lister les thèmes (« - Thème »)."
+        description = "Crée une version (milestone) dans un dépôt suivi. Avec une échéance (AAAA-MM-JJ), c'est un sprint ; sans date, un palier de roadmap. La description peut commencer par « # Nom » et lister les thèmes (« - Thème »).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn create_milestone(&self, Parameters(p): Parameters<MilestoneParams>) -> ToolResult {
         respond(self.do_create_milestone(p).await)
     }
 
     #[tool(
-        description = "Modifie une version (milestone) désignée par son titre : nouveau titre, description, échéance (chaîne vide pour la retirer), ou state « closed » pour la clore (« open » pour la rouvrir)."
+        description = "Modifie une version (milestone) désignée par son titre : nouveau titre, description, échéance (chaîne vide pour la retirer), ou state « closed » pour la clore (« open » pour la rouvrir).",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
     )]
     async fn update_milestone(&self, Parameters(p): Parameters<UpdateMilestoneParams>) -> ToolResult {
         respond(self.do_update_milestone(p).await)
     }
 
     #[tool(
-        description = "Liste les pull requests (ouvertes par défaut ; closed = 30 dernières fusionnées ou fermées) avec l'état des checks (CI), des revues, la branche, la version et les issues fermées. Avec `repo` : ce dépôt ; sans `repo` : tous les dépôts suivis, chaque PR portant son champ `repo`."
+        description = "Liste les pull requests (ouvertes par défaut ; closed = 30 dernières fusionnées ou fermées) avec l'état des checks (CI), des revues, la branche, la version et les issues fermées. Avec `repo` : ce dépôt ; sans `repo` : tous les dépôts suivis, chaque PR portant son champ `repo`.",
+        annotations(read_only_hint = true)
     )]
     async fn list_pull_requests(&self, Parameters(p): Parameters<ListPullRequestsParams>) -> ToolResult {
         respond(self.do_list_pull_requests(p).await)
     }
 
     #[tool(
-        description = "Lit une pull request d'un dépôt suivi : description, branches, checks du dernier commit, revues, fichiers modifiés (sans les patchs : lire le code dans un worktree)."
+        description = "Lit une pull request d'un dépôt suivi : description, branches, checks du dernier commit, revues, fichiers modifiés (sans les patchs : lire le code dans un worktree).",
+        annotations(read_only_hint = true)
     )]
     async fn get_pull_request(&self, Parameters(p): Parameters<NumberParams>) -> ToolResult {
         respond(self.do_get_pull_request(p).await)
     }
 
     #[tool(
-        description = "Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée vers la branche par défaut (ou `base`, la branche de release du sprint pour une issue). Refuse la branche par défaut comme source et, comme base, la branche d'une autre PR ouverte (PR empilée)."
+        description = "Ouvre une pull request (brouillon par défaut) depuis une branche déjà poussée vers la branche par défaut (ou `base`, la branche de release du sprint pour une issue). Refuse la branche par défaut comme source et, comme base, la branche d'une autre PR ouverte (PR empilée).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn create_pull_request(&self, Parameters(p): Parameters<CreatePullRequestParams>) -> ToolResult {
         respond(self.do_create_pull_request(p).await)
     }
 
     #[tool(
-        description = "Modifie une pull request ouverte : `base` (repointer vers la branche de release du sprint ou la branche par défaut, par exemple quand sa base est la branche d'une autre PR), `title`, `body`. Refuse la branche d'une autre PR comme base."
+        description = "Modifie une pull request ouverte : `base` (repointer vers la branche de release du sprint ou la branche par défaut, par exemple quand sa base est la branche d'une autre PR), `title`, `body`. Refuse la branche d'une autre PR comme base.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn update_pull_request(&self, Parameters(p): Parameters<UpdatePullRequestParams>) -> ToolResult {
         respond(self.do_update_pull_request(p).await)
     }
 
-    #[tool(description = "Sort une pull request du brouillon : elle devient prête pour la revue.")]
+    #[tool(
+        description = "Sort une pull request du brouillon : elle devient prête pour la revue.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
     async fn mark_pull_request_ready(&self, Parameters(p): Parameters<NumberParams>) -> ToolResult {
         respond(self.do_mark_ready(p).await)
     }
 
     #[tool(
-        description = "Diff d'une pull request (patchs par fichier) pour la relire : tous les fichiers tronqués à 60 000 caractères, ou un seul avec `file`. Pour le contexte complet, lire le code dans un worktree."
+        description = "Diff d'une pull request (patchs par fichier) pour la relire : tous les fichiers tronqués à 60 000 caractères, ou un seul avec `file`. Pour le contexte complet, lire le code dans un worktree.",
+        annotations(read_only_hint = true)
     )]
     async fn get_pull_request_diff(&self, Parameters(p): Parameters<DiffParams>) -> ToolResult {
         respond(
@@ -2040,7 +2059,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Publie une revue sur une pull request : APPROVE, REQUEST_CHANGES ou COMMENT, avec une synthèse et des remarques sur des lignes (`comments` : path, line côté nouvelle version, body). GitHub refuse d'approuver sa propre PR : la revue est alors publiée en commentaire et la réponse le signale."
+        description = "Publie une revue sur une pull request : APPROVE, REQUEST_CHANGES ou COMMENT, avec une synthèse et des remarques sur des lignes (`comments` : path, line côté nouvelle version, body). GitHub refuse d'approuver sa propre PR : la revue est alors publiée en commentaire et la réponse le signale.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn review_pull_request(&self, Parameters(p): Parameters<ReviewParams>) -> ToolResult {
         respond(
@@ -2084,14 +2104,16 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Fusionne une pull request prête (sortie du brouillon, sans conflit) avec la méthode `method` (squash, merge ou rebase ; absente : réglage du plugin, squash par défaut). Ferme ensuite comme terminées les issues `close_issues` et celles que la PR déclare fermer (« Ferme #12 »), label `status/*` retiré ; `delete_branch` supprime la branche source (jamais la branche par défaut, une branche `release/*` ou celle d'un fork). Jamais sans accord explicite de l'utilisateur."
+        description = "Fusionne une pull request prête (sortie du brouillon, sans conflit) avec la méthode `method` (squash, merge ou rebase ; absente : réglage du plugin, squash par défaut). Ferme ensuite comme terminées les issues `close_issues` et celles que la PR déclare fermer (« Ferme #12 »), label `status/*` retiré ; `delete_branch` supprime la branche source (jamais la branche par défaut, une branche `release/*` ou celle d'un fork). Jamais sans accord explicite de l'utilisateur.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)
     )]
     async fn merge_pull_request(&self, Parameters(p): Parameters<MergeParams>) -> ToolResult {
         respond(self.do_merge(p).await)
     }
 
     #[tool(
-        description = "Liste les releases d'un dépôt suivi (publiées et brouillons) : tag, version, état, date, lien."
+        description = "Liste les releases d'un dépôt suivi (publiées et brouillons) : tag, version, état, date, lien.",
+        annotations(read_only_hint = true)
     )]
     async fn list_releases(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2111,21 +2133,24 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Crée la release d'une version avec ses notes markdown, en brouillon par défaut (jamais publiée sans accord). Le tag est le préfixe réglé suivi de la version (v0.1.2) ; GitHub le crée sur `target` (ou la branche par défaut) s'il n'existe pas."
+        description = "Crée la release d'une version avec ses notes markdown, en brouillon par défaut (jamais publiée sans accord). Le tag est le préfixe réglé suivi de la version (v0.1.2) ; GitHub le crée sur `target` (ou la branche par défaut) s'il n'existe pas.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn create_release(&self, Parameters(p): Parameters<CreateReleaseParams>) -> ToolResult {
         respond(self.do_create_release(p).await)
     }
 
     #[tool(
-        description = "Résumé du sprint en cours (sprints automatiques : leur état, durée, capacité, rythme, sprints terminés et livraison ; sinon le milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale. Tant que les sprints automatiques ne sont pas démarrés (`started: false`, `project: null`), `start_defaults` donne la durée, la capacité et la version proposées pour `project_start`."
+        description = "Résumé du sprint en cours (sprints automatiques : leur état, durée, capacité, rythme, sprints terminés et livraison ; sinon le milestone daté ouvert le plus proche) ou d'une version donnée : issues par état, burndown jour par jour, rythme, retard sur la droite idéale. Tant que les sprints automatiques ne sont pas démarrés (`started: false`, `project: null`), `start_defaults` donne la durée, la capacité et la version proposées pour `project_start`.",
+        annotations(read_only_hint = true)
     )]
     async fn sprint_summary(&self, Parameters(p): Parameters<SprintSummaryParams>) -> ToolResult {
         respond(self.do_sprint_summary(p).await)
     }
 
     #[tool(
-        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints) ou reprend celle des jalons, le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité. Seulement à la demande explicite de l'utilisateur (durée et capacité confirmées)."
+        description = "Démarre les sprints automatiques d'un dépôt : crée l'issue d'état partagée (label cadence/sprints) ou reprend celle des jalons, le premier sprint (milestone daté + branche release/<version>) et le remplit par priorité dans la limite de la capacité. Seulement à la demande explicite de l'utilisateur (durée et capacité confirmées).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn project_start(&self, Parameters(p): Parameters<ProjectStartParams>) -> ToolResult {
         respond(
@@ -2141,7 +2166,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Met en pause les sprints automatiques : plus de remplissage ni de clôture ; à la reprise, l'échéance du sprint en cours est repoussée de la durée de la pause. Seulement à la demande de l'utilisateur."
+        description = "Met en pause les sprints automatiques : plus de remplissage ni de clôture ; à la reprise, l'échéance du sprint en cours est repoussée de la durée de la pause. Seulement à la demande de l'utilisateur.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn project_pause(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2155,7 +2181,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Reprend les sprints automatiques mis en pause (échéance du sprint en cours repoussée de la durée de la pause)."
+        description = "Reprend les sprints automatiques mis en pause (échéance du sprint en cours repoussée de la durée de la pause).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn project_resume(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2169,7 +2196,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Change la durée des sprints automatiques (en jours : 14 = 2 semaines). `apply: next` (défaut) : à partir du sprint suivant, le sprint en cours ne change pas. `apply: current` : aussi le sprint en cours, dont l'échéance (milestone GitHub) est recalculée et la portée ajustée à la nouvelle capacité (issues ajoutées dans l'ordre de la roadmap puis par priorité, ou issues « à faire » les moins urgentes retirées). Seulement à la demande de l'utilisateur, `current` après sa confirmation explicite."
+        description = "Change la durée des sprints automatiques (en jours : 14 = 2 semaines). `apply: next` (défaut) : à partir du sprint suivant, le sprint en cours ne change pas. `apply: current` : aussi le sprint en cours, dont l'échéance (milestone GitHub) est recalculée et la portée ajustée à la nouvelle capacité (issues ajoutées dans l'ordre de la roadmap puis par priorité, ou issues « à faire » les moins urgentes retirées). Seulement à la demande de l'utilisateur, `current` après sa confirmation explicite.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn project_set_duration(&self, Parameters(p): Parameters<ProjectDurationParams>) -> ToolResult {
         respond(
@@ -2185,7 +2213,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Clôt le sprint automatique en cours avant son échéance, comme à l'échéance : story points relevés, issues ouvertes et PR reportées au sprint suivant (qui commence aujourd'hui), milestone fermé, branche de release fusionnée dans la branche par défaut quand la CI est verte. Seulement après confirmation explicite de l'utilisateur."
+        description = "Clôt le sprint automatique en cours avant son échéance, comme à l'échéance : story points relevés, issues ouvertes et PR reportées au sprint suivant (qui commence aujourd'hui), milestone fermé, branche de release fusionnée dans la branche par défaut quand la CI est verte. Seulement après confirmation explicite de l'utilisateur.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)
     )]
     async fn project_close_sprint(&self, Parameters(p): Parameters<CloseSprintParams>) -> ToolResult {
         respond(
@@ -2206,7 +2235,8 @@ impl GestionProjet {
 
     #[tool(
         description = "Fusionne maintenant la branche de release d'un sprint terminé dans la branche par défaut (PR de release), sans attendre qu'une CI s'annonce — pour un dépôt sans CI. Refuse une CI en échec ou en cours et un conflit ; tague ensuite la version. Seulement à la demande de l'utilisateur.",
-        meta = ui_only()
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)
     )]
     async fn project_ship_release(&self, Parameters(p): Parameters<ShipReleaseParams>) -> ToolResult {
         respond(
@@ -2226,7 +2256,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Ajoute des issues ouvertes au sprint automatique en cours (`add` : elles prennent sa version) ou les en retire (`remove` : elles repartent au carnet, sans version). Rend les issues ajoutées, retirées et celles laissées de côté (fermée, introuvable, déjà à sa place)."
+        description = "Ajoute des issues ouvertes au sprint automatique en cours (`add` : elles prennent sa version) ou les en retire (`remove` : elles repartent au carnet, sans version). Rend les issues ajoutées, retirées et celles laissées de côté (fermée, introuvable, déjà à sa place).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn sprint_issues(&self, Parameters(p): Parameters<SprintIssuesParams>) -> ToolResult {
         respond(
@@ -2245,7 +2276,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Carnet du sprint : issues ouvertes sans version, dans l'ordre où les sprints les prennent (jalons de la roadmap dans leur ordre, puis priorité, puis numéro), chacune avec son jalon et son poids en story points (3 sans estimation)."
+        description = "Carnet du sprint : issues ouvertes sans version, dans l'ordre où les sprints les prennent (jalons de la roadmap dans leur ordre, puis priorité, puis numéro), chacune avec son jalon et son poids en story points (3 sans estimation).",
+        annotations(read_only_hint = true)
     )]
     async fn sprint_backlog(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2258,7 +2290,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Roadmap d'un dépôt : jalons (nom, objectif, issues, avancement, sprints concernés, date de fin estimée au rythme moyen avec une fourchette au plus tôt / au plus tard), sprints terminés, en cours et prévus, issues ouvertes sans jalon, fin estimée de tout le travail ouvert. Les dates se précisent à chaque sprint."
+        description = "Roadmap d'un dépôt : jalons (nom, objectif, issues, avancement, sprints concernés, date de fin estimée au rythme moyen avec une fourchette au plus tôt / au plus tard), sprints terminés, en cours et prévus, issues ouvertes sans jalon, fin estimée de tout le travail ouvert. Les dates se précisent à chaque sprint.",
+        annotations(read_only_hint = true)
     )]
     async fn roadmap(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2271,7 +2304,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Crée ou modifie un jalon de la roadmap (nom clair, objectif, rang). Un jalon regroupe des issues réalisées en un ou plusieurs sprints ; il sert à l'affichage de la roadmap (ni branche ni milestone)."
+        description = "Crée ou modifie un jalon de la roadmap (nom clair, objectif, rang). Un jalon regroupe des issues réalisées en un ou plusieurs sprints ; il sert à l'affichage de la roadmap (ni branche ni milestone).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn jalon_save(&self, Parameters(p): Parameters<JalonSaveParams>) -> ToolResult {
         respond(
@@ -2322,7 +2356,10 @@ impl GestionProjet {
         )
     }
 
-    #[tool(description = "Supprime un jalon de la roadmap (ses issues restent, sans jalon).")]
+    #[tool(
+        description = "Supprime un jalon de la roadmap (ses issues restent, sans jalon).",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
+    )]
     async fn jalon_delete(&self, Parameters(p): Parameters<JalonParams>) -> ToolResult {
         respond(
             async {
@@ -2344,7 +2381,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Designs du projet (Claude Design) : nom, lien claude.ai, état (pending = lien seulement, imported = fichiers dans le dépôt sous `path`), branche, fichier d'entrée. À consulter quand l'utilisateur parle d'un design ou d'un écran à réaliser."
+        description = "Designs du projet (Claude Design) : nom, lien claude.ai, état (pending = lien seulement, imported = fichiers dans le dépôt sous `path`), branche, fichier d'entrée. À consulter quand l'utilisateur parle d'un design ou d'un écran à réaliser.",
+        annotations(read_only_hint = true)
     )]
     async fn list_designs(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2362,7 +2400,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Lit un design importé : liste de ses fichiers dans le dépôt et contenu d'un fichier (le fichier d'entrée par défaut, tronqué à 60 000 caractères : lire le reste dans un worktree, sous `path`)."
+        description = "Lit un design importé : liste de ses fichiers dans le dépôt et contenu d'un fichier (le fichier d'entrée par défaut, tronqué à 60 000 caractères : lire le reste dans un worktree, sous `path`).",
+        annotations(read_only_hint = true)
     )]
     async fn get_design(&self, Parameters(p): Parameters<GetDesignParams>) -> ToolResult {
         respond(
@@ -2379,7 +2418,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Ajoute un design au projet à partir de son lien claude.ai (état « pending » : fichiers à importer ensuite, comme le fait le skill « Importer un design »). Rend son identifiant."
+        description = "Ajoute un design au projet à partir de son lien claude.ai (état « pending » : fichiers à importer ensuite, comme le fait le skill « Importer un design »). Rend son identifiant.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn design_add(&self, Parameters(p): Parameters<DesignAddParams>) -> ToolResult {
         respond(
@@ -2419,7 +2459,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Met à jour un design : nom, description, et après import (fichiers commités et poussés) `imported: true` avec la branche (`ref`), le dossier (`path`) et le fichier d'entrée (`entry`)."
+        description = "Met à jour un design : nom, description, et après import (fichiers commités et poussés) `imported: true` avec la branche (`ref`), le dossier (`path`) et le fichier d'entrée (`entry`).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn design_update(&self, Parameters(p): Parameters<DesignUpdateParams>) -> ToolResult {
         respond(
@@ -2476,7 +2517,8 @@ impl GestionProjet {
 
     #[tool(
         description = "Retire un design du projet (ses fichiers restent dans le dépôt).",
-        meta = ui_only()
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
     )]
     async fn design_delete(&self, Parameters(p): Parameters<DesignParams>) -> ToolResult {
         respond(
@@ -2499,7 +2541,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Planning (Gantt) du dépôt : personnes, phases (étude, développement, recette…), tâches avec dates, personnes affectées, dépendances, avancement, jalons-dates. Rend aussi `revision`, à repasser à planning_save."
+        description = "Planning (Gantt) du dépôt : personnes, phases (étude, développement, recette…), tâches avec dates, personnes affectées, dépendances, avancement, jalons-dates. Rend aussi `revision`, à repasser à planning_save.",
+        annotations(read_only_hint = true)
     )]
     async fn planning_get(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2513,7 +2556,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Enregistre le planning (Gantt) complet du dépôt, qui remplace le précédent. Vérifie dates (AAAA-MM-JJ, fin ≥ début), personnes, dépendances (sans boucle) ; refuse si `base_revision` n'est plus la révision courante. Un skill ne l'appelle qu'après accord explicite de l'utilisateur sur le planning proposé."
+        description = "Enregistre le planning (Gantt) complet du dépôt, qui remplace le précédent. Vérifie dates (AAAA-MM-JJ, fin ≥ début), personnes, dépendances (sans boucle) ; refuse si `base_revision` n'est plus la révision courante. Un skill ne l'appelle qu'après accord explicite de l'utilisateur sur le planning proposé.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)
     )]
     async fn planning_save(&self, Parameters(p): Parameters<PlanningSaveParams>) -> ToolResult {
         respond(
@@ -2527,7 +2571,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Architecture du projet, à suivre en codant : services (proxy, front, back, base…) et leurs liens, puis pour chaque service ses couches (controller, service, DTO, repository…), les couches que chacune peut utiliser, ses règles et conventions. Lue dans `architecture/architecture.json` (branche de la PR d'architecture ouverte, sinon la base) ; aussi lisible en Markdown dans `architecture/ARCHITECTURE.md` du worktree."
+        description = "Architecture du projet, à suivre en codant : services (proxy, front, back, base…) et leurs liens, puis pour chaque service ses couches (controller, service, DTO, repository…), les couches que chacune peut utiliser, ses règles et conventions. Lue dans `architecture/architecture.json` (branche de la PR d'architecture ouverte, sinon la base) ; aussi lisible en Markdown dans `architecture/ARCHITECTURE.md` du worktree.",
+        annotations(read_only_hint = true)
     )]
     async fn architecture_get(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
         respond(
@@ -2542,14 +2587,16 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Modèles d'architecture prêts à appliquer : systèmes complets (web classique, API + cache + tâches, microservices) et intérieurs de service (API REST en couches, hexagonale, NestJS, Spring Boot, Express, FastAPI, Django, React par fonctionnalités, Next.js, Tauri)."
+        description = "Modèles d'architecture prêts à appliquer : systèmes complets (web classique, API + cache + tâches, microservices) et intérieurs de service (API REST en couches, hexagonale, NestJS, Spring Boot, Express, FastAPI, Django, React par fonctionnalités, Next.js, Tauri).",
+        annotations(read_only_hint = true)
     )]
     async fn architecture_templates(&self, Parameters(_): Parameters<Empty>) -> ToolResult {
         respond(Ok(json!({ "templates": crate::architecture::templates() })))
     }
 
     #[tool(
-        description = "Enregistre l'architecture complète du dépôt : commit de architecture/architecture.json et du ARCHITECTURE.md généré sur une branche archi/… et pull request (réutilisée tant qu'elle est ouverte). Vérifie identifiants, natures de service, liens et couches. Une IA ne l'appelle qu'après accord explicite de l'utilisateur."
+        description = "Enregistre l'architecture complète du dépôt : commit de architecture/architecture.json et du ARCHITECTURE.md généré sur une branche archi/… et pull request (réutilisée tant qu'elle est ouverte). Vérifie identifiants, natures de service, liens et couches. Une IA ne l'appelle qu'après accord explicite de l'utilisateur.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     async fn architecture_save(&self, Parameters(p): Parameters<ArchitectureSaveParams>) -> ToolResult {
         respond(
@@ -2564,7 +2611,8 @@ impl GestionProjet {
     }
 
     #[tool(
-        description = "Range des issues dans un jalon (une issue n'appartient qu'à un jalon : elle quitte le précédent) ou les en retire."
+        description = "Range des issues dans un jalon (une issue n'appartient qu'à un jalon : elle quitte le précédent) ou les en retire.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     async fn jalon_issues(&self, Parameters(p): Parameters<JalonIssuesParams>) -> ToolResult {
         respond(
@@ -2769,6 +2817,86 @@ mod tests {
         ] {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             assert!(tool.meta.is_none(), "{name} devrait être visible de l'IA");
+        }
+    }
+
+    /// R01 : Cadence ne demande pas d'accord en mode « Demander » pour un outil déclaré en lecture
+    /// seule. Chaque outil annonce donc `readOnlyHint` ; une écriture annonce aussi
+    /// `destructiveHint` et `idempotentHint`.
+    #[test]
+    fn annotates_every_tool() {
+        let tools = server(&[]).tool_router.list_all();
+        assert!(tools.len() >= 44);
+        for tool in &tools {
+            let name = tool.name.as_ref();
+            let a = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} : annotations absentes"));
+            let read_only = a
+                .read_only_hint
+                .unwrap_or_else(|| panic!("{name} : readOnlyHint absent"));
+            // Les outils qui écrivent sur un dépôt (événement `sync.updated`) ne sont jamais en lecture seule.
+            if WRITE_TOOLS.contains(&name) {
+                assert!(!read_only, "{name} écrit sur le dépôt");
+            }
+            if read_only {
+                assert!(
+                    name.starts_with("get_")
+                        || name.starts_with("list_")
+                        || name.ends_with("_get")
+                        || matches!(
+                            name,
+                            "sprint_summary" | "sprint_backlog" | "roadmap" | "architecture_templates"
+                        ),
+                    "{name} déclaré en lecture seule"
+                );
+            } else {
+                assert!(a.destructive_hint.is_some(), "{name} : destructiveHint absent");
+                assert!(a.idempotent_hint.is_some(), "{name} : idempotentHint absent");
+            }
+            // Le champ arrive à l'hôte sous son nom MCP.
+            let wire = serde_json::to_value(tool).unwrap();
+            assert_eq!(wire["annotations"]["readOnlyHint"], json!(read_only), "{name}");
+        }
+        let hint = |name: &str| {
+            let t = tools.iter().find(|t| t.name == name).unwrap();
+            t.annotations.clone().unwrap()
+        };
+        // Les lectures de la recette (cartes d'accord à tort en « Demander »).
+        for name in [
+            "get_repository",
+            "sprint_summary",
+            "get_issue",
+            "list_pull_requests",
+            "architecture_get",
+            "get_pull_request",
+            "get_pull_request_diff",
+            "sprint_backlog",
+            "roadmap",
+            "planning_get",
+            "architecture_templates",
+        ] {
+            assert_eq!(hint(name).read_only_hint, Some(true), "{name}");
+        }
+        for name in [
+            "merge_pull_request",
+            "jalon_delete",
+            "design_delete",
+            "update_issue",
+            "update_milestone",
+            "project_close_sprint",
+            "project_ship_release",
+        ] {
+            assert_eq!(hint(name).destructive_hint, Some(true), "{name}");
+        }
+        for name in [
+            "create_issue",
+            "add_comment",
+            "create_pull_request",
+            "review_pull_request",
+        ] {
+            assert_eq!(hint(name).destructive_hint, Some(false), "{name}");
         }
     }
 

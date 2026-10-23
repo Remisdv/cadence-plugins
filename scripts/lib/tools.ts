@@ -8,6 +8,12 @@ export interface ServerTool {
    * Convention du dépôt : l'attribut porte `meta = ui_only()` (ou toute expression `meta = …ui…`).
    */
   ui: boolean;
+  /**
+   * `annotations(read_only_hint = …)` de l'attribut : `true` (lecture seule), `false` (écriture),
+   * `null` si l'outil ne le déclare pas. Cadence demande l'accord, en mode « Demander », avant
+   * chaque outil qui n'est pas déclaré en lecture seule.
+   */
+  readOnly: boolean | null;
 }
 
 const TOOL_ATTR = /#\[tool\(([^\]]*)\)\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([a-z0-9_]+)/g;
@@ -21,7 +27,9 @@ export function scanTools(sources: string[]): ServerTool[] {
       const explicit = /\bname\s*=\s*"([^"]+)"/.exec(args);
       const name = explicit ? explicit[1]! : m[2]!;
       const ui = /\bmeta\s*=\s*[^,]*\bui\w*/.test(args);
-      if (!tools.has(name)) tools.set(name, { name, ui });
+      const hint = /\bread_only_hint\s*=\s*(true|false)\b/.exec(args);
+      const readOnly = hint ? hint[1] === "true" : null;
+      if (!tools.has(name)) tools.set(name, { name, ui, readOnly });
     }
   }
   return [...tools.values()];

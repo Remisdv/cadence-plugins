@@ -36,6 +36,15 @@ Les mêmes règles valent pour modifier un plugin existant, officiel ou non.
   `ui/src`, que les icônes existent dans le kit (`@cadence/ui/icons`), que la catégorie, les
   services et les outils de `[[requires]]` sont connus de l'API et que le schéma de réglages reste
   dans le sous-ensemble rendu par Cadence.
+- **Outils MCP annotés** : chaque outil exposé aux IA déclare `readOnlyHint` explicitement (rmcp :
+  `#[tool(…, annotations(read_only_hint = true))]` pour une lecture ; pour une écriture
+  `read_only_hint = false` avec `destructive_hint` — fusion, suppression, fermeture, remplacement —
+  et `idempotent_hint` quand le rappel avec les mêmes arguments ne change plus rien). En mode
+  « Demander », Cadence demande l'accord de l'utilisateur avant chaque outil qui n'est pas déclaré
+  en lecture seule : un outil de lecture sans annotation multiplie les cartes d'accord.
+  `pnpm validate` avertit d'un outil exposé sans `read_only_hint` (serveurs Rust rmcp, lecture
+  statique des attributs `#[tool]`) ; pour un autre langage, renseignez `annotations.readOnlyHint`
+  dans la réponse à `tools/list`.
 - **Pas d'espace de travail** : un plugin est activé globalement et n'a qu'un processus serveur.
   Ses données vont dans `CADENCE_DATA_DIR`, ses réglages sont globaux (`CADENCE_SETTINGS`) et il
   gère lui-même son contexte (dépôts suivis, matières…). `CADENCE_WORKSPACE` et

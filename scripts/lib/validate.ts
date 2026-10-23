@@ -18,7 +18,7 @@ import {
   type ToolId,
 } from "./manifest";
 import { checkSkill } from "./skill";
-import { scanTools } from "./tools";
+import { scanTools, type ServerTool } from "./tools";
 
 export interface Report {
   id: string;
@@ -119,14 +119,22 @@ function citedTools(pluginId: string, markdown: string): string[] {
   return [...new Set([...markdown.matchAll(re)].map((m) => m[1]!))];
 }
 
-/** Noms d'outils déclarés par un serveur Rust rmcp (`fn nom` sous `#[tool(...)]`). */
-function serverTools(serverDir: string): Set<string> | null {
+/** Outils déclarés par un serveur Rust rmcp (`fn nom` sous `#[tool(...)]`). */
+function serverTools(serverDir: string): ServerTool[] | null {
   const src = join(serverDir, "src");
   if (!existsSync(src)) return null;
   const sources = walk(src)
     .filter((f) => f.endsWith(".rs"))
     .map((f) => readFileSync(f, "utf8"));
-  return new Set(scanTools(sources).map((t) => t.name));
+  return scanTools(sources);
+}
+
+/**
+ * Outils exposés aux IA sans `readOnlyHint` explicite (`annotations(read_only_hint = …)`) : en mode
+ * « Demander », Cadence demande l'accord avant chacun, lectures comprises.
+ */
+export function missingReadOnlyHints(tools: ServerTool[]): string[] {
+  return tools.filter((t) => !t.ui && t.readOnly === null).map((t) => t.name);
 }
 
 /** Fichiers texte d'un sous-dossier du plugin, avec leur chemin relatif. */
@@ -345,7 +353,15 @@ export function validatePlugin(dir: string, dirName = basename(dir)): Report {
   const skills = existsSync(skillsDir)
     ? readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
     : [];
-  const tools = m.server ? serverTools(serverDir) : null;
+  const scanned = m.server ? serverTools(serverDir) : null;
+  const tools = scanned ? new Set(scanned.map((t) => t.name)) : null;
+  const unannotated = scanned ? missingReadOnlyHints(scanned) : [];
+  if (unannotated.length) {
+    warnings.push(
+      `${unannotated.length} outil(s) MCP sans readOnlyHint explicite (annotations(read_only_hint = true | false)) : ` +
+        `${unannotated.join(", ")} — en mode « Demander », Cadence demandera l'accord avant chacun, lectures comprises`,
+    );
+  }
   for (const skill of skills) {
     const file = join(skillsDir, skill, "SKILL.md");
     if (!existsSync(file)) {

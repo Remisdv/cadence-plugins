@@ -132,6 +132,12 @@ en brouillon.
 
 Tous les outils de dépôt prennent `repo` (`owner/name`), qui doit être un dépôt suivi.
 
+Chaque outil porte ses annotations MCP : `readOnlyHint: true` pour les lectures (`get_*`, `list_*`,
+`sprint_summary`, `sprint_backlog`, `roadmap`, `planning_get`, `architecture_get`,
+`architecture_templates`), qui passent sans carte d'accord en mode « Demander » ; les écritures
+déclarent `destructiveHint` (vrai pour fusion, fermeture, suppression, clôture, remplacement du
+planning) et `idempotentHint`.
+
 | Outil                                                 | État                                                                                                                                                         |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `get_account`, `list_account_repos` (réservés à l'UI) | ✓ compte connecté, dépôts du compte à suivre                                                                                                                 |
