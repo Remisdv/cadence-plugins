@@ -56,7 +56,7 @@ import {
   actionLabel,
   aiLabel,
   conversationIssues,
-  conversationStates,
+  conversationStatus,
   isStarted,
   priorityInfo,
   reviewContext,
@@ -1529,7 +1529,7 @@ function ConversationRow({
   conversation: ConversationInfo;
   onOpen: () => void;
 }) {
-  const meta = conversationStates[c.state] ?? conversationStates.interrupted;
+  const meta = conversationStatus(c);
   const issues = conversationIssues(c);
   const detail = [
     actionLabel(c.action),

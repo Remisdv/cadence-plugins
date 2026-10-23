@@ -150,6 +150,14 @@ export interface ExternalToolStatus {
 /** État d'une conversation dans Cadence. */
 export type ConversationState = "idle" | "running" | "waiting-approval" | "failed" | "interrupted";
 
+/**
+ * Ce qu'attend une conversation en `waiting-approval` (Cadence 0.3.2 et suivants) : `approval`,
+ * une demande d'accord ou une question à choix en plein tour ; `reply`, une réponse à la question
+ * sur laquelle l'IA a terminé son tour (« En attente de votre réponse »). Absent avec un hôte plus
+ * ancien : traiter comme `approval`.
+ */
+export type ConversationWaiting = "approval" | "reply";
+
 /** Mode de l'action qui a lancé la conversation (`[[actions]] mode`). */
 export type ConversationMode = "chat" | "background";
 
@@ -181,6 +189,8 @@ export interface ConversationInfo {
   ai: AiId;
   model: string;
   state: ConversationState;
+  /** Avec `waiting-approval` : accord attendu (`approval`) ou réponse à une question (`reply`). */
+  waiting?: ConversationWaiting;
   mode: ConversationMode;
   /** Identifiant de l'action du manifeste, si la conversation vient d'une action. */
   action?: string;
@@ -220,6 +230,8 @@ export interface ConversationChange {
   id: string;
   group?: ConversationGroup;
   state: ConversationState;
+  /** Avec `waiting-approval` : accord attendu (`approval`) ou réponse à une question (`reply`). */
+  waiting?: ConversationWaiting;
 }
 
 export interface ConversationQuery {

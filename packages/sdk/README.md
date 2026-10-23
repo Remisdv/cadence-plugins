@@ -108,8 +108,8 @@ await cadence.runAction("implementer-issue", {
 });
 
 const list = await cadence.conversations.list({ group: "sprint:me/app:3" });
-// [{ id, title, ai, model, state, mode, action, context, group, createdAt, updatedAt, turns }]
-cadence.conversations.onChange(({ id, group, state }) => refetch());
+// [{ id, title, ai, model, state, waiting?, mode, action, context, group, createdAt, updatedAt, turns }]
+cadence.conversations.onChange(({ id, group, state, waiting }) => refetch());
 await cadence.conversations.open(list[0].id); // vue Chat de Cadence sur cette conversation
 const { info, messages, tools, usage } = await cadence.conversations.get(list[0].id);
 ```
@@ -119,13 +119,16 @@ const { info, messages, tools, usage } = await cadence.conversations.get(list[0]
 | `conversations.list({ group? })` | sans `group` : les conversations visibles du plugin ; avec : celles du groupe, cachées comprises (`ConversationInfo[]`, plus récentes d'abord) |
 | `conversations.get(id)` | `{ info, messages: [{ role, text, at }], tools: [{ name, ok, at }], usage? }` : texte complet des messages, appels d'outils sans leurs sorties (export) |
 | `conversations.open(id)` | ouvre la vue Chat sur la conversation (avec la puce du groupe et « Retour ») |
-| `conversations.onChange(listener)` | événement `conversations` `{ id, group?, state }` à chaque création ou changement d'état |
+| `conversations.onChange(listener)` | événement `conversations` `{ id, group?, state, waiting? }` à chaque création ou changement d'état |
 
 `group.id` suit `[A-Za-z0-9:/._-]{1,120}` (`GROUP_ID`) et reste propre au plugin : Cadence le
 préfixe par l'id du plugin. `hidden` (vrai par défaut dès que `group` est présent) retire la
 conversation du chat global et de « Conversations » de la barre du plugin : on la voit depuis
 l'écran du plugin, qui l'ouvre avec `open`. États : `idle`, `running`, `waiting-approval`,
-`failed`, `interrupted` ; modes : `chat`, `background`. Dates ISO 8601.
+`failed`, `interrupted` ; modes : `chat`, `background`. Dates ISO 8601. Avec `waiting-approval`,
+`waiting` dit ce qui est attendu : `approval` (accord ou question à choix en plein tour, « Attend
+votre accord ») ou `reply` (l'IA a fini son tour sur une question, « En attente de votre
+réponse ») ; absent avec un hôte antérieur à Cadence 0.3.2, à lire comme `approval`.
 
 ## Erreurs
 

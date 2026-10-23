@@ -14,6 +14,7 @@ import {
   type ConversationDetail,
   type ConversationGroup,
   type ConversationInfo,
+  type ConversationWaiting,
   type ConversationMessage,
   type ConversationMode,
   type ConversationState,
@@ -136,8 +137,11 @@ export interface MockHost {
   readonly opened: readonly string[];
   /** Ajoute une conversation (lancée hors de l'écran) et émet l'événement `conversations`. */
   addConversation(conversation: MockConversation): ConversationInfo;
-  /** Change l'état d'une conversation et émet l'événement `conversations`. */
-  setConversationState(id: string, state: ConversationState): void;
+  /**
+   * Change l'état d'une conversation et émet l'événement `conversations`. `waiting` précise ce
+   * qu'attend une conversation en `waiting-approval` (`approval` par défaut, comme Cadence).
+   */
+  setConversationState(id: string, state: ConversationState, waiting?: ConversationWaiting): void;
   dispose(): void;
 }
 
@@ -220,6 +224,7 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
         ai: info.ai ?? conversationOptions.ai ?? "claude-code",
         model: info.model ?? conversationOptions.model ?? "claude-sonnet",
         state: info.state ?? "idle",
+        ...(info.state === "waiting-approval" ? { waiting: info.waiting ?? "approval" } : {}),
         mode: info.mode ?? "chat",
         createdAt: info.createdAt ?? now,
         updatedAt: info.updatedAt ?? info.createdAt ?? now,
@@ -243,8 +248,10 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
     return c;
   };
   const conversationChanged = (c: StoredConversation) => {
-    const { id, group, state } = c.info;
-    queueMicrotask(() => send("conversations", { id, state, ...(group ? { group } : {}) }));
+    const { id, group, state, waiting } = c.info;
+    queueMicrotask(() =>
+      send("conversations", { id, state, ...(waiting ? { waiting } : {}), ...(group ? { group } : {}) }),
+    );
   };
 
   const send = <T extends Topic>(topic: T, data: Topics[T]) => {
@@ -462,9 +469,15 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
       conversationChanged(stored);
       return stored.info;
     },
-    setConversationState(id, state) {
+    setConversationState(id, state, waiting) {
       const c = conversation(id);
-      c.info = { ...c.info, state, updatedAt: new Date().toISOString() };
+      const { waiting: _previous, ...rest } = c.info;
+      c.info = {
+        ...rest,
+        state,
+        ...(state === "waiting-approval" ? { waiting: waiting ?? "approval" } : {}),
+        updatedAt: new Date().toISOString(),
+      };
       conversationChanged(c);
     },
     dispose: stop,

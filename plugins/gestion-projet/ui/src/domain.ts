@@ -172,6 +172,21 @@ export const conversationStates: Record<
   interrupted: { label: "Interrompue", dot: "neutral", tone: "muted" },
 };
 
+/** Conversation en `waiting-approval` dont l'IA a fini son tour sur une question (`waiting: "reply"`). */
+const waitingReply = { label: "En attente de votre réponse", dot: "amber", tone: "amber" } as const;
+
+/**
+ * Libellé et couleurs de l'état d'une conversation (N10) : en `waiting-approval`, Cadence précise
+ * ce qui est attendu (`waiting`) — une réponse à une question (« En attente de votre réponse ») ou
+ * un accord (« Attend votre accord », aussi quand un hôte plus ancien n'envoie pas `waiting`).
+ */
+export function conversationStatus(
+  c: Pick<ConversationInfo, "state" | "waiting">,
+): { label: string; dot: DotTone; tone: BadgeTone } {
+  if (c.state === "waiting-approval" && c.waiting === "reply") return waitingReply;
+  return conversationStates[c.state] ?? conversationStates.interrupted;
+}
+
 const aiNames: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",

@@ -6,6 +6,7 @@ import {
   architectureContext,
   conversationIssues,
   conversationStates,
+  conversationStatus,
   designRequestContext,
   displayLabels,
   estimateLabel,
@@ -142,6 +143,16 @@ describe("groupes de conversations", () => {
     expect(conversationIssues({ context: { issues: [7, 8] } })).toEqual([7, 8]);
     expect(conversationIssues({})).toEqual([]);
     expect(conversationStates["waiting-approval"].label).toBe("Attend votre accord");
+    // N10 : Cadence précise ce qu'attend une conversation en `waiting-approval`.
+    expect(conversationStatus({ state: "waiting-approval", waiting: "reply" }).label).toBe(
+      "En attente de votre réponse",
+    );
+    expect(conversationStatus({ state: "waiting-approval", waiting: "approval" }).label).toBe(
+      "Attend votre accord",
+    );
+    // Hôte plus ancien, sans `waiting` : un accord.
+    expect(conversationStatus({ state: "waiting-approval" }).label).toBe("Attend votre accord");
+    expect(conversationStatus({ state: "idle" }).label).toBe("Terminée");
     expect(aiLabel("claude-code")).toBe("Claude Code");
     expect(aiLabel("autre-ia")).toBe("autre-ia");
   });

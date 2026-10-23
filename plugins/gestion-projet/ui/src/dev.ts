@@ -1026,6 +1026,7 @@ const sprintConversations: NonNullable<MockHostOptions["conversations"]>["conver
     title: "Relire et valider #149",
     action: "relire-valider",
     state: "waiting-approval",
+    waiting: "reply",
     ai: "codex",
     model: "gpt-5-codex",
     group: SPRINT_GROUP,

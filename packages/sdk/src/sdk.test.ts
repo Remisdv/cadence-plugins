@@ -306,8 +306,32 @@ describe("conversations", () => {
     host.setConversationState(implement.id, "idle");
     await tick();
     expect(changes).toHaveLength(4);
-    expect(changes.at(-1)).toEqual({ id: implement.id, group: sprint, state: "waiting-approval" });
+    expect(changes.at(-1)).toEqual({ id: implement.id, group: sprint, state: "waiting-approval", waiting: "approval" });
     expect(changes.find((c) => !c.group)?.state).toBe("running");
+  });
+
+  it("distingue une réponse attendue d'un accord attendu (waiting)", async () => {
+    const { cadence, host } = connectMock({
+      conversations: { conversations: [{ id: "c-q", title: "Développer le sprint", state: "running" }] },
+    });
+    await cadence.ready();
+    const changes: ConversationChange[] = [];
+    cadence.conversations.onChange((c) => changes.push(c));
+
+    host.setConversationState("c-q", "waiting-approval", "reply");
+    await tick();
+    expect(changes.at(-1)).toEqual({ id: "c-q", state: "waiting-approval", waiting: "reply" });
+    expect((await cadence.conversations.list())[0]).toMatchObject({ state: "waiting-approval", waiting: "reply" });
+
+    host.setConversationState("c-q", "waiting-approval");
+    await tick();
+    expect(changes.at(-1)?.waiting).toBe("approval");
+
+    // Hors attente, le champ disparaît.
+    host.setConversationState("c-q", "idle");
+    await tick();
+    expect(changes.at(-1)).toEqual({ id: "c-q", state: "idle" });
+    expect((await cadence.conversations.list())[0]).not.toHaveProperty("waiting");
   });
 
   it("un groupe non caché reste dans le chat global", async () => {
