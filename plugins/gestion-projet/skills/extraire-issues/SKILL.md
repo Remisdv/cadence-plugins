@@ -53,7 +53,8 @@ Chaque outil du plugin prend le dépôt en paramètre `repo` (`owner/name`) : pa
 | `gestion-projet__list_issues` | issues existantes, ouvertes et fermées (`state: "all"`, pages successives jusqu'à épuisement) |
 | `gestion-projet__get_issue` | lire en entier une issue qui semble recouvrir une partie du document |
 | `gestion-projet__list_milestones` | versions du dépôt, seulement si l'utilisateur demande d'en viser une |
-| `gestion-projet__create_issue` | créer chaque issue (`title`, `body`, `type`, `points`, `priority`, `labels`, `milestone` éventuel) |
+| `gestion-projet__create_issue` | créer chaque issue (`title`, `body`, `type`, `category`, `points`, `priority`, `labels`, `milestone` éventuel) |
+| `gestion-projet__list_categories` | catégories du dépôt (domaine › catégorie) : l'`id` à passer en `category` |
 | `gestion-projet__update_issue` | compléter après coup la section « Dépendances » d'une issue créée plus tôt dans la même passe |
 | `gestion-projet__roadmap` | jalons existants (nom, objectif, issues) et issues sans jalon |
 | `gestion-projet__list_designs`, `gestion-projet__get_design` | designs du projet et leurs pages (référence visuelle) |
@@ -106,6 +107,9 @@ dépôt.
    - `title`, et `type` parmi `feat`, `fix`, `chore`, `perf`, `docs` ;
    - `points` (1, 2, 3, 5, 8 ou 13) et `priority` (0 à 5) ; jamais de label `sp/*`, `priority/*`,
      `type/*`, `status/*` ou `estimate/*` à la main ;
+   - `category` : la catégorie la plus juste parmi celles de `list_categories` (non masquées),
+     par exemple `back-end`, `ci-cd`, `analyse-cdc`, `questions-client`, `dat`, `gantt` ; jamais de
+     label `cat/*` ou `etape/*` à la main (une catégorie à pipeline démarre à sa première étape) ;
    - au plus trois labels de domaine (`area/api`…) quand le dépôt en utilise déjà ;
    - `milestone` seulement si l'utilisateur a demandé une version ;
    - `body` en sections :

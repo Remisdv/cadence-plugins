@@ -4,6 +4,7 @@
 //! Journal sur stderr (stdout porte le protocole MCP) ; niveau réglable avec `RUST_LOG`.
 
 mod architecture;
+mod categories;
 mod config;
 mod engine;
 #[cfg(test)]

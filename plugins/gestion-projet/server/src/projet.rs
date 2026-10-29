@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::categories::CategoryConfig;
 use crate::model::Issue;
 use crate::sprint::{add_days, days_between};
 
@@ -209,6 +210,9 @@ pub struct ProjectState {
     /// Designs (Claude Design) du projet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub designs: Vec<Design>,
+    /// Catégories d'issues propres au dépôt (ajouts et masquages ; voir `categories`).
+    #[serde(default, skip_serializing_if = "CategoryConfig::is_empty")]
+    pub categories: CategoryConfig,
 }
 
 impl ProjectState {
@@ -758,6 +762,7 @@ mod tests {
             }],
             jalons: vec![],
             designs: vec![],
+            categories: Default::default(),
         }
     }
 

@@ -20,6 +20,10 @@ export interface Issue {
   points: number | null;
   /** Priorité (`priority/<n>`) : 0 = socle, puis 1 (la plus urgente) à 5. */
   priority: number | null;
+  /** Catégorie (`cat/<id>`, voir `categories.ts`). */
+  category?: string | null;
+  /** Étape du pipeline de son domaine (`etape/<id>`). */
+  stage?: string | null;
   labels: string[];
   milestone: string | null;
   /** Numéro du milestone quand c'est un sprint (milestone daté) : clé du groupe de conversations. */
@@ -180,9 +184,11 @@ const waitingReply = { label: "En attente de votre réponse", dot: "amber", tone
  * ce qui est attendu (`waiting`) — une réponse à une question (« En attente de votre réponse ») ou
  * un accord (« Attend votre accord », aussi quand un hôte plus ancien n'envoie pas `waiting`).
  */
-export function conversationStatus(
-  c: Pick<ConversationInfo, "state" | "waiting">,
-): { label: string; dot: DotTone; tone: BadgeTone } {
+export function conversationStatus(c: Pick<ConversationInfo, "state" | "waiting">): {
+  label: string;
+  dot: DotTone;
+  tone: BadgeTone;
+} {
   if (c.state === "waiting-approval" && c.waiting === "reply") return waitingReply;
   return conversationStates[c.state] ?? conversationStates.interrupted;
 }
@@ -247,9 +253,12 @@ export const issueStatuses: Record<IssueStatus, { label: string; dot: DotTone }>
 
 export const statusOrder: IssueStatus[] = ["todo", "doing", "review", "done"];
 
-/** Labels affichés à côté du titre : ni type, ni état, ni estimation, ni priorité (montrés à part). */
+/**
+ * Labels affichés à côté du titre : ni type, ni état, ni estimation, ni priorité, ni catégorie,
+ * ni étape (montrés à part).
+ */
 export function displayLabels(labels: string[]): string[] {
-  return labels.filter((l) => !/^(type|status|estimate|sp|priority)\//.test(l));
+  return labels.filter((l) => !/^(type|status|estimate|sp|priority|cat|etape)\//.test(l));
 }
 
 /** Priorité d'une issue : 0 = socle, 1 la plus urgente → 5 la moins urgente. */
@@ -279,6 +288,7 @@ export interface ViewMeta {
 export const views = {
   sprint: { title: "Sprint en cours", icon: "sprint" },
   issues: { title: "Issues", icon: "issue" },
+  categories: { title: "Catégories", icon: "layers" },
   /** Détail d'une issue (`{ repo, number }`), hors de la barre du plugin. */
   issue: { title: "Issue", icon: "issue" },
   roadmap: { title: "Roadmap", icon: "roadmap" },

@@ -1,7 +1,8 @@
 /**
  * « Nouvelle issue » (maquette Cadence 1 « Issue-Create ») : titre, description, type, story
  * points, priorité, version (milestone ouvert) et jalon de la roadmap. Création par l'outil
- * `create_issue`, puis rangement dans le jalon par `jalon_issues`.
+ * `create_issue`, puis rangement dans le jalon par `jalon_issues`. La catégorie (domaine ›
+ * catégorie) vient de la taxonomie du dépôt ; « + » dans un groupe de la vue Issues la préremplit.
  */
 import { useId, useState } from "react";
 import { cadence, isCadenceError } from "@cadence/plugin-sdk";
@@ -18,6 +19,7 @@ import {
   Spinner,
   Textarea,
 } from "@cadence/ui";
+import { pickable, type DomainView } from "../categories";
 import type { Issue, IssueType, RoadmapPlan, VersionList } from "../domain";
 import { createIssueArgs, issueTypes, storyPoints, type IssueForm } from "../issues";
 import { compareVersions } from "../planning";
@@ -35,12 +37,17 @@ const priorities = [
 export function IssueCreateDialog({
   repos,
   initialRepo,
+  domains,
+  initialCategory,
   onClose,
   onCreated,
 }: {
   /** Dépôts suivis ; un sélecteur s'affiche s'il y en a plusieurs et qu'aucun n'est choisi. */
   repos: string[];
   initialRepo: string | null;
+  /** Taxonomie des catégories ; `null` tant qu'elle n'est pas lue. */
+  domains: DomainView[] | null;
+  initialCategory?: string | null;
   onClose: () => void;
   onCreated: (issue: Issue) => void;
 }) {
@@ -53,6 +60,7 @@ export function IssueCreateDialog({
     priority: useId(),
     version: useId(),
     jalon: useId(),
+    category: useId(),
   };
   const [form, setForm] = useState<IssueForm>({
     repo: initialRepo ?? (repos.length === 1 ? repos[0]! : ""),
@@ -62,6 +70,7 @@ export function IssueCreateDialog({
     points: null,
     priority: null,
     milestone: "",
+    category: initialCategory ?? "",
   });
   const [jalon, setJalon] = useState("");
   const [busy, setBusy] = useState(false);
@@ -155,6 +164,29 @@ export function IssueCreateDialog({
               onChange={(e) => set({ body: e.target.value })}
               placeholder={"Contexte, besoin, critères d'acceptation :\n- [ ] …"}
             />
+          </Field>
+          <Field
+            label="Catégorie"
+            htmlFor={ids.category}
+            hint="domaine › catégorie ; « Gérer les catégories » (vue Issues) pour en ajouter"
+          >
+            <Select
+              id={ids.category}
+              value={form.category ?? ""}
+              disabled={!domains}
+              onChange={(e) => set({ category: e.target.value })}
+            >
+              <option value="">{domains ? "sans catégorie" : "Lecture des catégories…"}</option>
+              {pickable(domains ?? [], form.category).map((d) => (
+                <optgroup key={d.id} label={d.label}>
+                  {d.categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
           </Field>
           <div className="flex flex-wrap gap-3">
             <Field label="Type" htmlFor={ids.type} className="min-w-[120px] flex-1">
@@ -251,7 +283,7 @@ export function IssueCreateDialog({
         </DialogBody>
         <DialogFooter>
           <span className="text-caption text-tx3">
-            Créée sur GitHub avec les labels type, sp et priority.
+            Créée sur GitHub avec les labels type, cat, sp et priority.
           </span>
           <div className="grow" />
           <Button type="button" variant="ghost" onClick={onClose}>

@@ -27,7 +27,8 @@ contexte.
 | `gestion-projet__roadmap` | jalons (nom, objectif, issues, dates estimées), sprints, issues sans jalon |
 | `gestion-projet__list_issues` | issues existantes, ouvertes et fermées (`state: "all"`, pages successives) |
 | `gestion-projet__get_issue` | lire une issue qui semble recouvrir une partie de l'objectif |
-| `gestion-projet__create_issue` | créer les propositions retenues (`type`, `points`, `priority`, `labels`, **sans** `milestone`) |
+| `gestion-projet__create_issue` | créer les propositions retenues (`type`, `category`, `points`, `priority`, `labels`, **sans** `milestone`) |
+| `gestion-projet__list_categories` | catégories du dépôt (domaine › catégorie) : l'`id` à passer en `category` |
 | `gestion-projet__jalon_issues` | ranger les issues créées dans le jalon (`{ "repo", "id", "add": [numéros] }`) |
 
 Tu tournes dans un dossier neutre de Cadence, pas dans le dépôt : obtiens le worktree avec
@@ -53,13 +54,14 @@ chemin renvoyé pour savoir ce qui existe déjà. Ne modifie aucun fichier.
      (cases `- [ ]`), `## Dépendances` (« Dépend de #12 » ou « Aucune ») ;
    - type parmi `feat`, `fix`, `chore`, `perf`, `docs` ; au plus trois labels de domaine
      (`area/auth`…), jamais `type/*`, `status/*`, `estimate/*`, `sp/*`, `priority/*` à la main ;
+   - catégorie (`category`) parmi celles de `list_categories` ;
    - estimation en story points (`points` : 1, 2, 3, 5, 8 ou 13) et priorité (`priority` : 0 pour
      le socle, puis 1 la plus urgente à 5), situées par rapport aux issues ouvertes du dépôt.
 4. **Relecture.** Présente les propositions dans le chat, numérotées, avec la partie de l'objectif,
    la justification et le recouvrement. L'utilisateur choisit celles à créer et peut les modifier.
    Si rien ne manque, dis-le.
 5. **Création.** Pour chaque proposition retenue : `create_issue` avec `title`, `body`, `type`,
-   `points`, `priority`, `labels` — **sans version** : les sprints automatiques les prendront par
+   `category`, `points`, `priority`, `labels` — **sans version** : les sprints automatiques les prendront par
    priorité. Termine le corps par :
 
    ```

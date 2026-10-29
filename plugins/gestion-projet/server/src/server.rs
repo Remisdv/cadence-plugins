@@ -49,6 +49,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
+    categories::{self, CategoryConfig},
     config::{self, Env, MergeMethod, Settings},
     engine::Project,
     github::GitHub,
@@ -98,6 +99,7 @@ const WRITE_TOOLS: &[&str] = &[
     "jalon_save",
     "jalon_delete",
     "jalon_issues",
+    "save_categories",
 ];
 
 /// `_meta` d'un outil appelable seulement par l'UI du plugin (contrat Cadence).
@@ -108,6 +110,14 @@ fn ui_only() -> MetaObject {
 }
 
 /// Résultat d'outil : objet structuré, ou erreur d'outil lisible par l'IA (`isError`).
+/// Étape `etape/<id>` portée par des labels.
+fn stage_of(labels: &[String]) -> Option<String> {
+    labels
+        .iter()
+        .find_map(|l| l.strip_prefix(categories::STAGE_PREFIX))
+        .map(str::to_string)
+}
+
 fn respond(result: Result<Value>) -> ToolResult {
     Ok(match result {
         Ok(Value::Object(map)) => CallToolResult::structured(Value::Object(map)),
@@ -191,6 +201,9 @@ pub struct CreateIssueParams {
     /// Priorité (label `priority/<n>`) : 0 = socle (à faire avant tout, d'autres issues en
     /// dépendent), puis 1 (la plus urgente) à 5 (la moins urgente).
     pub priority: Option<u8>,
+    /// Catégorie : identifiant de `list_categories` (label `cat/<id>`), ex. `back-end`,
+    /// `questions-client`, `dat`, `gantt`. Un domaine à pipeline démarre à sa première étape.
+    pub category: Option<String>,
     /// Labels supplémentaires (ex. `area/api`).
     #[serde(default)]
     pub labels: Vec<String>,
@@ -199,6 +212,15 @@ pub struct CreateIssueParams {
     /// Logins à assigner.
     #[serde(default)]
     pub assignees: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SaveCategoriesParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Personnalisation complète, qui remplace l'existante : le `config` de `list_categories`
+    /// modifié.
+    pub config: CategoryConfig,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -244,6 +266,14 @@ pub struct UpdateIssueParams {
     pub milestone: Option<String>,
     /// Remplace les assignés.
     pub assignees: Option<Vec<String>>,
+    /// Nouvelle catégorie (identifiant de `list_categories`) ; chaîne vide pour la retirer.
+    pub category: Option<String>,
+    /// Nouvelle étape du pipeline du domaine de la catégorie (ex. `envoye`, `en-attente`,
+    /// `reponse-recue`) ; le changement est historisé par un commentaire.
+    pub stage: Option<String>,
+    /// Note jointe à ce commentaire d'historique : date d'envoi, réponse reçue, destinataire…
+    /// Seule, elle est commentée sans changer d'étape.
+    pub stage_note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -999,6 +1029,10 @@ impl GestionProjet {
         if let Some(priority) = p.priority {
             labels = model::with_unique(&labels, &model::priority_label(priority)?);
         }
+        if let Some(category) = p.category.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+            let domains = self.category_domains(&repo, Some(category)).await?;
+            labels = categories::with_category(&labels, &domains, Some(category), None)?;
+        }
         let mut body =
             json!({ "title": p.title.trim(), "body": p.body.unwrap_or_default(), "labels": labels });
         if let Some(m) = p.milestone.filter(|m| !m.trim().is_empty()) {
@@ -1015,6 +1049,8 @@ impl GestionProjet {
     async fn do_update_issue(&self, p: UpdateIssueParams) -> Result<Value> {
         let repo = self.repo(&p.repo)?;
         let mut body = json!({});
+        // Commentaire d'historique (changement d'étape, note), posté après la modification.
+        let mut history: Option<String> = None;
         if let Some(t) = p.title.filter(|t| !t.trim().is_empty()) {
             body["title"] = json!(t.trim());
         }
@@ -1039,7 +1075,12 @@ impl GestionProjet {
         // Valeurs vérifiées avant tout appel à GitHub.
         let points = p.points.map(model::points_label).transpose()?;
         let priority = p.priority.map(model::priority_label).transpose()?;
-        let touches_labels = p.labels.is_some()
+        let category = p.category.as_deref().map(str::trim);
+        let stage = p.stage.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let note = p.stage_note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+        let touches_category = category.is_some() || stage.is_some();
+        let touches_labels = touches_category
+            || p.labels.is_some()
             || p.status.is_some()
             || points.is_some()
             || priority.is_some()
@@ -1061,7 +1102,39 @@ impl GestionProjet {
             for label in points.iter().chain(priority.iter()) {
                 labels = model::with_unique(&labels, label);
             }
+            if touches_category {
+                let current = labels
+                    .iter()
+                    .find_map(|l| l.strip_prefix(categories::CATEGORY_PREFIX))
+                    .map(str::to_string);
+                let target = match category {
+                    Some("") => None,
+                    Some(c) => Some(c.to_string()),
+                    None => current,
+                };
+                let domains = self.category_domains(&repo, target.as_deref()).await?;
+                let before = stage_of(&labels);
+                labels = categories::with_category(&labels, &domains, target.as_deref(), stage)?;
+                let after = stage_of(&labels);
+                if stage.is_some() && after != before {
+                    let name = |s: &Option<String>| {
+                        s.as_deref()
+                            .map(|s| categories::stage_label(&domains, target.as_deref(), s))
+                    };
+                    let to = name(&after).unwrap_or_default();
+                    history = Some(match name(&before) {
+                        Some(from) => format!("**Étape** : {from} → **{to}**"),
+                        None => format!("**Étape** : **{to}**"),
+                    });
+                }
+            }
             body["labels"] = json!(labels);
+        }
+        if let Some(n) = note {
+            history = Some(match history {
+                Some(h) => format!("{h}\n\n{n}"),
+                None => format!("**Note** : {n}"),
+            });
         }
         match p.milestone.as_deref().map(str::trim) {
             None => {}
@@ -1071,15 +1144,46 @@ impl GestionProjet {
         if let Some(a) = p.assignees {
             body["assignees"] = json!(a);
         }
-        if body.as_object().is_some_and(|o| o.is_empty()) {
+        let unchanged = body.as_object().is_some_and(|o| o.is_empty());
+        if unchanged && history.is_none() {
             bail!("Rien à modifier : précisez au moins un champ.");
         }
-        let raw = self
-            .gh
-            .patch(&format!("/repos/{repo}/issues/{}", p.number), &body)
-            .await?;
+        let raw = if unchanged {
+            // Note seule : rien à changer sur l'issue elle-même.
+            self.raw_issue(&repo, p.number).await?
+        } else {
+            self.gh
+                .patch(&format!("/repos/{repo}/issues/{}", p.number), &body)
+                .await?
+        };
         self.remember_issue(&repo, &raw);
+        if let Some(text) = history {
+            self.gh
+                .post(
+                    &format!("/repos/{repo}/issues/{}/comments", p.number),
+                    &json!({ "body": text }),
+                )
+                .await?;
+        }
         Ok(serde_json::to_value(model::issue_in(&repo, &raw, true))?)
+    }
+
+    /// Taxonomie à appliquer pour `category` : les défauts suffisent pour une catégorie par
+    /// défaut ; sinon celle du dépôt (état partagé).
+    async fn category_domains(
+        &self,
+        repo: &str,
+        category: Option<&str>,
+    ) -> Result<Vec<categories::DomainView>> {
+        let config = match category {
+            Some(c) if !categories::is_default(c) => self
+                .load_project(repo)
+                .await?
+                .map(|p| p.state.categories)
+                .unwrap_or_default(),
+            _ => CategoryConfig::default(),
+        };
+        Ok(categories::resolve(&config))
     }
 
     /// Ferme une issue comme terminée et retire son label `status/*` (fusion d'une PR validée).
@@ -2410,6 +2514,47 @@ impl GestionProjet {
     }
 
     #[tool(
+        description = "Catégories d'issues du dépôt, sur deux niveaux : domaines (Développement, Qualité et tests, Études et cadrage, Échanges client, Documentation, Gestion de projet, Design et UX, Livraison et exploitation, plus ceux ajoutés par l'équipe) et leurs catégories. L'identifiant d'une catégorie se passe en `category` à create_issue / update_issue. Un domaine à `pipeline` (Échanges client, Documentation) donne des étapes (`stage` d'update_issue, historisées en commentaire). Les éléments `hidden` ne sont plus à proposer. `config` : la personnalisation du dépôt, à modifier puis renvoyer à save_categories.",
+        annotations(read_only_hint = true)
+    )]
+    async fn list_categories(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let config = self
+                    .load_project(&repo)
+                    .await?
+                    .map(|p| p.state.categories)
+                    .unwrap_or_default();
+                Ok(json!({ "repo": repo, "domains": categories::resolve(&config), "config": config }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Enregistre la personnalisation des catégories d'un dépôt (remplace l'existante) : domaines ajoutés (couleur #rrggbb, catégories, pipeline facultatif), catégories ajoutées à un domaine existant, identifiants par défaut masqués. Partir du `config` de list_categories. Identifiants : minuscules, chiffres et tirets, uniques tous domaines confondus.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
+    )]
+    async fn save_categories(&self, Parameters(p): Parameters<SaveCategoriesParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let config = categories::validate(p.config)?;
+                let project = self
+                    .edit_state(&repo, |state| {
+                        state.categories = config;
+                        Ok(())
+                    })
+                    .await?;
+                let config = project.state.categories;
+                Ok(json!({ "repo": repo, "domains": categories::resolve(&config), "config": config }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
         description = "Designs du projet (Claude Design) : nom, lien claude.ai, état (pending = lien seulement, imported = fichiers dans le dépôt sous `path`), branche, fichier d'entrée. À consulter quand l'utilisateur parle d'un design ou d'un écran à réaliser.",
         annotations(read_only_hint = true)
     )]
@@ -3031,6 +3176,7 @@ mod tests {
                 status: None,
                 points: Some(4),
                 priority: None,
+                category: None,
                 labels: vec![],
                 milestone: None,
                 assignees: vec![],
@@ -3054,6 +3200,9 @@ mod tests {
                 remove_labels: vec![],
                 milestone: None,
                 assignees: None,
+                category: None,
+                stage: None,
+                stage_note: None,
             }))
             .await
             .unwrap();
@@ -3477,12 +3626,152 @@ mod tests {
                 remove_labels: vec![],
                 milestone: None,
                 assignees: None,
+                category: None,
+                stage: None,
+                stage_note: None,
             }))
             .await
             .unwrap(),
         );
         assert_eq!(labels_of(&fake, 2), ["type/feat"]);
         assert_eq!(fake.lock().unwrap().issue(2).unwrap()["state"], "closed");
+    }
+
+    fn categorize(
+        number: u32,
+        category: Option<&str>,
+        stage: Option<&str>,
+        note: Option<&str>,
+    ) -> Parameters<UpdateIssueParams> {
+        Parameters(UpdateIssueParams {
+            repo: CRM.into(),
+            number,
+            title: None,
+            body: None,
+            state: None,
+            state_reason: None,
+            status: None,
+            points: None,
+            priority: None,
+            labels: None,
+            add_labels: vec![],
+            remove_labels: vec![],
+            milestone: None,
+            assignees: None,
+            category: category.map(str::to_string),
+            stage: stage.map(str::to_string),
+            stage_note: note.map(str::to_string),
+        })
+    }
+
+    /// Catégorie et pipeline : `cat/*` et `etape/*` posés, chaque changement d'étape historisé
+    /// en commentaire ; catégories ajoutées au dépôt reconnues après `save_categories`.
+    #[tokio::test]
+    async fn categories_and_pipeline_stages() {
+        let (s, fake) = crm().await;
+        let issue = data(
+            &s.update_issue(categorize(2, Some("questions-client"), None, None))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            (&issue["category"], &issue["stage"]),
+            (&json!("questions-client"), &json!("a-preparer"))
+        );
+        assert!(
+            fake.lock().unwrap().comments.is_empty(),
+            "catégorie seule : pas d'historique"
+        );
+
+        data(
+            &s.update_issue(categorize(2, None, Some("envoye"), Some("Envoyé à Paul (DSI)")))
+                .await
+                .unwrap(),
+        );
+        let labels = labels_of(&fake, 2);
+        assert!(labels.contains(&"etape/envoye".to_string()), "{labels:?}");
+        let body = fake.lock().unwrap().comments[0]["body"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            body,
+            "**Étape** : À préparer → **Envoyé**
+
+Envoyé à Paul (DSI)"
+        );
+
+        // Note seule : commentée sans toucher à l'issue.
+        data(
+            &s.update_issue(categorize(2, None, None, Some("Relance prévue lundi")))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            fake.lock().unwrap().comments[1]["body"],
+            "**Note** : Relance prévue lundi"
+        );
+
+        // Étape inconnue, catégorie inconnue : refus lisibles.
+        assert!(
+            text(
+                &s.update_issue(categorize(2, None, Some("archive"), None))
+                    .await
+                    .unwrap()
+            )
+            .contains("inconnue")
+        );
+        assert!(
+            text(
+                &s.update_issue(categorize(2, Some("nope"), None, None))
+                    .await
+                    .unwrap()
+            )
+            .contains("inconnue")
+        );
+
+        // Catégorie du dépôt : enregistrée dans l'état partagé, puis utilisable.
+        let saved = s
+            .save_categories(Parameters(SaveCategoriesParams {
+                repo: CRM.into(),
+                config: serde_json::from_value(json!({
+                    "categories": [{ "domain": "dev", "id": "scraping", "label": "Scraping" }],
+                    "hidden": ["mobile"],
+                }))
+                .unwrap(),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(data(&saved)["config"]["hidden"], json!(["mobile"]));
+        let listed = data(
+            &s.list_categories(Parameters(RepoParams { repo: CRM.into() }))
+                .await
+                .unwrap(),
+        );
+        let dev = listed["domains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"] == "dev")
+            .unwrap()
+            .clone();
+        assert!(
+            dev["categories"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == "scraping")
+        );
+        data(
+            &s.update_issue(categorize(2, Some("scraping"), None, None))
+                .await
+                .unwrap(),
+        );
+        let labels = labels_of(&fake, 2);
+        assert!(
+            labels.contains(&"cat/scraping".to_string()) && !labels.iter().any(|l| l.starts_with("etape/")),
+            "{labels:?}"
+        );
     }
 
     #[tokio::test]

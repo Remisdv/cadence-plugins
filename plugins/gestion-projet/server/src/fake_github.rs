@@ -22,6 +22,8 @@ pub struct Repo {
     pub pulls: Vec<Value>,
     /// Revues publiées : `{ number, event, body, comments }`.
     pub reviews: Vec<Value>,
+    /// Commentaires d'issue postés : `{ number, body }`.
+    pub comments: Vec<Value>,
     /// Compte connecté : GitHub refuse qu'il approuve (ou bloque) ses propres PR.
     pub login: String,
     /// Requêtes reçues : « MÉTHODE /chemin ».
@@ -61,6 +63,7 @@ impl Repo {
             branches: HashMap::from([("main".to_string(), "c0ffee".to_string())]),
             pulls: Vec::new(),
             reviews: Vec::new(),
+            comments: Vec::new(),
             login: "cadence-bot".into(),
             requests: Vec::new(),
             workflows: 0,
@@ -372,6 +375,12 @@ impl Repo {
                     _ => return not_found(path),
                 };
                 (200, json!({ "ahead_by": ahead, "behind_by": 0 }))
+            }
+            ("POST", ["issues", n, "comments"]) => {
+                let number: u64 = n.parse().unwrap_or(0);
+                self.comments
+                    .push(json!({ "number": number, "body": body["body"] }));
+                (201, json!({ "id": self.comments.len(), "body": body["body"] }))
             }
             ("POST", ["releases"]) => (201, json!({ "tag_name": body["tag_name"] })),
             ("POST", ["pulls", n, "reviews"]) => {

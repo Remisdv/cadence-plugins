@@ -1064,6 +1064,10 @@ impl GestionProjet {
                 .as_ref()
                 .map(|p| p.state.designs.clone())
                 .unwrap_or_default(),
+            categories: existing
+                .as_ref()
+                .map(|p| p.state.categories.clone())
+                .unwrap_or_default(),
         };
         let project = match existing {
             Some(p) => {
@@ -1523,6 +1527,7 @@ impl GestionProjet {
                     sprints: vec![],
                     jalons: vec![],
                     designs: vec![],
+                    categories: Default::default(),
                 };
                 self.create_state_issue(repo, state).await?
             }

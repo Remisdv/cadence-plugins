@@ -24,6 +24,9 @@ import type {
 import { issueWeight, pointsByStatus, sprintStart } from "./planning";
 // Bibliothèque de modèles du serveur, la même qu'en vrai.
 import archiTemplates from "../../server/src/templates.json";
+// Taxonomie des catégories livrée avec le serveur.
+import defaultCategories from "../../server/src/categories.json";
+import type { CategoryConfig, CategoryList, Domain, DomainView } from "./categories";
 
 const params = new URLSearchParams(location.search);
 
@@ -96,7 +99,170 @@ const issues: Issue[] = [
     milestone: null,
     labels: ["type/perf"],
   }),
+  // Études, échanges client, documents et pilotage : les catégories hors code.
+  issue("RemiSDV/cadence", 170, "Analyser le cahier des charges du client", {
+    type: null,
+    milestone: null,
+    status: "doing",
+    priority: 0,
+    points: 5,
+    category: "analyse-cdc",
+    assignees: ["RemiSDV"],
+  }),
+  issue("RemiSDV/cadence", 171, "Lister les informations manquantes pour cadrer la V1", {
+    type: null,
+    milestone: null,
+    priority: 1,
+    points: 3,
+    category: "infos-manquantes",
+  }),
+  issue("RemiSDV/cadence", 172, "Cadrer la première version : ce qu'on descope", {
+    type: null,
+    milestone: null,
+    priority: 1,
+    points: 3,
+    category: "descoping",
+  }),
+  issue("RemiSDV/cadence", 173, "Identifier et coter les risques du projet", {
+    type: null,
+    milestone: null,
+    priority: 2,
+    category: "analyse-risques",
+  }),
+  issue("RemiSDV/cadence", 174, "Mail de questions au client : volumétrie et SSO", {
+    type: null,
+    milestone: null,
+    priority: 1,
+    category: "questions-client",
+    stage: "en-attente",
+    comments: 2,
+    assignees: ["RemiSDV"],
+  }),
+  issue("RemiSDV/cadence", 175, "Relance : accès à l'environnement de recette", {
+    type: null,
+    milestone: null,
+    priority: 2,
+    category: "relance-client",
+    stage: "envoye",
+    comments: 1,
+  }),
+  issue("RemiSDV/cadence", 176, "Compte rendu de l'atelier de lancement", {
+    type: null,
+    milestone: null,
+    priority: 3,
+    category: "compte-rendu",
+    stage: "a-preparer",
+  }),
+  issue("RemiSDV/cadence", 177, "Rédiger le DAT (architecture technique)", {
+    type: "docs",
+    milestone: null,
+    priority: 2,
+    points: 8,
+    category: "dat",
+    stage: "redaction",
+    status: "doing",
+  }),
+  issue("RemiSDV/cadence", 178, "Spécifications fonctionnelles du module CRM", {
+    type: "docs",
+    milestone: null,
+    priority: 3,
+    points: 5,
+    category: "sfd",
+    stage: "relecture",
+    status: "review",
+  }),
+  issue("RemiSDV/cadence", 179, "Recaler le Gantt : le sprint 0.1.2 dérape", {
+    type: null,
+    milestone: null,
+    priority: 1,
+    points: 2,
+    category: "gantt",
+  }),
+  issue("RemiSDV/cadence", 180, "Préparer le COPIL de novembre", {
+    type: null,
+    milestone: null,
+    priority: 3,
+    category: "reporting",
+  }),
+  issue("RemiSDV/cadence", 181, "Pipeline CI : tests et build sur chaque PR", {
+    type: "chore",
+    milestone: null,
+    priority: 2,
+    points: 3,
+    category: "ci-cd",
+  }),
+  issue("RemiSDV/cadence", 182, "Image Docker du serveur", {
+    type: "chore",
+    milestone: null,
+    priority: 4,
+    points: 2,
+    category: "conteneurs",
+  }),
 ];
+
+// Catégories des issues de départ (labels `cat/*` et `etape/*` comme sur GitHub).
+const startCategories: Record<number, string> = {
+  156: "correctif",
+  149: "securite",
+  157: "api",
+  12: "front-end",
+  159: "release",
+  9: "optimisation",
+};
+for (const i of issues) {
+  i.category ??= startCategories[i.number] ?? null;
+  i.stage ??= null;
+  i.labels = [
+    ...i.labels.filter((l) => !l.startsWith("cat/") && !l.startsWith("etape/")),
+    ...(i.category ? [`cat/${i.category}`] : []),
+    ...(i.stage ? [`etape/${i.stage}`] : []),
+  ];
+}
+
+/* ---------- Catégories (list_categories / save_categories) ---------- */
+
+const categoryConfigs: Record<string, CategoryConfig> = {};
+
+function resolveCategories(config: CategoryConfig): DomainView[] {
+  const hidden = new Set(config.hidden ?? []);
+  const view = (d: Domain, custom: boolean): DomainView => ({
+    id: d.id,
+    label: d.label,
+    color: d.color,
+    description: d.description ?? "",
+    pipeline: d.pipeline ?? null,
+    custom,
+    hidden: !custom && hidden.has(d.id),
+    categories: d.categories.map((c) => ({
+      id: c.id,
+      label: c.label,
+      description: c.description ?? "",
+      custom,
+      hidden: !custom && hidden.has(c.id),
+    })),
+  });
+  const out = [
+    ...(defaultCategories.domains as Domain[]).map((d) => view(d, false)),
+    ...(config.domains ?? []).map((d) => view(d, true)),
+  ];
+  for (const c of config.categories ?? []) {
+    out
+      .find((d) => d.id === c.domain)
+      ?.categories.push({
+        id: c.id,
+        label: c.label,
+        description: c.description ?? "",
+        custom: true,
+        hidden: false,
+      });
+  }
+  return out;
+}
+
+const categoryList = (repo: string): CategoryList => {
+  const config = categoryConfigs[repo] ?? {};
+  return { repo, domains: resolveCategories(config), config };
+};
 
 const accountRepos: Omit<AccountRepo, "followed">[] = [
   { full_name: "RemiSDV/cadence", private: false, description: "Hôte de bureau", updated_at: null },
@@ -1107,8 +1273,9 @@ export const devHost: MockHostOptions = {
         ],
       };
     },
-    create_issue: ({ repo, title, type, points, priority, milestone }) => {
-      const created = issue(String(repo), 170 + issues.length, String(title), {
+    create_issue: ({ repo, title, type, points, priority, milestone, category }) => {
+      const created = issue(String(repo), 190 + issues.length, String(title), {
+        category: (category as string | undefined) ?? null,
         type: (type as Issue["type"]) ?? null,
         points: (points as number | undefined) ?? null,
         priority: (priority as number | undefined) ?? null,
@@ -1117,6 +1284,40 @@ export const devHost: MockHostOptions = {
       });
       issues.unshift(created);
       return created;
+    },
+    list_categories: ({ repo }) => categoryList(String(repo)),
+    save_categories: ({ repo, config }) => {
+      categoryConfigs[String(repo)] = config as CategoryConfig;
+      return categoryList(String(repo));
+    },
+    update_issue: (args) => {
+      const found = issues.find((i) => i.repo === args.repo && i.number === args.number);
+      if (!found) throw new Error(`Issue #${String(args.number)} introuvable.`);
+      const domains = resolveCategories(categoryConfigs[found.repo] ?? {});
+      const domainOf = (c: string | null | undefined) =>
+        domains.find((d) => d.categories.some((k) => k.id === c));
+      if (args.state === "closed") Object.assign(found, { state: "closed", status: "done" });
+      if (args.state === "open") Object.assign(found, { state: "open", status: "todo" });
+      if (args.status) found.status = args.status as Issue["status"];
+      if ("priority" in args) found.priority = (args.priority as number | null) ?? null;
+      if (typeof args.category === "string") {
+        found.category = args.category || null;
+        const pipeline = domainOf(found.category)?.pipeline;
+        if (!pipeline) found.stage = null;
+        else if (!pipeline.some((s) => s.id === found.stage)) found.stage = pipeline[0]!.id;
+      }
+      if (typeof args.stage === "string") {
+        found.stage = args.stage;
+        found.comments += 1;
+      } else if (args.stage_note) found.comments += 1;
+      found.labels = [
+        ...found.labels.filter((l) => !/^(cat|etape|priority|status)\//.test(l)),
+        ...(found.category ? [`cat/${found.category}`] : []),
+        ...(found.stage ? [`etape/${found.stage}`] : []),
+        ...(found.priority !== null ? [`priority/${found.priority}`] : []),
+      ];
+      found.updated_at = new Date().toISOString();
+      return { ...found };
     },
     get_account: () => ({ login: "RemiSDV", name: "Rémi Lhuillier", avatar_url: null, repos: [] }),
     list_account_repos: () => ({ repos: accountRepos.map((r) => ({ ...r, followed: false })) }),

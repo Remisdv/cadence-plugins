@@ -3,6 +3,7 @@ import { cadence, isCadenceError, type Route } from "@cadence/plugin-sdk";
 import { Callout, Spinner } from "@cadence/ui";
 import { isViewId } from "./domain";
 import { ArchitectureView } from "./views/ArchitectureView";
+import { CategoriesView } from "./views/CategoriesView";
 import { DesignsView } from "./views/DesignsView";
 import { IssuesView } from "./views/IssuesView";
 import { IssueView } from "./views/IssueView";
@@ -49,6 +50,8 @@ export function App() {
       return <IssuesView />;
     case "issue":
       return <IssueView params={route.params ?? {}} />;
+    case "categories":
+      return <CategoriesView params={route.params ?? {}} />;
     case "roadmap":
       return <RoadmapView />;
     case "versions":

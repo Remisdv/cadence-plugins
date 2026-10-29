@@ -6,6 +6,8 @@
 //!   L'ancienne estimation en tailles `estimate/S|M|L|XL` est encore lue, plus jamais écrite.
 //! - Priorité : `priority/0` (le socle : à faire avant tout, d'autres issues en dépendent), puis
 //!   `priority/1` (la plus urgente) à `priority/5` (la moins urgente).
+//! - Catégorie : `cat/<id>` (domaine › catégorie, voir `categories`) ; étape d'un pipeline :
+//!   `etape/<id>`.
 //! - Version : milestone semver (`0.1.2`) ; daté = sprint, sans date = palier de roadmap. La
 //!   description du milestone donne son nom (premier titre `# Nom`) et ses thèmes (éléments de
 //!   liste).
@@ -138,6 +140,10 @@ pub struct Issue {
     pub points: Option<u32>,
     /// Priorité (`priority/<n>`) : 0 = socle, puis 1 (la plus urgente) à 5.
     pub priority: Option<u8>,
+    /// Catégorie (`cat/<id>`, voir `list_categories`).
+    pub category: Option<String>,
+    /// Étape du pipeline de son domaine (`etape/<id>`), pour les domaines qui en ont un.
+    pub stage: Option<String>,
     pub labels: Vec<String>,
     /// Titre du milestone (version).
     pub milestone: Option<String>,
@@ -236,6 +242,14 @@ pub fn issue_from(raw: &Value, with_body: bool) -> Issue {
             .iter()
             .filter_map(|l| l.strip_prefix("priority/")?.parse::<u8>().ok())
             .find(|p| *p <= LOWEST_PRIORITY),
+        category: labels
+            .iter()
+            .find_map(|l| l.strip_prefix(crate::categories::CATEGORY_PREFIX))
+            .map(str::to_string),
+        stage: labels
+            .iter()
+            .find_map(|l| l.strip_prefix(crate::categories::STAGE_PREFIX))
+            .map(str::to_string),
         milestone: str_of(&raw["milestone"]["title"]),
         sprint: raw["milestone"]["due_on"]
             .as_str()

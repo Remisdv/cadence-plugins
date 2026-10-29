@@ -225,6 +225,8 @@ export interface IssueForm {
   priority: number | null;
   /** Titre du milestone ; vide : sans version. */
   milestone: string;
+  /** Catégorie (`list_categories`) ; vide : sans catégorie. */
+  category?: string;
 }
 
 /** Arguments de `create_issue`, ou le message d'erreur à afficher. */
@@ -247,6 +249,7 @@ export function createIssueArgs(
   if (form.points !== null) args.points = form.points;
   if (form.priority !== null) args.priority = form.priority;
   if (form.milestone.trim()) args.milestone = form.milestone.trim();
+  if (form.category) args.category = form.category;
   return { ok: true, args };
 }
 
