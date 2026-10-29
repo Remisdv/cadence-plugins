@@ -1,109 +1,73 @@
 # Documents
 
-> **Mode d'emploi** : [guide d'utilisation](../../docs/utilisation.md#3-documents). Ce README est la
-> référence technique du plugin (écrans, actions, outils, données).
+**Vos cours rangés par matière et chapitre, vos notes prises dans Cadence, et l'IA pour répondre en
+citant la page, générer des QCM, poser des questions ouvertes et faire des flashcards.**
 
-Plugin officiel de Cadence (catégorie **Études**) pour réviser ses cours : PDF, Word (.docx), PowerPoint (.pptx),
-Markdown et texte, rangés en **Matière → Chapitre → Documents**, et **notes** prises dans Cadence
-(éditeur par blocs façon Notion, fichiers Markdown du dossier des cours). L'IA lit les cours et les
-notes **à la demande** (pas d'index d'embeddings) et **cite le document et la page** de ce qu'elle
-avance. Entraînement : QCM, questions ouvertes corrigées par l'IA, flashcards.
+> **Captures bientôt.** Les écrans de Documents sont en cours de finition : les captures arriveront
+> avec la prochaine version du plugin.
 
-## Configuration
+Plugin officiel, groupe **Études** du rail. Version 0.4.0.
 
-Il n'y a pas d'espace de travail : le plugin a une seule bibliothèque, ses réglages sont globaux et
-il gère lui-même son contexte (matières et chapitres).
+## Un cas réel : réviser un partiel de réseaux
 
-- **Dossier des cours** (étape de setup `setup-dossier`) : le dossier où sont rangés les cours,
-  enregistré en chemin absolu dans le réglage `dossier_cours`. Les chemins relatifs donnés à
-  l'import sont lus depuis ce dossier.
-- **Réglages globaux** (`settings.schema.json`, reçus en `CADENCE_SETTINGS` puis
-  `notifications/cadence/settings`) : `dossier_cours`, `questions_par_qcm` (10),
-  `cartes_par_paquet` (20).
+Une étudiante prépare son partiel de **Réseaux**. Elle a le polycopié du cours en PDF, les
+diapositives en PowerPoint et quelques notes en Markdown.
 
-## Écrans
+1. **Ranger ses cours.** Dans **Bibliothèque**, « Importer » ajoute les fichiers et les range en
+   **Matière → Chapitre** : « Réseaux » › « Routage IP ». Les fichiers restent dans son dossier de
+   cours : Cadence ne les copie pas.
+2. **Lire et prendre des notes.** Un clic ouvre le polycopié page par page. « Nouvelle note » ouvre un
+   éditeur par blocs, façon Notion : `/` pour insérer un titre, une liste, un tableau, un bloc de code
+   ou un **lien vers une page précise du cours**. Les notes sont de simples fichiers Markdown,
+   modifiables aussi hors de Cadence. Sur une note vide, « Résumer en note » demande à l'IA d'en
+   rédiger une première version à partir du chapitre.
+3. **Poser ses questions.** « Poser une question » ouvre le chat sur le chapitre : « Quelle différence
+   entre RIP et OSPF ? ». L'IA lit le cours et répond en **citant le document et la page**. Les
+   citations sont cliquables et ouvrent la bonne page.
+4. **S'entraîner.** « Générer un QCM » prépare en fond un QCM sur le chapitre. On le passe dans
+   **Entraînement**, une question à la fois (touches 1 à 9) ; chaque correction donne l'explication et
+   la source. « Flashcards » crée un paquet de cartes à retourner (espace, puis 1 « À revoir » ou 2
+   « Je savais »), avec un tour de rattrapage des cartes manquées. « Questions ouvertes » fait poser
+   les questions par l'IA, qui corrige les réponses dans le chat.
+5. **Suivre sa progression.** L'historique des scores, dans Entraînement, montre ce qu'il reste à
+   revoir avant le partiel.
 
-| Vue | État |
-| --- | --- |
-| Bibliothèque (`bibliotheque`) | matières, chapitres, documents et notes ; import de fichiers ; « Nouvelle note » et « Poser une question » par chapitre ; un clic ouvre le document |
-| Notes (`document`) | sans paramètre : notes récentes et « Nouvelle note ». Paramètres `doc` (et `page`) : **éditeur** d'une note (la page désigne une section) ou **lecture** d'un cours page par page. Cible des liens `cadence:documents/document?doc=…&page=…` du chat et des notes |
-| Entraînement (`entrainement`) | entraînements enregistrés, filtrés par type ; **QCM** à passer (une question à la fois, touches 1 à 9, correction par le serveur avec explication et source) ; **flashcards** à retourner (espace, puis 1 « À revoir » / 2 « Je savais »), tour de rattrapage des cartes manquées ; **questions ouvertes** lancées dans le chat ; **historique des scores**. Paramètre de route `quiz` : ouvre un entraînement |
+## Les écrans
 
-### Éditeur de notes
+| Écran            | À quoi il sert                                                                                              |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Bibliothèque** | matières, chapitres, documents et notes ; import ; « Nouvelle note » et « Poser une question » par chapitre |
+| **Notes**        | notes récentes, éditeur de notes, lecture d'un cours page par page                                          |
+| **Entraînement** | QCM, flashcards et questions ouvertes enregistrés, historique des scores                                    |
 
-Éditeur par blocs (TipTap / ProseMirror, embarqué dans le build, sans réseau) :
+Formats lus : PDF, Word (.docx), PowerPoint (.pptx), Markdown et texte.
 
-- **titre** de la note (nom du fichier `.md`), puis des blocs : titres 1 à 3, paragraphes, listes à
-  puces ou numérotées, **cases à cocher**, citations, blocs de code, séparateur, **tableaux**
-  (barre « + Ligne », « + Colonne »… quand le curseur y est) ;
-- **`/`** ouvre le menu des blocs (filtré à la frappe, ↑ ↓ Entrée) ; **raccourcis Markdown** à la
-  frappe : `# `, `## `, `### `, `- `, `1. `, `[] `, `> `, ```` ``` ````, `---`, `**gras**`,
-  `*italique*`, `` `code` `` ;
-- poignée à gauche de chaque bloc : **+** ajoute un bloc dessous, **⋮⋮** se glisse pour
-  **réordonner** (ou Alt+↑ / Alt+↓) ;
-- sélection de texte : gras, italique, barré, code, **lien** ; « / Lien vers un document » insère
-  un lien vers un cours, une page ou une autre note (`cadence:documents/document?doc=…&page=…`),
-  ouvert par Ctrl+clic ou « Ouvrir » ;
-- **sauvegarde automatique** (0,8 s après la dernière frappe, Ctrl+S pour tout de suite) avec
-  indicateur ; l'enregistrement passe la révision lue : si l'IA a modifié la note entre-temps,
-  l'écran propose de charger sa version ou de garder la sienne. Une note modifiée par l'IA pendant
-  qu'elle est ouverte (sans modification locale) se recharge seule ;
-- note vide : « Résumer le chapitre » lance le skill `prendre-des-notes` dans la note.
+## Ce que fait l'IA
 
-Depuis la bibliothèque, le menu « S'entraîner » d'un chapitre lance « Générer un QCM »,
-« Flashcards » ou « Questions ouvertes ». L'écran se met à jour sur les événements du serveur
-(`notifications/cadence/event`) : `quiz-saved` (`{ id, kind }`) quand un entraînement est
-enregistré, `result-saved` (`{ quiz, score, total }`) quand un score l'est, `note-saved`
-(`{ id, revision }`) et `note-deleted` (`{ id }`) pour les notes.
+| Action                 | Mode    | Ce qu'elle fait                                                      |
+| ---------------------- | ------- | -------------------------------------------------------------------- |
+| **Poser une question** | chat    | répond à partir des cours, en citant le document et la page          |
+| **Générer un QCM**     | en fond | crée un QCM corrigé, avec une explication et une source par question |
+| **Questions ouvertes** | chat    | pose des questions et corrige vos réponses                           |
+| **Flashcards**         | en fond | crée un paquet de cartes à réviser                                   |
+| **Résumer en note**    | en fond | rédige une note à partir d'un chapitre ou d'un document              |
 
-## Actions et skills
+L'IA lit les cours **à la demande**, sans index ni envoi de vos fichiers à un service tiers : elle
+passe par votre IA de code habituelle.
 
-| Action | Skill | Mode | Contexte |
-| --- | --- | --- | --- |
-| Poser une question | `repondre-cours` | chat | `{ "subject", "chapter", "document"? }` |
-| Générer un QCM | `generer-qcm` | fond | `{ "subject", "chapter", "document"?, "count"? }` |
-| Questions ouvertes | `questions-ouvertes` | chat | `{ "subject", "chapter", "count"? }` |
-| Flashcards | `flashcards` | fond | `{ "subject", "chapter", "document"?, "count"? }` |
-| Résumer en note | `prendre-des-notes` | fond | `{ "subject", "chapter", "document"?, "note"? }` |
+## Démarrer
 
-## Outils MCP (`documents__<outil>`)
+1. Dans Cadence, ouvrez le **catalogue** (icône en grille en bas du rail) et installez **Documents**.
+2. Choisissez le **dossier des cours**, celui où vous rangez vos fichiers.
+3. Dans **Bibliothèque**, importez un premier cours, ou commencez par une note.
 
-| Outil | Rôle |
-| --- | --- |
-| `list_subjects`, `list_chapters`, `list_documents` | parcourir la bibliothèque |
-| `import_document` | extraire le texte d'un fichier et le ranger (matière et chapitre créés au besoin) |
-| `read_pages` | texte d'une plage de pages (20 par appel), avec le `link` de chaque page ; pour une note, le titre de chaque `section` |
-| `search` | recherche plein texte sans accents ni casse, notes comprises : quelles pages lire (`link` de chaque résultat) |
-| `create_note`, `update_note` | créer une note (Markdown) dans un chapitre ; la remplacer, la compléter (`append`) ou la renommer, avec la `revision` lue pour ne rien écraser |
-| `list_notes`, `get_note` | notes (sections, révision, fichier) ; une note en entier (Markdown) |
-| `delete_note` | réservé à l'écran (`_meta["cadence/visibility"] = "ui"`) : retire la note et efface son fichier |
-| `save_quiz`, `list_quizzes`, `get_quiz` | entraînements générés ; `save_quiz` vérifie le format des éléments (QCM : `question`, `choices`, `answer` ; flashcards : `front`, `back` ; questions ouvertes : `question`) |
-| `submit_qcm` | corrige un QCM à partir des indices choisis (1 point par bonne réponse), enregistre le score et renvoie la correction |
-| `save_result` | réponses corrigées et score (questions ouvertes, tour de flashcards) |
-| `list_results` | historique des scores, les plus récents d'abord |
+## Données et réseau
 
-Pages : une page de PDF ; une **diapositive** de PowerPoint ; pour Word, Markdown et texte, un
-**bloc d'environ 3000 caractères** coupé entre deux paragraphes ; pour une note, une **section**
-coupée avant chaque titre `#` à `###` (une section de plus de 3000 caractères est redécoupée).
+Aucun accès réseau. La bibliothèque (matières, chapitres, entraînements) est enregistrée dans le
+dossier de données du plugin ; vos cours et vos notes restent dans votre dossier des cours.
 
-## Données
+## Pour aller plus loin
 
-Dans `CADENCE_DATA_DIR` (`<données de l'app>/plugins-data/documents/`) : `library.json`,
-`cache/<document>.json` (texte par page), `quizzes/<quiz>.json`, `results/<résultat>.json` (score,
-total, réponses ou correction, bilan, rang d'enregistrement `seq`). Les fichiers d'origine ne sont
-pas copiés : chaque document garde leur chemin absolu. Aucun accès réseau.
-
-Notes : `<dossier des cours>/Notes/<Matière>/<Chapitre>/<Titre>.md` (`CADENCE_DATA_DIR/notes/…`
-tant que le dossier des cours n'est pas réglé), lisibles et modifiables hors de Cadence : le
-fichier ne contient que le corps de la note en Markdown (GFM : cases `- [ ]`, tableaux), relu à
-chaque lecture. Titre, révision et dates sont dans `library.json` (document de type `note`) ; le
-cache garde une copie découpée par sections, qui sert si le fichier disparaît. L'IA tourne dans un
-dossier neutre de Cadence et lit les cours par les outils ci-dessus.
-
-## Développement
-
-```sh
-cargo test -p cadence-documents
-pnpm --dir plugins/documents/ui dev
-pnpm validate documents
-```
+- [Guide d'utilisation](../../docs/utilisation.md#3-documents).
+- [Référence technique](TECHNIQUE.md) : écrans, éditeur de notes, actions et skills, outils MCP,
+  données, développement du plugin.

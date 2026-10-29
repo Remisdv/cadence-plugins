@@ -13,7 +13,8 @@ avant la fusion sur `main` qui déclenche la publication.
    - `plugin.toml` — manifeste API 1, décrit par `schema/plugin.schema.json`, avec sa `category`
      (`projet`, `etudes`, `code`, `donnees` ou `outils`) et, au besoin, les `services` de Cadence
      qu'il active (`repos`) et les outils externes dont il dépend (`[[requires]]`) ;
-   - `README.md` — ce que fait le plugin, ses réglages, ses outils ;
+   - `README.md` — ce que fait le plugin, ses réglages, ses outils, les services réseau qu'il
+     contacte (le détail technique peut aller dans un `TECHNIQUE.md` à côté) ;
    - selon les besoins : `icon.svg`, `ui/` (écrans), `skills/<skill>/SKILL.md`, `server/`
      (sources du serveur MCP), un schéma de réglages.
 3. Vérifiez en local :
