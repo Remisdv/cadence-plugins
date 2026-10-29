@@ -1,5 +1,8 @@
 # Exemple
 
+> **Mode d'emploi** : [guide d'utilisation](../../docs/utilisation.md#4-exemple). Ce README est la
+> référence technique du plugin (écrans, actions, outils, données).
+
 Plugin de **référence pour les auteurs** de plugins Cadence (catégorie **Outils**). Il ne fait
 presque rien — un compteur — mais utilise une fois chaque brique de l'API 1 : manifeste complet,
 serveur MCP en Rust, écran React avec le SDK et le kit UI, réglages, étape de configuration,
@@ -31,7 +34,7 @@ pnpm --dir plugins/exemple/ui build
 pnpm package exemple --allow-missing-targets # archive locale out/exemple-0.1.0.zip
 ```
 
-Dans Cadence, le plugin s'installe depuis le catalogue (Réglages › Plugins). Cadence sait aussi
+Dans Cadence, le plugin s'installe depuis le catalogue (icône en grille en bas du rail). Cadence sait aussi
 inscrire un dossier local non zippé comme plugin de développement : le contenu d'une archive
 assemblée par `pnpm package` (avec le binaire du serveur pour votre machine dans `--bins`).
 

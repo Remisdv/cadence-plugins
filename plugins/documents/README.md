@@ -1,5 +1,8 @@
 # Documents
 
+> **Mode d'emploi** : [guide d'utilisation](../../docs/utilisation.md#3-documents). Ce README est la
+> référence technique du plugin (écrans, actions, outils, données).
+
 Plugin officiel de Cadence (catégorie **Études**) pour réviser ses cours : PDF, Word (.docx), PowerPoint (.pptx),
 Markdown et texte, rangés en **Matière → Chapitre → Documents**, et **notes** prises dans Cadence
 (éditeur par blocs façon Notion, fichiers Markdown du dossier des cours). L'IA lit les cours et les

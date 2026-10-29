@@ -1,212 +1,54 @@
 # Plugins Cadence
 
-Dépôt public des plugins de [Cadence](https://github.com/RemiSDV), l'hôte de bureau qui relie les IA
-de code (Claude Code, Codex CLI, OpenCode) à des **plugins** : écrans, skills et outils MCP. On y
-trouve les plugins officiels (dont un plugin d'exemple pour les auteurs), le SDK des écrans de
-plugin, le kit UI de Cadence et l'outillage qui publie chaque plugin et le catalogue lu par l'app.
+**Les fonctionnalités de [Cadence](https://github.com/RemiSDV/cadence), à installer selon vos besoins.**
 
-Les plugins officiels vivent ici comme n'importe quel plugin tiers et utilisent la même API ;
-ils ne sont pas livrés dans l'app.
+Cadence est une application de bureau qui pilote vos IA de code (Claude Code, Codex CLI, OpenCode).
+Les **plugins** lui apportent ses fonctionnalités : chaque plugin ajoute ses écrans dans l'app, des
+boutons d'action qui lancent l'IA sur une tâche précise, et des outils que l'IA sait utiliser dans
+le chat. Ce dépôt est le **catalogue public** des plugins : Cadence y lit la liste de ceux que vous
+pouvez installer.
 
-## Installer un plugin depuis Cadence
+<img src="docs/captures/catalogue.png" alt="Le catalogue de plugins dans Cadence" width="840">
 
-1. Dans Cadence, ouvrez **Réglages › Plugins** (ou l'étape « Plugins » de l'onboarding) : la liste
-   vient du catalogue
-   [`catalog.json`](https://github.com/RemiSDV/cadence-plugins/releases/download/catalog/catalog.json).
-2. Choisissez un plugin et cliquez sur **Installer** : Cadence télécharge l'archive de sa dernière
-   release, vérifie son empreinte sha256 et l'extrait dans `<données de l'app>/plugins/<id>/<version>/`.
-3. Le plugin est **activé globalement** dès l'installation (on peut le désactiver sans le
-   désinstaller) et prend place dans le rail de Cadence, dans le groupe de sa catégorie. Cadence
-   vérifie les outils externes dont il dépend (installation et connexion proposées, voir
-   [Dépendances externes](#dépendances-externes)), puis vous suivez ses étapes de configuration :
-   pour Gestion de projet, la connexion GitHub du service `repos` puis le choix des dépôts suivis.
+## Les plugins officiels
 
-Chaque plugin a sa propre release GitHub (tag `<id>-v<version>`) : le lien de l'archive peut aussi
-être partagé tel quel.
+### Gestion de projet
 
-## Plugins
+Pilotez vos dépôts GitHub de bout en bout : issues rangées par catégorie, sprints automatiques,
+roadmap par jalons, planning, versions et pull requests. Un clic suffit pour que l'IA complète une
+issue, l'implémente, développe tout le sprint, relise les pull requests ou prépare la release.
 
-| Plugin | Dossier | Ce qu'il apporte |
-| --- | --- | --- |
-| **Gestion de projet** | [`plugins/gestion-projet`](plugins/gestion-projet) | issues GitHub, kanban, roadmap, sprints, versions, pull requests ; skills « Compléter l'issue », « Implémenter », « Proposer des issues », « Relire et valider », « Préparer la release » |
-| **Documents** | [`plugins/documents`](plugins/documents) | cours PDF, Word, PowerPoint et Markdown rangés par matière et chapitre ; notes par blocs façon Notion (Markdown) ; réponses citées (document + page), QCM, questions ouvertes corrigées, flashcards |
-| **Exemple** | [`plugins/exemple`](plugins/exemple) | plugin de référence pour les auteurs : un compteur qui utilise chaque brique de l'API (manifeste complet, serveur MCP, écran React, réglages, étape de configuration, action et skill, dépendance externe) |
+| Sprint en cours                                                                       | Issues                                                                       |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| <img src="docs/captures/gestion-projet-sprint.png" alt="Sprint en cours" width="420"> | <img src="docs/captures/gestion-projet-issues.png" alt="Issues" width="420"> |
 
-## Contenu du dépôt
+### Documents
 
-```
-plugins/<id>/            un dossier par plugin : plugin.toml, README.md, ui/, skills/, server/
-packages/sdk/            @cadence/plugin-sdk — SDK postMessage des écrans de plugin
-packages/ui/             @cadence/ui — tokens CSS et composants React du kit Cadence
-schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1, révision 1.3)
-scripts/                 validate.ts, package.ts, catalog.ts, pending.ts
-.github/workflows/       ci.yml (pull requests) et release.yml (main)
-```
+Rangez vos cours (PDF, Word, PowerPoint, Markdown) par matière et chapitre, prenez vos notes dans
+un éditeur par blocs, posez vos questions à l'IA (elle cite le document et la page) et révisez avec
+des QCM, des questions ouvertes corrigées et des flashcards.
 
-## Anatomie d'un plugin
+| Bibliothèque                                                                        | Note                                                                |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| <img src="docs/captures/documents-bibliotheque.png" alt="Bibliothèque" width="420"> | <img src="docs/captures/documents-note.png" alt="Note" width="420"> |
 
-Archive installée (à plat, sans dossier racine) :
+### Exemple
 
-```
-plugin.toml          manifeste (obligatoire)
-icon.svg             optionnel
-ui/                  écrans web : index.html + assets, servis dans un iframe isolé
-skills/<skill>/SKILL.md   skills au format « Agent Skills » (frontmatter name/description)
-bin/<cible>/<exe>    serveur MCP natif par plateforme (optionnel)
-README.md
-```
+Un plugin minimal (un compteur) qui montre chaque brique disponible : c'est le point de départ
+pour écrire le vôtre.
 
-Cibles : `windows-x86_64`, `macos-aarch64`, `macos-x86_64`, `linux-x86_64`.
+## Installer un plugin
 
-Il n'y a pas d'espace de travail : Cadence lance **un seul processus serveur par plugin** (MCP sur
-stdio), avec l'environnement :
+Dans Cadence, ouvrez le **catalogue** (icône en grille en bas du rail), choisissez un plugin et
+cliquez sur **Installer**. Il apparaît aussitôt dans le rail ; suivez ses éventuelles étapes de
+configuration (connexion GitHub pour Gestion de projet, par exemple).
 
-| Variable | Contenu |
-| --- | --- |
-| `CADENCE_API` | `1` |
-| `CADENCE_DATA_DIR` | dossier de données du plugin, `<données de l'app>/plugins-data/<id>/` |
-| `CADENCE_SETTINGS` | réglages globaux du plugin (JSON) ; ensuite `notifications/cadence/settings` |
-| `CADENCE_SECRET_<ID_MAJUSCULE>` | chaque secret déclaré dans `[[secrets]]` |
-| `CADENCE_GITHUB_TOKEN`, `CADENCE_REPOS` | service `repos` activé (voir plus bas) |
-| `CADENCE_TOOLS` | outils externes détectés (JSON : id → chemin absolu de l'exécutable, voir plus bas) |
+## Documentation
 
-Les outils sont exposés aux IA préfixés `<plugin>__<outil>`. L'IA tourne toujours dans un dossier
-neutre de Cadence, jamais dans un dépôt de l'utilisateur : elle accède aux données par les outils
-MCP. Chaque plugin gère son propre contexte (dépôts suivis, matières…).
-
-Le manifeste est décrit par [`schema/plugin.schema.json`](schema/plugin.schema.json) ; un exemple
-complet : [`plugins/gestion-projet/plugin.toml`](plugins/gestion-projet/plugin.toml).
-
-### Catégories
-
-`category` est obligatoire et prise dans une liste fixe ; elle range le plugin dans le rail de
-Cadence, dans cet ordre :
-
-| `category` | Libellé |
-| --- | --- |
-| `projet` | Projet |
-| `etudes` | Études |
-| `code` | Code |
-| `donnees` | Données |
-| `outils` | Outils |
-
-`color` (révision 1.3, facultative) fixe la couleur de la tuile du plugin dans le rail, parmi les
-couleurs du kit : `clay`, `blue`, `green`, `purple`, `amber`, `red`. Sans elle, Cadence tire une
-couleur stable de l'identifiant.
-
-### Services fournis par Cadence
-
-Un plugin active dans son manifeste les briques que l'app embarque :
-
-```toml
-services = ["repos"]
-```
-
-**`repos`** — dépôts GitHub :
-
-- Cadence gère la **connexion GitHub** (gh CLI, navigateur, code d'appairage ou jeton personnel,
-  rangé au trousseau) : le plugin ne déclare pas de secret pour son jeton.
-- Le plugin a une liste de **dépôts suivis** et un **sélecteur** en tête de sa barre : un dépôt, ou
-  « Tous les dépôts » pour les vues agrégées.
-- Le serveur reçoit `CADENCE_GITHUB_TOKEN` (si GitHub est connecté) et `CADENCE_REPOS` (JSON des
-  dépôts suivis), puis `notifications/cadence/repos` à chaque changement de la liste.
-- La lecture passe par l'API GitHub ; le **clone** n'a lieu qu'à la demande, quand un skill doit
-  toucher au code : l'outil du cœur `cadence__repo_checkout` (ou `cadence.repos.checkout` côté UI)
-  prépare un worktree par tâche sous `<données de l'app>/repos/<owner>/<name>/` et l'ouvre à l'IA
-  pour cette session seulement.
-- Écrans : `cadence.repos.list()`, `selection()`, `onChange()`, `follow()`, `unfollow()`,
-  `checkout()` (voir [`packages/sdk`](packages/sdk)). Le contexte d'une action reçoit la sélection
-  courante (`repo` ou `repos`).
-
-`pnpm validate` avertit quand un plugin lit `CADENCE_GITHUB_TOKEN` ou `CADENCE_REPOS`, appelle
-`cadence.repos` ou cite `cadence__repo_checkout` sans déclarer `repos`.
-
-### Dépendances externes
-
-Cadence connaît une liste fermée d'**outils externes** (enrichie à chaque version de l'app). Il les
-détecte, les installe et les connecte pour l'utilisateur, toujours sur un clic : il affiche la
-commande exacte qu'il va lancer et pourquoi, la lance dans un terminal intégré, puis revérifie.
-Les identifiants de connexion restent dans le stockage propre de chaque outil.
-
-| `tool` | Outil | Connexion |
-| --- | --- | --- |
-| `git` | Git | — |
-| `gh` | GitHub CLI | `gh auth login` |
-| `claude` | Claude Code | `claude auth login` |
-| `codex` | Codex CLI | `codex login` |
-| `opencode` | OpenCode | `opencode auth login` |
-| `node` | Node.js (prérequis des installations npm) | — |
-
-Un plugin déclare les outils dont il a besoin :
-
-```toml
-[[requires]]
-tool = "git"                # id du registre
-min_version = "2.30"        # optionnel, semver souple : 2, 2.30 ou 2.30.1
-reason = "Cloner les dépôts et préparer les worktrees"   # obligatoire, en français
-
-[[requires]]
-tool = "gh"
-optional = true             # le plugin fonctionne sans, en mode dégradé
-auth = true                 # l'outil doit aussi être connecté
-reason = "Réutiliser votre connexion GitHub existante"
-```
-
-- Un **service** déclare lui-même ses outils : `repos` apporte `git` (requis) et `gh` (optionnel,
-  connecté). Un plugin qui active `repos` n'a pas à les redéclarer (il peut le faire, par exemple
-  pour exiger une version plus récente).
-- Les IA de code (`claude`, `codex`, `opencode`) sont gérées par l'étape « IA de code » de
-  l'onboarding ; un plugin ne les déclare que s'il lance lui-même une CLI précise.
-- Un outil requis manquant met le plugin « à configurer » : bandeau dans sa barre avec « Installer ».
-  Les outils apparaissent aussi dans l'étape « Outils nécessaires » de l'onboarding, dans
-  **Réglages › Outils** et dans la section « Dépendances » du catalogue (champ `requires` de
-  `catalog.json`, services compris).
-- Le **serveur** ne lance jamais un outil par son nom : il lit son chemin dans `CADENCE_TOOLS`
-  (`{ "git": "/usr/bin/git", "gh": "/opt/homebrew/bin/gh" }`), qui tient compte des chemins
-  personnalisés des réglages.
-- Les **écrans** consultent l'état d'un outil avec `cadence.tools.status(id)`
-  (`{ installed, version, authenticated }`) et ouvrent la boîte d'installation de Cadence avec
-  `cadence.tools.ensure(id)`.
-
-`pnpm validate` refuse un outil déclaré deux fois ou `auth = true` sur un outil sans connexion
-(`git`, `node`), et avertit quand un serveur lit dans `CADENCE_TOOLS` un outil que ni le plugin ni
-ses services ne déclarent, ou lance un outil du registre par son nom.
-
-## Développer
-
-Prérequis : Node ≥ 20, pnpm 10, Rust stable.
-
-```sh
-pnpm install
-pnpm validate                 # manifestes, catégories, services, dépendances, skills, vues, réglages
-pnpm typecheck && pnpm test   # SDK, kit UI, scripts, écrans
-pnpm build                    # build des UI de plugins (plugins/*/ui/dist)
-cargo test --workspace        # serveurs MCP Rust
-pnpm --dir plugins/gestion-projet/ui dev   # écran hors de Cadence, avec un hôte simulé
-pnpm package documents --allow-missing-targets   # archive locale dans out/
-```
-
-## Publication
-
-Sur une pull request, la CI (`ci.yml`) valide les manifestes (version incrémentée comprise),
-vérifie les types et lance les tests, construit les UI, assemble l'archive de chaque plugin (sans
-binaires) et teste puis construit les serveurs sur les quatre cibles (`macos-x86_64` en
-compilation croisée, sans tests).
-
-Sur `main`, la release (`release.yml`) refait ces vérifications puis publie chaque plugin dont la
-version du manifeste n'a pas encore de tag `<id>-v<version>` : tests et build des serveurs sur les
-quatre plateformes (Linux sur Ubuntu 22.04, pour la glibc), assemblage de `<id>-<version>.zip` +
-`.sha256` avec un binaire par cible, release GitHub. `catalog.json` est ensuite régénéré à chaque
-push sur `main` et téléversé sur la release fixe `catalog` ; `workflow_dispatch` relance le tout à
-la main. Pour proposer un plugin, voir [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Chaque entrée de `catalog.json` décrit le plugin sans qu'il faille télécharger son archive :
-`category`, `color`, `icon` (icône du kit de la tuile), `services`, `requires`, `views`,
-`actions`, `tools` (outils MCP exposés aux IA, lus dans les sources du serveur au tag ; les outils
-`meta = ui_only()` en sont exclus), `targets`, `size`, et `official`. Ce dernier marque les
-plugins publiés par le mainteneur (liste `OFFICIAL_PLUGINS` de
-[`scripts/lib/catalog.ts`](scripts/lib/catalog.ts)) : badge « Officiel » dans Cadence et
-présélection à l'onboarding. Il n'est posé que pour le catalogue de ce dépôt, pas pour un fork.
+- **[Guide d'utilisation](docs/utilisation.md)** : installer, configurer et utiliser chaque plugin.
+- **[Documentation technique](docs/technique.md)** : écrire un plugin (manifeste, serveur, écrans,
+  services de Cadence), développer et publier.
+- **[Proposer un plugin](CONTRIBUTING.md)** au catalogue.
 
 ## Licence
 

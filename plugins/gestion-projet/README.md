@@ -1,5 +1,8 @@
 # Gestion de projet
 
+> **Mode d'emploi** : [guide d'utilisation](../../docs/utilisation.md#2-gestion-de-projet). Ce README est la
+> référence technique du plugin (écrans, actions, outils, données).
+
 Plugin officiel de Cadence (catégorie **Projet**) : issues GitHub, kanban, roadmap, sprints,
 versions et pull requests de vos **dépôts suivis**, et des **skills** qui remplacent les anciens
 agents de Cadence.
