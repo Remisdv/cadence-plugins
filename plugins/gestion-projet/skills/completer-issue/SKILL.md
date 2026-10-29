@@ -25,7 +25,8 @@ contexte.
 | `cadence__repo_checkout` | obtenir un worktree du dépôt pour en lire le code (`{ "repo", "task": "issue-<numéro>" }` → `path`) |
 | `gestion-projet__get_issue` | lire titre, description, labels, version et commentaires |
 | `gestion-projet__list_issues` | repérer les issues liées ou en doublon (`state: "all"`) |
-| `gestion-projet__update_issue` | écrire la description et les labels (`body`, `add_labels`) |
+| `gestion-projet__update_issue` | écrire la description, la catégorie et les labels (`body`, `category`, `add_labels`) |
+| `gestion-projet__list_categories` | catégories du dépôt (domaine › catégorie) : l'`id` à passer en `category` |
 | `gestion-projet__add_comment` | laisser un commentaire signé qui résume le changement |
 
 Tu tournes dans un dossier neutre de Cadence, **pas dans le dépôt**. Pour lire le code, demande un
@@ -54,11 +55,13 @@ lance aucune commande qui écrit.
      existante, ancienne taille `estimate/*` comprise) ;
    - une priorité si l'issue n'en a pas : 0 pour le socle (d'autres issues en dépendent), sinon de
      1 (la plus urgente) à 5, passée en `priority` ;
+   - une catégorie si l'issue n'en a pas, passée en `category` (voir `list_categories`) ;
    - au plus trois labels de domaine (`area/api`, `area/ui`…), jamais `type/*`, `status/*`,
-     `sp/*`, `priority/*` ni `estimate/*` à la main ;
+     `sp/*`, `priority/*`, `cat/*`, `etape/*` ni `estimate/*` à la main ;
    - un risque (faible, moyen, élevé) et les numéros d'issues liées, que tu cites dans la
      description (« Voir aussi #129 ») si elles aident.
-5. Écris : `update_issue` avec `body`, `points`, `priority` et `add_labels`, puis `add_comment` :
+5. Écris : `update_issue` avec `body`, `points`, `priority`, `category` et `add_labels`, puis
+   `add_comment` :
 
    ```
    **Issue complétée** · skill « Compléter l'issue » (Cadence)

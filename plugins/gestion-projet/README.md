@@ -35,7 +35,8 @@ suivis et le sélecteur de dépôt en tête de la barre du plugin. Le plugin n'a
 Conventions GitHub reprises de Cadence : labels `type/feat|fix|chore|perf|docs`,
 `status/todo|doing|review` (une issue fermée est « faite »), story points `sp/1|2|3|5|8|13` (Fibonacci ;
 l'ancien `estimate/S|M|L|XL` est encore lu), priorité `priority/0` (socle) puis `priority/1` (la plus
-urgente) à `priority/5` ; une version est
+urgente) à `priority/5`, catégorie `cat/<id>` (domaine › catégorie, voir « Catégories ») et,
+pour les domaines à pipeline, étape `etape/<id>` ; une version est
 un milestone semver, **daté = sprint**, **sans date = palier** de roadmap dont les thèmes sont les
 éléments de liste de la description.
 
@@ -47,7 +48,8 @@ Les vues suivent le sélecteur de Cadence (`cadence.repos.selection()` / `onChan
 | Vue                             | Section        | État                                                                                                                                                                                                   |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Sprint en cours (`sprint`)      | Pilotage       | « Démarrer le projet », barre des sprints automatiques (pause, durée confirmée — prochain sprint ou sprint en cours —, « Clore le sprint » en avance, capacité), KPI, kanban par état, burndown et progression **en story points**, sprints terminés et leur livraison (`sprint_summary`, `project_*`) ; « Ajouter des issues » (carnet dans l'ordre de la roadmap, cases ou glisser sur le tableau) et retrait d'une carte « À faire » (`sprint_backlog`, `sprint_issues`) ; colonne « En revue » sélectionnable (« Relire », « Relire la sélection (n) »), PR de chaque tâche retrouvée même vers `release/x` ; **Conversations du sprint** ; un sprint par dépôt en mode « Tous les dépôts » (un seul dépôt suivi : il est pris d'office) |
-| Issues (`issues`)               | Pilotage       | liste par état, filtres, tri (priorité, roadmap, numéro, activité), mode « Tous les dépôts », « Nouvelle issue » (`create_issue`, jalon par `jalon_issues`), « Depuis un document » (fichiers ou texte, puis l'IA), « Compléter » et « Implémenter » |
+| Issues (`issues`)               | Pilotage       | table groupée façon Monday / Jira : arbre des catégories à gauche (domaine › catégorie, compteurs, filtre, « Gérer les catégories »), groupes repliables à la couleur du domaine (nombre, story points, répartition des états), regroupement par domaine, catégorie, état, version ou priorité et tri (priorité, roadmap, numéro, activité) dans le menu « Affichage », colonnes à afficher, recherche ; catégorie, état, étape et priorité modifiables dans la cellule (`update_issue`), un changement d'étape demandant une note historisée en commentaire ; mode « Tous les dépôts », « Nouvelle issue » (catégorie comprise, préremplie depuis « Ajouter une issue » d'un groupe), « Depuis un document », « Compléter » et « Implémenter » au survol |
+| Catégories (`categories`)       | Pilotage       | taxonomie du dépôt : domaines, catégories et pipelines livrés (masquables), catégories et domaines ajoutés par l'équipe (couleur, pipeline facultatif), enregistrés dans l'état partagé (`save_categories`) |
 | Issue (`issue`, cachée)         | —              | détail ouvert depuis les listes, le kanban, la Roadmap et les Versions : description et commentaires rendus, version, jalon, labels, estimation, priorité, PR liées ; « Implémenter », « Relire », « Compléter », « Ouvrir sur GitHub » |
 | Roadmap (`roadmap`)             | Planification  | jalons : frise sur les sprints passés et prévus, carte par jalon (avancement, fin estimée et fourchette, issues triées par priorité, sprint ou numéro), nouveau jalon, ranger des issues, « Proposer des issues », « Mettre dans le sprint en cours » (`sprint_issues` : confirmation, puis issues ajoutées et refusées) ; issues sans jalon |
 | Planning (`planning`)           | Planification  | Gantt libre (étude, conception, développement, recette…) : phases, personnes, dépendances, avancement, jalons-dates ; glisser une barre ou ses bords, « Planifier avec l'IA » |
@@ -145,6 +147,7 @@ planning) et `idempotentHint`.
 | `list_issues`                                         | ✓ `repo` absent : tous les dépôts suivis (chaque issue porte `repo`, erreurs par dépôt dans `errors`)                                                        |
 | `get_issue`, `create_issue`, `update_issue`           | ✓ API REST GitHub ; une issue porte `sprint` (n° du milestone daté, sinon `null`) ; `update_issue` avec `state: closed` retire le label `status/*` (terminé) |
 | `add_comment`                                         | ✓                                                                                                                                                            |
+| `list_categories`, `save_categories`                  | ✓ taxonomie domaine › catégorie (défauts de `server/src/categories.json` plus la personnalisation du dépôt, rangée dans l'issue d'état) ; `create_issue` / `update_issue` prennent `category` (label `cat/<id>`), `update_issue` prend aussi `stage` (label `etape/<id>`) et `stage_note`, historisés par un commentaire |
 | `list_milestones`                                     | ✓ versions (sprint / palier), nom (`# Nom`) et thèmes (éléments de liste) lus dans la description                                                            |
 | `create_milestone`                                    | ✓ échéance `AAAA-MM-JJ` (sprint) ou aucune (palier) ; refuse un titre existant                                                                               |
 | `update_milestone`                                    | ✓ titre, description, échéance (`""` la retire), `state: closed` pour clore                                                                                  |
@@ -162,6 +165,32 @@ planning) et `idempotentHint`.
 | `project_start`, `project_pause`, `project_resume`, `project_set_duration` (`apply` : `next` par défaut, `current` après confirmation), `project_close_sprint` (`to_backlog` : issues rendues au carnet au lieu d'être reportées ; IA : à la demande explicite de l'utilisateur) | ✓ sprints automatiques : issue d'état `cadence/sprints`, milestones, branches `release/x`, remplissage, fusion et tag, clôture anticipée (voir « Sprints automatiques ») |
 | `project_ship_release` (réservé à l'UI)               | ✓ « Fusionner maintenant » la release d'un sprint terminé sans attendre une CI (refuse une CI rouge ou en cours, un conflit)                                  |
 | `sprint_issues`, `sprint_backlog`                     | ✓ ajouter / retirer des issues du sprint en cours ; carnet (issues sans version) dans l'ordre de remplissage, avec jalon et poids |
+
+## Catégories
+
+Une issue porte au plus une **catégorie** (label `cat/<id>`) ; son **domaine** s'en déduit. La
+taxonomie livrée (`server/src/categories.json`, lue aussi par l'écran de dev) couvre :
+
+| Domaine | Catégories |
+| --- | --- |
+| Développement | back-end, front-end, mobile, API, base de données, données et reprise, intégration tierce, infrastructure, CI/CD, Docker et conteneurs, sécurité, optimisation, correctif, refactoring et dette, tâche technique |
+| Qualité et tests | tests unitaires, d'intégration et E2E, recette fonctionnelle, revue de code, tests de charge, accessibilité, audit de sécurité |
+| Études et cadrage | analyse du cahier des charges, recueil des besoins, informations manquantes, analyse des risques, périmètre (à faire / à ne pas faire), cadrage de version, descoping et arbitrages, étude technique et POC, chiffrage, benchmark et veille |
+| Échanges client (pipeline) | questions au client, relance, demande du client, validation client, réunion et atelier, compte rendu, envoi d'un livrable |
+| Documentation (pipeline) | cahier des charges, note de cadrage, SFD, STD, DAT, ADR, documentation d'API, plan et cahier de tests, dossier d'exploitation, guide utilisateur, registre des risques, proposition et devis |
+| Gestion de projet | planning et Gantt, roadmap, organisation de sprint, suivi d'avancement, reporting et COPIL, suivi des risques, budget et facturation, ressources et staffing, décision à prendre, contractuel, réunion interne, outillage du projet |
+| Design et UX | recherche utilisateur, maquettes, prototype, design system, contenus et textes |
+| Livraison et exploitation | mise en production, release, supervision, incident et support, maintenance, formation |
+
+Les domaines à **pipeline** donnent une étape à leurs issues (label `etape/<id>`) : Échanges client
+(à préparer → envoyé → en attente de réponse → relancé → réponse reçue → traité), Documentation (à
+rédiger → en rédaction → en relecture → validé → diffusé). Une issue qui entre dans un tel domaine
+part de la première étape ; chaque changement d'étape (`update_issue` avec `stage`, et une note
+facultative `stage_note`) est tracé par un commentaire de l'issue : date, passage, réponse reçue.
+
+Chaque dépôt complète la taxonomie depuis la vue **Catégories** : catégories ajoutées à un domaine,
+domaines ajoutés (couleur, pipeline facultatif), éléments livrés masqués. La personnalisation vit
+dans l'issue d'état (`categories` du bloc JSON) : toute l'équipe voit les mêmes catégories.
 
 ## Sprints automatiques
 

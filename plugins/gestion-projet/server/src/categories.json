@@ -1,0 +1,441 @@
+{
+  "domains": [
+    {
+      "id": "dev",
+      "label": "Développement",
+      "color": "#5b8def",
+      "description": "Code de l'application : couches, infrastructure, outillage.",
+      "categories": [
+        {
+          "id": "back-end",
+          "label": "Back-end",
+          "description": "Logique serveur, services, règles métier."
+        },
+        {
+          "id": "front-end",
+          "label": "Front-end",
+          "description": "Interface web ou bureau, composants, intégration des maquettes."
+        },
+        {
+          "id": "mobile",
+          "label": "Mobile",
+          "description": "Application iOS, Android ou multiplateforme."
+        },
+        { "id": "api", "label": "API", "description": "Contrats d'API, endpoints, versionnement." },
+        {
+          "id": "base-de-donnees",
+          "label": "Base de données",
+          "description": "Schéma, migrations, requêtes, index."
+        },
+        {
+          "id": "donnees",
+          "label": "Données et reprise",
+          "description": "Import, export, reprise de données, ETL."
+        },
+        {
+          "id": "integration",
+          "label": "Intégration tierce",
+          "description": "Connecteurs, webhooks, services externes (paiement, e-mail, SSO…)."
+        },
+        {
+          "id": "infrastructure",
+          "label": "Infrastructure",
+          "description": "Serveurs, cloud, réseau, DNS, environnements."
+        },
+        {
+          "id": "ci-cd",
+          "label": "CI/CD",
+          "description": "Pipelines de build, de test et de déploiement."
+        },
+        {
+          "id": "conteneurs",
+          "label": "Docker et conteneurs",
+          "description": "Images, Compose, orchestration."
+        },
+        {
+          "id": "securite",
+          "label": "Sécurité",
+          "description": "Authentification, droits, secrets, vulnérabilités."
+        },
+        {
+          "id": "optimisation",
+          "label": "Optimisation",
+          "description": "Performance, temps de réponse, consommation."
+        },
+        { "id": "correctif", "label": "Correctif", "description": "Bug constaté à corriger." },
+        {
+          "id": "refactoring",
+          "label": "Refactoring et dette",
+          "description": "Réécriture sans changement de comportement, dette technique."
+        },
+        {
+          "id": "technique",
+          "label": "Tâche technique",
+          "description": "Mise à jour de dépendances, configuration, outillage."
+        }
+      ]
+    },
+    {
+      "id": "qualite",
+      "label": "Qualité et tests",
+      "color": "#3fb562",
+      "description": "Vérifier que ce qui est livré fonctionne et le reste.",
+      "categories": [
+        {
+          "id": "tests-unitaires",
+          "label": "Tests unitaires",
+          "description": "Tests d'une fonction ou d'un module isolé."
+        },
+        {
+          "id": "tests-integration",
+          "label": "Tests d'intégration et E2E",
+          "description": "Parcours complets, plusieurs briques ensemble."
+        },
+        {
+          "id": "recette",
+          "label": "Recette fonctionnelle",
+          "description": "Dérouler les cas de test, consigner les anomalies."
+        },
+        {
+          "id": "revue-code",
+          "label": "Revue de code",
+          "description": "Relecture d'une PR ou d'un module."
+        },
+        {
+          "id": "tests-charge",
+          "label": "Tests de charge",
+          "description": "Montée en charge, endurance, limites."
+        },
+        {
+          "id": "accessibilite",
+          "label": "Accessibilité",
+          "description": "Conformité RGAA / WCAG, navigation clavier, contrastes."
+        },
+        {
+          "id": "audit-securite",
+          "label": "Audit de sécurité",
+          "description": "Pentest, analyse de dépendances, revue OWASP."
+        }
+      ]
+    },
+    {
+      "id": "etudes",
+      "label": "Études et cadrage",
+      "color": "#a277f0",
+      "description": "Comprendre le besoin et décider quoi faire avant de produire.",
+      "categories": [
+        {
+          "id": "analyse-cdc",
+          "label": "Analyse du cahier des charges",
+          "description": "Lire le cahier des charges, en tirer exigences, zones floues et contradictions."
+        },
+        {
+          "id": "recueil-besoins",
+          "label": "Recueil des besoins",
+          "description": "Entretiens, ateliers, user stories, parcours."
+        },
+        {
+          "id": "infos-manquantes",
+          "label": "Informations manquantes",
+          "description": "Lister ce qu'il manque pour avancer : d'où partent les questions au client."
+        },
+        {
+          "id": "analyse-risques",
+          "label": "Analyse des risques",
+          "description": "Identifier, coter et traiter les risques du projet."
+        },
+        {
+          "id": "perimetre",
+          "label": "Périmètre : à faire / à ne pas faire",
+          "description": "Ce qui est dans le projet, ce qui n'y est pas, hypothèses."
+        },
+        {
+          "id": "cadrage-version",
+          "label": "Cadrage de version",
+          "description": "Définir la première version (MVP) ou la suivante."
+        },
+        {
+          "id": "descoping",
+          "label": "Descoping et arbitrages",
+          "description": "Ce qu'on retire ou reporte, et pourquoi."
+        },
+        {
+          "id": "etude-technique",
+          "label": "Étude technique et POC",
+          "description": "Faisabilité, choix de technologie, preuve de concept."
+        },
+        {
+          "id": "chiffrage",
+          "label": "Chiffrage",
+          "description": "Estimer charge, délai et coût."
+        },
+        {
+          "id": "veille",
+          "label": "Benchmark et veille",
+          "description": "Concurrents, solutions existantes, état de l'art."
+        }
+      ]
+    },
+    {
+      "id": "client",
+      "label": "Échanges client",
+      "color": "#e0a44c",
+      "description": "Tout ce qui part vers le client ou en revient : chaque échange suit le pipeline, et chaque étape est historisée dans les commentaires de l'issue.",
+      "pipeline": [
+        { "id": "a-preparer", "label": "À préparer" },
+        { "id": "envoye", "label": "Envoyé" },
+        { "id": "en-attente", "label": "En attente de réponse" },
+        { "id": "relance", "label": "Relancé" },
+        { "id": "reponse-recue", "label": "Réponse reçue" },
+        { "id": "traite", "label": "Traité" }
+      ],
+      "categories": [
+        {
+          "id": "questions-client",
+          "label": "Questions au client",
+          "description": "Mail de questions (informations manquantes, précisions)."
+        },
+        {
+          "id": "relance-client",
+          "label": "Relance",
+          "description": "Relancer une demande restée sans réponse."
+        },
+        {
+          "id": "demande-client",
+          "label": "Demande du client",
+          "description": "Demande entrante à qualifier et à traiter."
+        },
+        {
+          "id": "validation-client",
+          "label": "Validation client",
+          "description": "Faire valider un livrable, une maquette, un devis."
+        },
+        {
+          "id": "reunion-client",
+          "label": "Réunion et atelier",
+          "description": "Préparer, animer, faire suivre une réunion client."
+        },
+        {
+          "id": "compte-rendu",
+          "label": "Compte rendu",
+          "description": "Envoyer le compte rendu et les décisions d'un échange."
+        },
+        {
+          "id": "livraison-client",
+          "label": "Envoi d'un livrable",
+          "description": "Transmettre un document, une version, des accès."
+        }
+      ]
+    },
+    {
+      "id": "documentation",
+      "label": "Documentation",
+      "color": "#d97757",
+      "description": "Les documents du projet, de la rédaction à la diffusion.",
+      "pipeline": [
+        { "id": "a-rediger", "label": "À rédiger" },
+        { "id": "redaction", "label": "En rédaction" },
+        { "id": "relecture", "label": "En relecture" },
+        { "id": "valide", "label": "Validé" },
+        { "id": "diffuse", "label": "Diffusé" }
+      ],
+      "categories": [
+        {
+          "id": "cahier-des-charges",
+          "label": "Cahier des charges",
+          "description": "Rédaction ou mise à jour du cahier des charges."
+        },
+        {
+          "id": "note-cadrage",
+          "label": "Note de cadrage",
+          "description": "Objectifs, périmètre, jalons, organisation."
+        },
+        {
+          "id": "sfd",
+          "label": "Spécifications fonctionnelles (SFD)",
+          "description": "Règles de gestion, écrans, cas d'usage."
+        },
+        {
+          "id": "std",
+          "label": "Spécifications techniques (STD)",
+          "description": "Conception détaillée d'un module."
+        },
+        {
+          "id": "dat",
+          "label": "Architecture technique (DAT)",
+          "description": "Dossier d'architecture technique : composants, flux, hébergement."
+        },
+        {
+          "id": "adr",
+          "label": "Décision d'architecture (ADR)",
+          "description": "Une décision, son contexte et ses conséquences."
+        },
+        {
+          "id": "doc-api",
+          "label": "Documentation d'API",
+          "description": "Référence des endpoints, exemples, OpenAPI."
+        },
+        {
+          "id": "plan-tests",
+          "label": "Plan et cahier de tests",
+          "description": "Stratégie, cas de test, PV de recette."
+        },
+        {
+          "id": "doc-exploitation",
+          "label": "Dossier d'exploitation",
+          "description": "Installation, supervision, sauvegarde, procédures."
+        },
+        {
+          "id": "guide-utilisateur",
+          "label": "Guide utilisateur",
+          "description": "Mode d'emploi, tutoriels, FAQ."
+        },
+        {
+          "id": "matrice-risques",
+          "label": "Registre des risques",
+          "description": "Document de suivi des risques et des parades."
+        },
+        {
+          "id": "proposition",
+          "label": "Proposition et devis",
+          "description": "Proposition commerciale, devis, avenant."
+        }
+      ]
+    },
+    {
+      "id": "pilotage",
+      "label": "Gestion de projet",
+      "color": "#4fb3bf",
+      "description": "Planifier, suivre, arbitrer et rendre compte.",
+      "categories": [
+        {
+          "id": "gantt",
+          "label": "Planning et Gantt",
+          "description": "Construire ou recaler le Gantt quand sprints et roadmap divergent."
+        },
+        {
+          "id": "roadmap",
+          "label": "Roadmap",
+          "description": "Jalons, priorités, ordre des versions."
+        },
+        {
+          "id": "organisation-sprint",
+          "label": "Organisation de sprint",
+          "description": "Préparer, lancer, clôturer un sprint ; rétrospective."
+        },
+        {
+          "id": "suivi-avancement",
+          "label": "Suivi d'avancement",
+          "description": "Reste à faire, écarts au planning, alertes."
+        },
+        {
+          "id": "reporting",
+          "label": "Reporting et COPIL",
+          "description": "Tableau de bord, comité de pilotage, météo projet."
+        },
+        {
+          "id": "suivi-risques",
+          "label": "Suivi des risques",
+          "description": "Revue périodique des risques et des actions."
+        },
+        {
+          "id": "budget",
+          "label": "Budget et facturation",
+          "description": "Consommé, reste à engager, factures."
+        },
+        {
+          "id": "ressources",
+          "label": "Ressources et staffing",
+          "description": "Qui fait quoi, disponibilités, recrutement."
+        },
+        {
+          "id": "decision",
+          "label": "Décision à prendre",
+          "description": "Point bloquant qui attend un arbitrage."
+        },
+        {
+          "id": "contractuel",
+          "label": "Contractuel",
+          "description": "Contrat, avenant, conditions, propriété intellectuelle."
+        },
+        {
+          "id": "rituels",
+          "label": "Réunion interne",
+          "description": "Point d'équipe, rituels, ordre du jour."
+        },
+        {
+          "id": "outillage-projet",
+          "label": "Outillage du projet",
+          "description": "Accès, outils, dépôts, espaces partagés."
+        }
+      ]
+    },
+    {
+      "id": "design",
+      "label": "Design et UX",
+      "color": "#e07aa8",
+      "description": "Ce que l'utilisateur voit et vit.",
+      "categories": [
+        {
+          "id": "recherche-ux",
+          "label": "Recherche utilisateur",
+          "description": "Entretiens, tests utilisateurs, personas."
+        },
+        {
+          "id": "maquettes",
+          "label": "Maquettes",
+          "description": "Wireframes et maquettes d'écrans."
+        },
+        {
+          "id": "prototype",
+          "label": "Prototype",
+          "description": "Prototype cliquable à faire tester."
+        },
+        {
+          "id": "design-system",
+          "label": "Design system",
+          "description": "Composants, couleurs, typographie."
+        },
+        {
+          "id": "contenus",
+          "label": "Contenus et textes",
+          "description": "Rédaction des écrans, traductions, médias."
+        }
+      ]
+    },
+    {
+      "id": "livraison",
+      "label": "Livraison et exploitation",
+      "color": "#e0655a",
+      "description": "Mettre en production et faire vivre l'application.",
+      "categories": [
+        {
+          "id": "mise-en-production",
+          "label": "Mise en production",
+          "description": "Déploiement, bascule, plan de retour arrière."
+        },
+        {
+          "id": "release",
+          "label": "Release",
+          "description": "Notes de version, tag, publication."
+        },
+        { "id": "supervision", "label": "Supervision", "description": "Logs, métriques, alertes." },
+        {
+          "id": "incident",
+          "label": "Incident et support",
+          "description": "Incident en production, demande de support."
+        },
+        {
+          "id": "maintenance",
+          "label": "Maintenance",
+          "description": "Mises à jour, sauvegardes, renouvellements."
+        },
+        {
+          "id": "formation",
+          "label": "Formation",
+          "description": "Former les utilisateurs ou l'équipe du client."
+        }
+      ]
+    }
+  ]
+}

@@ -23,7 +23,7 @@ contexte.
 | `cadence__repo_checkout` | si besoin, worktree du dépôt pour lire le code (`{ "repo", "task": "issue-<numéro>" }` → `path`) |
 | `gestion-projet__get_issue` | lire l'issue d'origine (description, critères, version, type) |
 | `gestion-projet__list_issues` | vérifier qu'aucune issue existante ne couvre déjà une partie |
-| `gestion-projet__create_issue` | créer chaque sous-issue (`type`, `milestone`, `labels`) |
+| `gestion-projet__create_issue` | créer chaque sous-issue (`type`, `category`, `milestone`, `labels`) |
 | `gestion-projet__update_issue` | ajouter la liste des sous-issues à l'issue d'origine |
 | `gestion-projet__add_comment` | commenter le découpage |
 
@@ -38,7 +38,8 @@ worktree avec `cadence__repo_checkout` et lis-le à partir du chemin renvoyé, s
    laisse l'utilisateur l'ajuster. Deux à six sous-issues ; si l'issue est déjà petite, dis-le et
    arrête-toi.
 3. Crée chaque sous-issue avec `create_issue` :
-   - même version (`milestone`) et même type que l'issue d'origine, sauf raison claire ;
+   - même version (`milestone`), même type et même catégorie (`category`) que l'issue
+     d'origine, sauf raison claire ;
    - description en trois sections `## Contexte` (avec « Partie de #<origine> »), `## Attendu`,
      `## Critères d'acceptation` (cases `- [ ]`), reprenant les critères d'origine qui la
      concernent ;
