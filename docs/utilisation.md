@@ -101,8 +101,8 @@ L'IA ne pousse jamais sur la branche par défaut ; les pull requests et les rele
 brouillon. Les conversations lancées depuis un sprint se retrouvent dans « Conversations du
 sprint ».
 
-Détails complets (outils de l'IA, réglages, catégories, sprints) : [README du
-plugin](../plugins/gestion-projet/README.md).
+Un projet complet en captures : [page du plugin](../plugins/gestion-projet/README.md). Détails
+(outils de l'IA, réglages, catégories, sprints) : [référence technique](../plugins/gestion-projet/TECHNIQUE.md).
 
 ## 3. Documents
 
@@ -145,13 +145,14 @@ L'historique des scores est dans **Entraînement**.
 
 <img src="captures/documents-entrainement.png" alt="Entraînement" width="840">
 
-Détails complets : [README du plugin](../plugins/documents/README.md).
+Présentation : [page du plugin](../plugins/documents/README.md). Détails : [référence
+technique](../plugins/documents/TECHNIQUE.md).
 
 ## 4. Exemple
 
 Exemple est le plugin modèle pour les auteurs : un compteur à incrémenter, un prénom à régler et
 une action « Saluer » qui ouvre le chat. Il ne sert qu'à montrer comment un plugin s'intègre à
-Cadence ; pour en écrire un, voir la [documentation technique](technique.md) et le [README du
-plugin](../plugins/exemple/README.md).
+Cadence ; pour en écrire un, voir la [documentation technique](technique.md), la [page du
+plugin](../plugins/exemple/README.md) et sa [visite commentée](../plugins/exemple/TECHNIQUE.md).
 
 <img src="captures/exemple.png" alt="Plugin Exemple" width="840">

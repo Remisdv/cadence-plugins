@@ -17,6 +17,7 @@ pouvez installer.
 Pilotez vos dépôts GitHub de bout en bout : issues rangées par catégorie, sprints automatiques,
 roadmap par jalons, planning, versions et pull requests. Un clic suffit pour que l'IA complète une
 issue, l'implémente, développe tout le sprint, relise les pull requests ou prépare la release.
+**[Voir le plugin sur un projet complet →](plugins/gestion-projet/README.md)**
 
 | Sprint en cours                                                                       | Issues                                                                       |
 | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -28,14 +29,12 @@ Rangez vos cours (PDF, Word, PowerPoint, Markdown) par matière et chapitre, pre
 un éditeur par blocs, posez vos questions à l'IA (elle cite le document et la page) et révisez avec
 des QCM, des questions ouvertes corrigées et des flashcards.
 
-| Bibliothèque                                                                        | Note                                                                |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| <img src="docs/captures/documents-bibliotheque.png" alt="Bibliothèque" width="420"> | <img src="docs/captures/documents-note.png" alt="Note" width="420"> |
+Captures bientôt. **[Page du plugin →](plugins/documents/README.md)**
 
 ### Exemple
 
 Un plugin minimal (un compteur) qui montre chaque brique disponible : c'est le point de départ
-pour écrire le vôtre.
+pour écrire le vôtre. **[Page du plugin →](plugins/exemple/README.md)**
 
 ## Installer un plugin
 

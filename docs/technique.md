@@ -4,15 +4,16 @@ Pour les auteurs et mainteneurs de plugins : structure d'un plugin, manifeste, s
 fournis par Cadence, développement et publication. Présentation : [README](../README.md) ·
 utilisation : [guide](utilisation.md) · proposer un plugin : [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-Chaque plugin documente aussi ses écrans, ses actions, ses outils MCP et ses données dans son
-propre README : [Gestion de projet](../plugins/gestion-projet/README.md),
-[Documents](../plugins/documents/README.md), [Exemple](../plugins/exemple/README.md) (point de
+Chaque plugin a sa page de présentation (`README.md`, avec captures et cas d'usage) et documente
+ses écrans, ses actions, ses outils MCP et ses données dans son `TECHNIQUE.md` :
+[Gestion de projet](../plugins/gestion-projet/TECHNIQUE.md),
+[Documents](../plugins/documents/TECHNIQUE.md), [Exemple](../plugins/exemple/TECHNIQUE.md) (point de
 départ pour écrire le vôtre).
 
 ## Contenu du dépôt
 
 ```
-plugins/<id>/            un dossier par plugin : plugin.toml, README.md, ui/, skills/, server/
+plugins/<id>/            un dossier par plugin : plugin.toml, README.md, TECHNIQUE.md, ui/, skills/, server/
 packages/sdk/            @cadence/plugin-sdk — SDK postMessage des écrans de plugin
 packages/ui/             @cadence/ui — tokens CSS et composants React du kit Cadence
 schema/plugin.schema.json  JSON Schema du manifeste plugin.toml (API 1, révision 1.3)
