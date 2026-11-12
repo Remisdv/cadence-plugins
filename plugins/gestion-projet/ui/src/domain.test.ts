@@ -54,14 +54,14 @@ describe("manifeste : onboarding, détail d'issue, document", () => {
   const manifest = () =>
     parse(readFileSync(new URL("../../plugin.toml", import.meta.url), "utf8")) as any;
 
-  it("laisse à Cadence l'étape « Dépôts suivis » du service repos (pas de doublon)", () => {
+  it("laisse à Cadence l'étape « dépôt » du service repos (pas de doublon)", () => {
     const m = manifest();
     expect(m.services).toContain("repos");
     expect((m.setup ?? []).map((s: { view: string }) => s.view)).not.toContain("setup-depots");
-    // L'écran reste joignable (« Choisir des dépôts ») sans paraître dans la barre.
-    expect(m.ui.views.find((v: { id: string }) => v.id === "setup-depots")).toMatchObject({
-      hidden: true,
-    });
+    // « Dépôt et équipe » (changer de dépôt, en créer, inviter) est dans la barre du plugin.
+    const view = m.ui.views.find((v: { id: string }) => v.id === "setup-depots");
+    expect(view).toMatchObject({ title: "Dépôt et équipe", section: "Dépôt" });
+    expect(view.hidden).toBeUndefined();
   });
 
   it("déclare le détail d'issue comme route cachée", () => {

@@ -4,7 +4,8 @@
 //! (`<données de l'app>/plugins-data/documents/`) ; dossier des cours dans les réglages globaux
 //! (`CADENCE_SETTINGS`, clé `dossier_cours`). Journal sur stderr.
 
-mod extract;
+/// Extraction du texte, partagée avec Gestion de projet (`packages/extract`).
+use cadence_extract as extract;
 mod library;
 mod notes;
 mod server;

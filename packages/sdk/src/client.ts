@@ -115,6 +115,11 @@ export interface Cadence {
     /** Cesse de suivre un dépôt ; renvoie la liste à jour. */
     unfollow(fullName: string): Promise<RepoInfo[]>;
     /**
+     * Rend un dépôt actif (`owner/name`) : suivi s'il ne l'était pas, et choisi dans le sélecteur
+     * de la barre du plugin. Renvoie la nouvelle sélection ; `onChange` est aussi appelé.
+     */
+    select(fullName: string): Promise<RepoSelection>;
+    /**
      * Clone le dépôt au besoin et prépare un worktree pour la tâche ; renvoie son chemin.
      * Côté IA, le même service est l'outil du cœur `cadence__repo_checkout`.
      */
@@ -431,6 +436,7 @@ export function createCadence(port: Port, options: CadenceOptions = {}): Cadence
       },
       follow: async (fullName) => request("repos.follow", { repo: await repoName(fullName) }),
       unfollow: async (fullName) => request("repos.unfollow", { repo: await repoName(fullName) }),
+      select: async (fullName) => request("repos.select", { repo: await repoName(fullName) }),
       async checkout(repo, options = {}) {
         const params = { repo: await repoName(repo), ...(options.task ? { task: options.task } : {}) };
         // Un clone peut être long : pas de délai.

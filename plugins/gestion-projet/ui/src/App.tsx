@@ -5,6 +5,7 @@ import { isViewId } from "./domain";
 import { ArchitectureView } from "./views/ArchitectureView";
 import { CategoriesView } from "./views/CategoriesView";
 import { DesignsView } from "./views/DesignsView";
+import { DocumentsView } from "./views/DocumentsView";
 import { IssuesView } from "./views/IssuesView";
 import { IssueView } from "./views/IssueView";
 import { PlanningView } from "./views/PlanningView";
@@ -58,6 +59,8 @@ export function App() {
       return <VersionsView params={route.params ?? {}} />;
     case "planning":
       return <PlanningView />;
+    case "documents":
+      return <DocumentsView />;
     case "architecture":
       return <ArchitectureView />;
     case "designs":

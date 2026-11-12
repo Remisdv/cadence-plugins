@@ -113,7 +113,10 @@ export interface RepoInfo {
   localPath?: string | null;
 }
 
-/** Sélecteur de la barre du plugin : un dépôt courant (`owner/name`) ou « Tous les dépôts ». */
+/**
+ * Sélecteur de la barre du plugin : le dépôt actif (`owner/name`). Cadence n'envoie `all` que
+ * quand le plugin ne suit encore aucun dépôt (anciennes versions : « Tous les dépôts »).
+ */
 export type RepoSelection = { kind: "one"; repo: string } | { kind: "all" };
 
 /** Dépôts suivis et sélection, envoyés à chaque changement de l'un ou de l'autre. */
@@ -262,6 +265,7 @@ export interface Methods {
   "repos.selection": { params: Record<string, never>; result: RepoSelection };
   "repos.follow": { params: { repo: string }; result: RepoInfo[] };
   "repos.unfollow": { params: { repo: string }; result: RepoInfo[] };
+  "repos.select": { params: { repo: string }; result: RepoSelection };
   "repos.checkout": { params: { repo: string; task?: string }; result: { path: string } };
   "tools.status": { params: { tool: string }; result: ExternalToolStatus };
   "tools.ensure": { params: { tool: string }; result: ExternalToolStatus };

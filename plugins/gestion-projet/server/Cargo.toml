@@ -19,7 +19,12 @@ base64 = "0.23"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls", "http2"] }
+cadence-extract.workspace = true
+calamine = "0.30"
+csv = "1"
+zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
+cadence-extract = { workspace = true, features = ["test-support"] }
 # Faux GitHub des tests (serveur HTTP local).
 tokio = { workspace = true, features = ["net", "io-util"] }

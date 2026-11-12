@@ -17,11 +17,10 @@ schemars.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-pdf-extract = "0.12.1"
-zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-quick-xml = "0.42.0"
+cadence-extract.workspace = true
 
 [dev-dependencies]
+cadence-extract = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 # Délais du test de bout en bout (session MCP en mémoire).
 tokio = { workspace = true, features = ["time", "io-util"] }

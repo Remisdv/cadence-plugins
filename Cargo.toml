@@ -1,7 +1,7 @@
 # Workspace des serveurs MCP natifs des plugins (un crate par `plugins/<id>/server`).
 [workspace]
 resolver = "3"
-members = ["plugins/*/server"]
+members = ["plugins/*/server", "packages/extract"]
 
 [workspace.package]
 edition = "2024"
@@ -19,6 +19,7 @@ schemars = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cadence-extract = { path = "packages/extract" }
 
 [profile.release]
 codegen-units = 1

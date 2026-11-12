@@ -54,6 +54,8 @@ pub struct Settings {
     pub sprint_length_days: u32,
     /// Méthode de fusion des PR quand `merge_pull_request` n'en précise pas (squash par défaut).
     pub merge_method: MergeMethod,
+    /// Dossier des documents du projet dans le dépôt (branche par défaut), ex. `docs/intern`.
+    pub documents_dir: String,
 }
 
 impl Default for Settings {
@@ -62,6 +64,7 @@ impl Default for Settings {
             tag_prefix: "v".into(),
             sprint_length_days: 14,
             merge_method: MergeMethod::default(),
+            documents_dir: crate::docs::DEFAULT_DIR.into(),
         }
     }
 }

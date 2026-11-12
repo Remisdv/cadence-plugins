@@ -51,6 +51,7 @@ use serde_json::{Value, json};
 use crate::{
     categories::{self, CategoryConfig},
     config::{self, Env, MergeMethod, Settings},
+    docs,
     engine::Project,
     github::GitHub,
     model::{self, IssueType, Status},
@@ -100,6 +101,10 @@ const WRITE_TOOLS: &[&str] = &[
     "jalon_delete",
     "jalon_issues",
     "save_categories",
+    "docs_upload",
+    "docs_mkdir",
+    "docs_move",
+    "docs_delete",
 ];
 
 /// `_meta` d'un outil appelable seulement par l'UI du plugin (contrat Cadence).
@@ -299,6 +304,193 @@ pub struct ListMilestonesParams {
 pub struct ListAccountReposParams {
     /// Filtre sur le nom `owner/name` (sans casse).
     pub query: Option<String>,
+}
+
+/// Pages de 100 dépôts lues au plus par `list_account_repos`.
+const ACCOUNT_REPO_PAGES: u32 = 5;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateRepoParams {
+    /// Nom du dépôt (sans propriétaire), ex. « mon-projet ».
+    pub name: String,
+    /// Organisation propriétaire ; le compte connecté par défaut.
+    pub owner: Option<String>,
+    /// Description courte.
+    pub description: Option<String>,
+    /// Dépôt privé (défaut : vrai).
+    pub private: Option<bool>,
+}
+
+/// Rôle donné à un collaborateur invité.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Permission {
+    Pull,
+    Triage,
+    #[default]
+    Push,
+    Maintain,
+    Admin,
+}
+
+impl Permission {
+    fn as_str(self) -> &'static str {
+        match self {
+            Permission::Pull => "pull",
+            Permission::Triage => "triage",
+            Permission::Push => "push",
+            Permission::Maintain => "maintain",
+            Permission::Admin => "admin",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InviteParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Identifiant GitHub de la personne à inviter.
+    pub login: String,
+    /// pull (lecture), triage, push (écriture, défaut), maintain ou admin.
+    pub permission: Option<Permission>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RemoveCollaboratorParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Collaborateur à retirer.
+    pub login: Option<String>,
+    /// Invitation en attente à annuler.
+    pub invitation_id: Option<u32>,
+}
+
+/// Nom de dépôt accepté par GitHub : `[A-Za-z0-9._-]`, 100 caractères au plus, ni « . » ni « .. ».
+fn valid_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Login GitHub : alphanumérique et « - », 39 caractères au plus.
+fn valid_login(login: &str) -> bool {
+    !login.is_empty() && login.len() <= 39 && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Dépôt du compte tel que l'écran « Dépôt » l'affiche.
+fn account_repo(r: &Value, followed: &[String]) -> Value {
+    let name = r["full_name"].as_str().unwrap_or_default();
+    json!({
+        "full_name": name,
+        "private": r["private"],
+        "description": r["description"],
+        "updated_at": r["updated_at"],
+        "admin": r["permissions"]["admin"].as_bool().unwrap_or(false),
+        "followed": followed.iter().any(|f| f.eq_ignore_ascii_case(name)),
+    })
+}
+
+/* ---------- Documents du projet ---------- */
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsListParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Sous-dossier à lister (relatif au dossier des documents) ; tous les documents sinon.
+    pub folder: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsReadParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Chemin du document, relatif au dossier des documents (tel que rendu par `docs_list`).
+    pub path: String,
+    /// Première page à lire (1 par défaut) : page d'un PDF, diapositive, feuille d'un classeur ou
+    /// bloc d'environ 3000 caractères.
+    pub page: Option<u32>,
+    /// Caractères au plus (12000 par défaut, 40000 au plus).
+    pub max_chars: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsSearchParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Mots ou expression à chercher (sans casse) dans le texte de tous les documents.
+    pub query: String,
+    /// Restreint la recherche à un sous-dossier.
+    pub folder: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsUploadFile {
+    /// Fichier local à déposer (chemin choisi dans Cadence).
+    pub path: Option<String>,
+    /// Nom du fichier, si `content_base64` est fourni (glisser-déposer).
+    pub name: Option<String>,
+    /// Contenu en base64 (glisser-déposer), à la place de `path`.
+    pub content_base64: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsUploadParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Dossier de destination, relatif au dossier des documents (racine sinon).
+    pub folder: Option<String>,
+    /// Fichiers à déposer ; un ZIP est décompressé dans un sous-dossier à son nom.
+    pub files: Vec<DocsUploadFile>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsMkdirParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Dossiers à créer, relatifs au dossier des documents (« Missions/2025 »).
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsMoveParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Document ou dossier à déplacer ou renommer.
+    pub from: String,
+    /// Nouveau chemin.
+    pub to: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsPathParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Document ou dossier, relatif au dossier des documents.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsBytesParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// Document, relatif au dossier des documents.
+    pub path: String,
+    /// Position du morceau à lire (octets).
+    pub offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DocsTableParams {
+    /// Dépôt `owner/name` parmi les dépôts suivis.
+    pub repo: String,
+    /// CSV ou classeur Excel, relatif au dossier des documents.
+    pub path: String,
+    /// Feuille du classeur (la première sinon).
+    pub sheet: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -799,6 +991,44 @@ impl GestionProjet {
     }
 
     /// Dépôt demandé, validé et pris parmi les dépôts suivis (nom canonique).
+    /// Dépôt suivi, branche par défaut et dossier des documents (`documents_dir`).
+    async fn docs_ctx(&self, wanted: &str) -> Result<(String, String, String)> {
+        let repo = self.repo(wanted)?;
+        let branch = docs::default_branch(&self.gh, &repo).await?;
+        Ok((repo, branch, docs::root_dir(&self.settings().documents_dir)))
+    }
+
+    /// Fichiers (`.gitkeep` compris) d'un dossier, ou le fichier seul : chemin relatif aux
+    /// documents et sha du blob.
+    async fn docs_files_under(
+        &self,
+        repo: &str,
+        branch: &str,
+        root: &str,
+        path: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let tree = self
+            .gh
+            .get_opt(
+                &format!("/repos/{repo}/git/trees/{branch}"),
+                &[("recursive", "1".into())],
+            )
+            .await?
+            .unwrap_or(Value::Null);
+        let base = format!("{root}/");
+        Ok(tree["tree"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| e["type"] == "blob")
+            .filter_map(|e| {
+                let rel = e["path"].as_str()?.strip_prefix(&base)?;
+                (rel == path || rel.starts_with(&format!("{path}/")))
+                    .then(|| (rel.to_string(), e["sha"].as_str().unwrap_or_default().to_string()))
+            })
+            .collect())
+    }
+
     fn repo(&self, wanted: &str) -> Result<String> {
         let name = config::normalize_repo(wanted)
             .ok_or_else(|| anyhow!("Dépôt invalide : « {wanted} ». Attendu : owner/name."))?;
@@ -813,7 +1043,7 @@ impl GestionProjet {
             .ok_or_else(|| {
                 anyhow!(
                     "Dépôt « {name} » non suivi par Gestion de projet. Dépôts suivis : {}. \
-                     Ajoutez-le dans « Dépôts suivis » du plugin.",
+                     Choisissez-le dans le sélecteur de dépôt de la barre du plugin.",
                     followed.join(", ")
                 )
             })
@@ -1924,7 +2154,8 @@ fn project_view_with(project: &Project, milestones: &[Value], tag_prefix: &str) 
 }
 
 fn no_repos_message() -> String {
-    "Aucun dépôt suivi : ajoutez-en dans « Dépôts suivis » du plugin Gestion de projet.".into()
+    "Aucun dépôt choisi : choisissez (ou créez) le dépôt du projet dans le sélecteur de la barre      du plugin Gestion de projet."
+        .into()
 }
 
 #[tool_router]
@@ -1938,10 +2169,22 @@ impl GestionProjet {
         respond(
             async {
                 let user = self.gh.get("/user", &[]).await?;
+                // Organisations où créer un dépôt ; vide si le jeton n'a pas le droit de les lire.
+                let orgs: Vec<Value> = self
+                    .gh
+                    .get("/user/orgs", &[("per_page", "100".into())])
+                    .await
+                    .ok()
+                    .and_then(|o| o.as_array().cloned())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|o| o["login"].as_str().map(|l| json!(l)))
+                    .collect();
                 Ok(json!({
                     "login": user["login"],
                     "name": user["name"],
                     "avatar_url": user["avatar_url"],
+                    "orgs": orgs,
                     "repos": self.followed(),
                 }))
             }
@@ -1957,37 +2200,584 @@ impl GestionProjet {
     async fn list_account_repos(&self, Parameters(p): Parameters<ListAccountReposParams>) -> ToolResult {
         respond(
             async {
-                let raw = self
-                    .gh
-                    .get(
-                        "/user/repos",
-                        &[
-                            ("sort", "updated".into()),
-                            ("per_page", "100".into()),
-                            ("affiliation", "owner,collaborator,organization_member".into()),
-                        ],
-                    )
-                    .await?;
+                // Jusqu'à ACCOUNT_REPO_PAGES pages de 100, du plus récemment modifié au plus ancien.
+                let mut raw = Vec::new();
+                let mut truncated = false;
+                for page in 1..=ACCOUNT_REPO_PAGES {
+                    let res = self
+                        .gh
+                        .get_page(
+                            "/user/repos",
+                            &[
+                                ("sort", "updated".into()),
+                                ("per_page", "100".into()),
+                                ("page", page.to_string()),
+                                ("affiliation", "owner,collaborator,organization_member".into()),
+                            ],
+                        )
+                        .await?;
+                    raw.extend(res.body.as_array().cloned().unwrap_or_default());
+                    if !res.has_next {
+                        break;
+                    }
+                    truncated = page == ACCOUNT_REPO_PAGES;
+                }
                 let followed = self.followed();
                 let query = p.query.unwrap_or_default().trim().to_lowercase();
                 let repos: Vec<Value> = raw
+                    .iter()
+                    .filter_map(|r| {
+                        let name = r["full_name"].as_str()?;
+                        (query.is_empty() || name.to_lowercase().contains(&query))
+                            .then(|| account_repo(r, &followed))
+                    })
+                    .collect();
+                Ok(json!({ "repos": repos, "truncated": truncated }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Crée un dépôt GitHub pour le compte connecté (ou une organisation dont il est membre), avec un README initial : sert à l'écran « Dépôt ». Le dépôt créé doit ensuite être choisi pour être suivi.",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn create_repo(&self, Parameters(p): Parameters<CreateRepoParams>) -> ToolResult {
+        respond(
+            async {
+                let name = p.name.trim();
+                if !valid_repo_name(name) {
+                    bail!(
+                        "Nom de dépôt invalide : « {name} ». Lettres, chiffres, « - », « _ » et « . » \
+                         seulement, 100 caractères au plus."
+                    );
+                }
+                let mut body = json!({
+                    "name": name,
+                    "private": p.private.unwrap_or(true),
+                    "auto_init": true,
+                });
+                if let Some(description) = p.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                    body["description"] = json!(description);
+                }
+                let path = match p.owner.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+                    Some(owner) => {
+                        let login = self.gh.get("/user", &[]).await?["login"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        if owner.eq_ignore_ascii_case(&login) {
+                            "/user/repos".to_string()
+                        } else {
+                            format!("/orgs/{owner}/repos")
+                        }
+                    }
+                    None => "/user/repos".to_string(),
+                };
+                let r = self.gh.post(&path, &body).await?;
+                Ok(account_repo(&r, &self.followed()))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Collaborateurs d'un dépôt suivi et invitations en attente : sert à l'écran « Dépôt ».",
+        meta = ui_only(),
+        annotations(read_only_hint = true)
+    )]
+    async fn list_collaborators(&self, Parameters(p): Parameters<RepoParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let members = self
+                    .gh
+                    .get(
+                        &format!("/repos/{repo}/collaborators"),
+                        &[("per_page", "100".into())],
+                    )
+                    .await?;
+                // Les invitations demandent les droits d'administration : liste vide sinon.
+                let invitations = self
+                    .gh
+                    .get(
+                        &format!("/repos/{repo}/invitations"),
+                        &[("per_page", "100".into())],
+                    )
+                    .await
+                    .unwrap_or(Value::Array(Vec::new()));
+                let members: Vec<Value> = members
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(|r| {
-                        let name = r["full_name"].as_str()?;
-                        (query.is_empty() || name.to_lowercase().contains(&query)).then(|| {
-                            json!({
-                                "full_name": name,
-                                "private": r["private"],
-                                "description": r["description"],
-                                "updated_at": r["updated_at"],
-                                "followed": followed.iter().any(|f| f.eq_ignore_ascii_case(name)),
-                            })
+                    .map(|m| {
+                        json!({
+                            "login": m["login"],
+                            "avatar_url": m["avatar_url"],
+                            "role": m["role_name"],
                         })
                     })
                     .collect();
-                Ok(json!({ "repos": repos }))
+                let invitations: Vec<Value> = invitations
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|i| {
+                        json!({
+                            "id": i["id"],
+                            "login": i["invitee"]["login"],
+                            "avatar_url": i["invitee"]["avatar_url"],
+                            "role": i["permissions"],
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "repo": repo, "collaborators": members, "invitations": invitations }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Invite un utilisateur GitHub (login) comme collaborateur d'un dépôt suivi ; GitHub lui envoie l'invitation. Sert à l'écran « Dépôt ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn invite_collaborator(&self, Parameters(p): Parameters<InviteParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                let login = p.login.trim().trim_start_matches('@');
+                if !valid_login(login) {
+                    bail!("Identifiant GitHub invalide : « {login} ».");
+                }
+                let permission = p.permission.unwrap_or_default();
+                let res = self
+                    .gh
+                    .put(
+                        &format!("/repos/{repo}/collaborators/{login}"),
+                        &json!({ "permission": permission.as_str() }),
+                    )
+                    .await?;
+                // 201 : invitation créée ; 204 (corps vide) : déjà collaborateur.
+                Ok(json!({
+                    "repo": repo,
+                    "login": login,
+                    "invited": !res.is_null(),
+                    "already_member": res.is_null(),
+                }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Retire un collaborateur d'un dépôt suivi, ou annule son invitation en attente (`invitation_id`). Sert à l'écran « Dépôt ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
+    )]
+    async fn remove_collaborator(&self, Parameters(p): Parameters<RemoveCollaboratorParams>) -> ToolResult {
+        respond(
+            async {
+                let repo = self.repo(&p.repo)?;
+                match (
+                    p.invitation_id,
+                    p.login.as_deref().map(str::trim).filter(|l| !l.is_empty()),
+                ) {
+                    (Some(id), _) => self.gh.delete(&format!("/repos/{repo}/invitations/{id}")).await?,
+                    (None, Some(login)) if valid_login(login) => {
+                        self.gh
+                            .delete(&format!("/repos/{repo}/collaborators/{login}"))
+                            .await?
+                    }
+                    _ => bail!("Indiquez le login du collaborateur ou l'invitation à annuler."),
+                }
+                Ok(json!({ "repo": repo, "removed": true }))
+            }
+            .await,
+        )
+    }
+
+    /* ---------- Documents du projet ---------- */
+
+    #[tool(
+        description = "Documents du projet rangés dans le dépôt (cahier des charges, sujet, fiches de mission, données attendues, comptes-rendus…) : arborescence avec type et taille. À consulter AVANT de créer, compléter ou découper des issues, de planifier ou de proposer des issues : ces documents disent ce qui est attendu. Lire ensuite avec docs_read, ou chercher avec docs_search.",
+        annotations(read_only_hint = true)
+    )]
+    async fn docs_list(&self, Parameters(p): Parameters<DocsListParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let folder = docs::clean_opt(p.folder.as_deref())?;
+                let mut entries = docs::list(&self.gh, &repo, &branch, &root).await?;
+                if !folder.is_empty() {
+                    let prefix = format!("{folder}/");
+                    entries.retain(|e| e.path.starts_with(&prefix));
+                }
+                let files = entries.iter().filter(|e| !e.folder).count();
+                let outline = if entries.is_empty() {
+                    "Aucun document pour l'instant.".to_string()
+                } else {
+                    docs::outline(&entries)
+                };
+                Ok(json!({
+                    "repo": repo,
+                    "branch": branch,
+                    "dir": root,
+                    "url": format!("https://github.com/{repo}/tree/{branch}/{root}"),
+                    "files": files,
+                    "entries": entries,
+                    "outline": outline,
+                    "templates": docs::TEMPLATE_FOLDERS,
+                }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Texte d'un document du projet (PDF, Word, PowerPoint, Markdown, texte, CSV, Excel), page par page : `page` donne la première page lue, `next_page` la suite s'il en reste. Les tableaux sont rendus en Markdown (200 premières lignes). Les images ne sont pas lisibles en texte.",
+        annotations(read_only_hint = true)
+    )]
+    async fn docs_read(&self, Parameters(p): Parameters<DocsReadParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let path = docs::clean_rel(&p.path)?;
+                let entries = docs::list(&self.gh, &repo, &branch, &root).await?;
+                let entry = docs::find(&entries, &path)?;
+                let kind = entry.kind.unwrap_or(docs::Kind::Other);
+                let Some(pages) = docs::cached_pages(&self.gh, &repo, entry).await? else {
+                    return Ok(json!({
+                        "path": path,
+                        "kind": kind,
+                        "text": format!(
+                            "{} ({}, {}) : contenu non lisible en texte.",
+                            entry.name,
+                            docs::kind_label(kind),
+                            docs::human_size(entry.size)
+                        ),
+                        "pages": 0,
+                    }));
+                };
+                let total = pages.len() as u32;
+                let start = p.page.unwrap_or(1).clamp(1, total.max(1));
+                let budget = p.max_chars.unwrap_or(docs::READ_CHARS as u32).clamp(1000, 40_000) as usize;
+                let mut text = String::new();
+                let mut last = start;
+                for n in start..=total {
+                    let page = &pages[(n - 1) as usize];
+                    if !text.is_empty() && text.len() + page.len() > budget {
+                        break;
+                    }
+                    text.push_str(&format!("--- {path}, page {n}/{total} ---\n{page}\n\n"));
+                    last = n;
+                }
+                Ok(json!({
+                    "path": path,
+                    "kind": kind,
+                    "pages": total,
+                    "from": start,
+                    "to": last,
+                    "next_page": (last < total).then_some(last + 1),
+                    "text": text,
+                }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Cherche des mots dans le texte de tous les documents du projet (sans casse) : chemin, page et extrait de chaque passage trouvé (40 au plus). Pratique pour retrouver une exigence, une contrainte ou une donnée attendue avant de rédiger une issue.",
+        annotations(read_only_hint = true)
+    )]
+    async fn docs_search(&self, Parameters(p): Parameters<DocsSearchParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let needle = p.query.trim().to_lowercase();
+                if needle.chars().count() < 2 {
+                    bail!("Cherchez au moins deux caractères.");
+                }
+                let folder = docs::clean_opt(p.folder.as_deref())?;
+                let prefix = format!("{folder}/");
+                let entries = docs::list(&self.gh, &repo, &branch, &root).await?;
+                let mut hits = Vec::new();
+                let mut unreadable = Vec::new();
+                for e in entries
+                    .iter()
+                    .filter(|e| !e.folder && (folder.is_empty() || e.path.starts_with(&prefix)))
+                {
+                    // Les noms de fichiers comptent aussi.
+                    if e.path.to_lowercase().contains(&needle) {
+                        hits.push(json!({ "path": e.path, "page": null, "excerpt": format!("(nom du fichier) {}", e.path) }));
+                    }
+                    let pages = match docs::cached_pages(&self.gh, &repo, e).await {
+                        Ok(Some(pages)) => pages,
+                        Ok(None) => continue,
+                        Err(err) => {
+                            unreadable.push(json!({ "path": e.path, "message": format!("{err:#}") }));
+                            continue;
+                        }
+                    };
+                    for (i, page) in pages.iter().enumerate() {
+                        if let Some(excerpt) = docs::snippet(page, &needle) {
+                            hits.push(json!({ "path": e.path, "page": i + 1, "excerpt": excerpt }));
+                        }
+                    }
+                    if hits.len() >= 40 {
+                        break;
+                    }
+                }
+                hits.truncate(40);
+                Ok(json!({ "query": p.query, "hits": hits, "unreadable": unreadable }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Dépose des fichiers dans les documents du projet (un commit sur la branche par défaut) ; un ZIP est décompressé dans un sous-dossier à son nom. Sert à l'écran « Documents ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn docs_upload(&self, Parameters(p): Parameters<DocsUploadParams>) -> ToolResult {
+        respond(
+            async {
+                use base64::Engine as _;
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let folder = docs::clean_opt(p.folder.as_deref())?;
+                if p.files.is_empty() {
+                    bail!("Aucun fichier à déposer.");
+                }
+                let mut uploads = Vec::new();
+                for f in p.files {
+                    uploads.push(match (f.path, f.content_base64) {
+                        (Some(path), _) => {
+                            let meta = tokio::fs::metadata(&path)
+                                .await
+                                .with_context(|| format!("fichier « {path} » introuvable"))?;
+                            if meta.len() as usize > docs::MAX_FILE {
+                                bail!("« {path} » dépasse 100 Mo : GitHub le refuserait.");
+                            }
+                            let name = std::path::Path::new(&path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .ok_or_else(|| anyhow!("Nom de fichier illisible : {path}"))?
+                                .to_string();
+                            let content = tokio::fs::read(&path)
+                                .await
+                                .with_context(|| format!("lecture de « {path} »"))?;
+                            docs::Upload { name, content }
+                        }
+                        (None, Some(data)) => {
+                            let name = f
+                                .name
+                                .ok_or_else(|| anyhow!("`name` est requis avec `content_base64`."))?;
+                            let content = base64::engine::general_purpose::STANDARD
+                                .decode(data.trim())
+                                .with_context(|| format!("contenu de « {name} » illisible (base64)"))?;
+                            docs::Upload { name, content }
+                        }
+                        (None, None) => bail!("Chaque fichier demande `path` ou `content_base64`."),
+                    });
+                }
+                let target = if folder.is_empty() {
+                    root.clone()
+                } else {
+                    format!("{root}/{folder}")
+                };
+                let files = tokio::task::spawn_blocking(move || docs::expand_uploads(&target, uploads))
+                    .await
+                    .map_err(|e| anyhow!("décompression interrompue : {e}"))??;
+                let base = format!("{root}/");
+                let added: Vec<String> = files
+                    .iter()
+                    .map(|(path, _)| path.strip_prefix(&base).unwrap_or(path).to_string())
+                    .collect();
+                let message = match added.as_slice() {
+                    [one] => format!("docs : ajoute {one}"),
+                    _ if folder.is_empty() => format!("docs : ajoute {} documents", added.len()),
+                    _ => format!("docs : ajoute {} documents dans {folder}", added.len()),
+                };
+                let changes = files
+                    .into_iter()
+                    .map(|(path, content)| docs::Change::Put { path, content })
+                    .collect();
+                let commit = docs::commit(&self.gh, &repo, &branch, changes, &message).await?;
+                Ok(json!({ "repo": repo, "added": added, "commit": commit }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Crée des dossiers dans les documents du projet (un `.gitkeep` chacun, un seul commit). Sert à l'écran « Documents ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+    )]
+    async fn docs_mkdir(&self, Parameters(p): Parameters<DocsMkdirParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let mut changes = Vec::new();
+                let mut created = Vec::new();
+                for path in &p.paths {
+                    let path = docs::clean_rel(path)?;
+                    changes.push(docs::Change::Put {
+                        path: format!("{root}/{path}/{}", docs::KEEP),
+                        content: Vec::new(),
+                    });
+                    created.push(path);
+                }
+                let message = match created.as_slice() {
+                    [one] => format!("docs : crée le dossier {one}"),
+                    _ => format!("docs : crée {} dossiers", created.len()),
+                };
+                docs::commit(&self.gh, &repo, &branch, changes, &message).await?;
+                Ok(json!({ "repo": repo, "created": created }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Déplace ou renomme un document ou un dossier des documents du projet (un commit). Sert à l'écran « Documents ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+    )]
+    async fn docs_move(&self, Parameters(p): Parameters<DocsMoveParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let from = docs::clean_rel(&p.from)?;
+                let to = docs::clean_rel(&p.to)?;
+                if from == to {
+                    bail!("Le nouveau chemin est identique.");
+                }
+                if to.starts_with(&format!("{from}/")) {
+                    bail!("Impossible de déplacer un dossier dans lui-même.");
+                }
+                let existing = self.docs_files_under(&repo, &branch, &root, &to).await?;
+                if !existing.is_empty() {
+                    bail!("« {to} » existe déjà.");
+                }
+                // Fichiers (`.gitkeep` compris) sous le chemin, ou le fichier seul.
+                let files = self.docs_files_under(&repo, &branch, &root, &from).await?;
+                if files.is_empty() {
+                    bail!("« {from} » introuvable.");
+                }
+                let mut changes = Vec::new();
+                for (path, sha) in files {
+                    let rest = path.strip_prefix(&from).unwrap_or("");
+                    changes.push(docs::Change::Copy {
+                        path: format!("{root}/{to}{rest}"),
+                        sha,
+                    });
+                    changes.push(docs::Change::Delete {
+                        path: format!("{root}/{path}"),
+                    });
+                }
+                docs::commit(
+                    &self.gh,
+                    &repo,
+                    &branch,
+                    changes,
+                    &format!("docs : déplace {from} vers {to}"),
+                )
+                .await?;
+                Ok(json!({ "repo": repo, "from": from, "to": to }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Supprime un document ou un dossier (avec son contenu) des documents du projet (un commit ; l'historique Git le garde). Sert à l'écran « Documents ».",
+        meta = ui_only(),
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)
+    )]
+    async fn docs_delete(&self, Parameters(p): Parameters<DocsPathParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let path = docs::clean_rel(&p.path)?;
+                let files = self.docs_files_under(&repo, &branch, &root, &path).await?;
+                if files.is_empty() {
+                    bail!("« {path} » introuvable.");
+                }
+                let changes = files
+                    .into_iter()
+                    .map(|(p, _)| docs::Change::Delete {
+                        path: format!("{root}/{p}"),
+                    })
+                    .collect();
+                docs::commit(
+                    &self.gh,
+                    &repo,
+                    &branch,
+                    changes,
+                    &format!("docs : supprime {path}"),
+                )
+                .await?;
+                Ok(json!({ "repo": repo, "deleted": path }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Contenu brut d'un document par morceaux de 2 Mo (base64), pour la visionneuse de l'écran « Documents » (PDF, images, texte).",
+        meta = ui_only(),
+        annotations(read_only_hint = true)
+    )]
+    async fn docs_bytes(&self, Parameters(p): Parameters<DocsBytesParams>) -> ToolResult {
+        respond(
+            async {
+                use base64::Engine as _;
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let path = docs::clean_rel(&p.path)?;
+                let entries = docs::list(&self.gh, &repo, &branch, &root).await?;
+                let entry = docs::find(&entries, &path)?;
+                let bytes = docs::blob(&self.gh, &repo, &entry.sha).await?;
+                let offset = (p.offset.unwrap_or(0) as usize).min(bytes.len());
+                let end = (offset + docs::CHUNK).min(bytes.len());
+                Ok(json!({
+                    "path": path,
+                    "mime": docs::mime_of(&path),
+                    "size": bytes.len(),
+                    "offset": offset,
+                    "next": (end < bytes.len()).then_some(end),
+                    "data": base64::engine::general_purpose::STANDARD.encode(&bytes[offset..end]),
+                }))
+            }
+            .await,
+        )
+    }
+
+    #[tool(
+        description = "Tableau d'un CSV ou d'une feuille Excel (1000 premières lignes), pour la visionneuse de l'écran « Documents ».",
+        meta = ui_only(),
+        annotations(read_only_hint = true)
+    )]
+    async fn docs_table(&self, Parameters(p): Parameters<DocsTableParams>) -> ToolResult {
+        respond(
+            async {
+                let (repo, branch, root) = self.docs_ctx(&p.repo).await?;
+                let path = docs::clean_rel(&p.path)?;
+                let entries = docs::list(&self.gh, &repo, &branch, &root).await?;
+                let entry = docs::find(&entries, &path)?;
+                let bytes = docs::blob(&self.gh, &repo, &entry.sha).await?;
+                let kind = docs::kind_of(&path);
+                let sheet = p.sheet.clone();
+                let table = tokio::task::spawn_blocking(move || match kind {
+                    docs::Kind::Csv => docs::csv_table(&bytes, 1000),
+                    docs::Kind::Excel => docs::excel_table(&bytes, sheet.as_deref(), 1000),
+                    _ => Err(anyhow!("Ni CSV ni classeur Excel.")),
+                })
+                .await
+                .map_err(|e| anyhow!("lecture interrompue : {e}"))??;
+                Ok(serde_json::to_value(table)?)
             }
             .await,
         )
@@ -2903,6 +3693,43 @@ mod tests {
     }
 
     #[test]
+    fn validates_repo_names_and_logins() {
+        assert!(valid_repo_name("mon-projet_2.web"));
+        for bad in ["", ".", "..", "mon projet", "a/b", &"x".repeat(101)] {
+            assert!(!valid_repo_name(bad), "{bad}");
+        }
+        assert!(valid_login("Remi-SDV"));
+        for bad in ["", "a b", "a_b", "@x", &"x".repeat(40)] {
+            assert!(!valid_login(bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn collaborators_need_a_followed_repo() {
+        let s = server(&["me/app"]);
+        let r = s
+            .invite_collaborator(Parameters(InviteParams {
+                repo: "me/other".into(),
+                login: "ami".into(),
+                permission: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(text(&r).contains("non suivi"), "{}", text(&r));
+        let r = s
+            .create_repo(Parameters(CreateRepoParams {
+                name: "mauvais nom".into(),
+                owner: None,
+                description: None,
+                private: None,
+            }))
+            .await
+            .unwrap();
+        assert!(text(&r).contains("Nom de dépôt invalide"), "{}", text(&r));
+    }
+
+    #[test]
     fn declares_every_tool() {
         let names: Vec<String> = server(&[])
             .tool_router
@@ -2913,6 +3740,10 @@ mod tests {
         for expected in [
             "get_account",
             "list_account_repos",
+            "create_repo",
+            "list_collaborators",
+            "invite_collaborator",
+            "remove_collaborator",
             "get_repository",
             "list_issues",
             "get_issue",
@@ -2955,6 +3786,15 @@ mod tests {
             "get_pull_request_diff",
             "review_pull_request",
             "merge_pull_request",
+            "docs_list",
+            "docs_read",
+            "docs_search",
+            "docs_upload",
+            "docs_mkdir",
+            "docs_move",
+            "docs_delete",
+            "docs_bytes",
+            "docs_table",
         ] {
             assert!(names.iter().any(|n| n == expected), "outil {expected} absent");
         }
@@ -2971,7 +3811,7 @@ mod tests {
                 .map(|r| r.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             match tool.name.as_ref() {
-                "get_account" | "list_account_repos" | "architecture_templates" => {}
+                "get_account" | "list_account_repos" | "create_repo" | "architecture_templates" => {}
                 // `repo` absent : tous les dépôts suivis.
                 "list_issues" | "list_pull_requests" => {
                     assert!(props.is_some_and(|p| p.contains_key("repo")), "{}", tool.name);
@@ -2985,7 +3825,15 @@ mod tests {
     #[test]
     fn marks_ui_only_tools() {
         let tools = server(&[]).tool_router.list_all();
-        for name in ["get_account", "list_account_repos", "design_delete"] {
+        for name in [
+            "get_account",
+            "list_account_repos",
+            "create_repo",
+            "list_collaborators",
+            "invite_collaborator",
+            "remove_collaborator",
+            "design_delete",
+        ] {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             let meta = tool.meta.as_ref().expect("_meta");
             assert_eq!(meta.0.get("cadence/visibility"), Some(&json!("ui")));
@@ -3030,7 +3878,15 @@ mod tests {
                         || name.ends_with("_get")
                         || matches!(
                             name,
-                            "sprint_summary" | "sprint_backlog" | "roadmap" | "architecture_templates"
+                            "sprint_summary"
+                                | "sprint_backlog"
+                                | "roadmap"
+                                | "architecture_templates"
+                                | "docs_list"
+                                | "docs_read"
+                                | "docs_search"
+                                | "docs_bytes"
+                                | "docs_table"
                         ),
                     "{name} déclaré en lecture seule"
                 );
@@ -3090,7 +3946,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.is_error, Some(true));
-        assert!(text(&r).contains("Aucun dépôt suivi"));
+        assert!(text(&r).contains("Aucun dépôt choisi"));
 
         let r = server(&["me/app"])
             .get_issue(Parameters(GetIssueParams {
@@ -3368,7 +4224,7 @@ mod tests {
             .list_pull_requests(Parameters(ListPullRequestsParams::default()))
             .await
             .unwrap();
-        assert!(text(&r).contains("Aucun dépôt suivi"));
+        assert!(text(&r).contains("Aucun dépôt choisi"));
         // Chaque dépôt échoue (pas de jeton) : l'erreur est remontée.
         let r = server(&["me/app", "me/site"])
             .list_pull_requests(Parameters(ListPullRequestsParams::default()))
@@ -3384,7 +4240,7 @@ mod tests {
 
     /// Dépôt réel Remisdv/Go-Alternance-CRM-POC : 23 issues sans version (V1 et V2), une PR, et
     /// l'issue d'état #24 « idle » créée par les jalons de la roadmap, sprints jamais démarrés.
-    pub(super) async fn crm() -> (GestionProjet, Arc<Mutex<crate::fake_github::Repo>>) {
+    pub(crate) async fn crm() -> (GestionProjet, Arc<Mutex<crate::fake_github::Repo>>) {
         let mut issues: Vec<Value> =
             serde_json::from_str(include_str!("../fixtures/go-alternance-crm-poc/issues.json")).unwrap();
         for i in &mut issues {
@@ -4545,5 +5401,264 @@ mod events {
         let release = state.sprints[0].release.clone().unwrap();
         assert_eq!(release.status, projet::ReleaseStatus::Merged);
         assert_eq!(release.merged_at.as_deref(), e["merged_at"].as_str());
+    }
+}
+
+/// Documents du projet (dossier `docs/intern` du dépôt) : dossiers, dépôt de fichiers et de ZIP,
+/// lecture par l'IA, recherche, visionneuse, renommage et suppression, sur le faux GitHub.
+#[cfg(test)]
+mod documents {
+    use super::*;
+    use base64::Engine as _;
+    use cadence_extract::tests::pdf;
+
+    const CRM: &str = "Remisdv/Go-Alternance-CRM-POC";
+
+    fn data(r: &CallToolResult) -> Value {
+        assert_ne!(r.is_error, Some(true), "{:?}", r.content);
+        r.structured_content.clone().expect("résultat structuré")
+    }
+
+    fn file(name: &str, content: &[u8]) -> DocsUploadFile {
+        DocsUploadFile {
+            path: None,
+            name: Some(name.into()),
+            content_base64: Some(base64::engine::general_purpose::STANDARD.encode(content)),
+        }
+    }
+
+    fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in files {
+            w.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(content.as_bytes()).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    async fn list(s: &GestionProjet) -> Value {
+        data(
+            &s.docs_list(Parameters(DocsListParams {
+                repo: CRM.into(),
+                folder: None,
+            }))
+            .await
+            .unwrap(),
+        )
+    }
+
+    fn paths(listing: &Value) -> Vec<String> {
+        listing["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let slash = if e["folder"] == true { "/" } else { "" };
+                format!("{}{slash}", e["path"].as_str().unwrap())
+            })
+            .collect()
+    }
+
+    fn read(path: &str, page: Option<u32>) -> Parameters<DocsReadParams> {
+        Parameters(DocsReadParams {
+            repo: CRM.into(),
+            path: path.into(),
+            page,
+            max_chars: None,
+        })
+    }
+
+    fn search(query: &str, folder: Option<&str>) -> Parameters<DocsSearchParams> {
+        Parameters(DocsSearchParams {
+            repo: CRM.into(),
+            query: query.into(),
+            folder: folder.map(str::to_string),
+        })
+    }
+
+    #[tokio::test]
+    async fn documents_live_in_the_repository() {
+        let (s, fake) = super::tests::crm().await;
+
+        // Dépôt sans documents : liste vide, dossiers proposés.
+        let empty = list(&s).await;
+        assert_eq!(empty["files"], 0);
+        assert_eq!(empty["dir"], "docs/intern");
+        assert_eq!(empty["templates"][0], "Sujet et cahier des charges");
+
+        // Dossiers du modèle : un commit, un .gitkeep chacun (masqué de la liste).
+        data(
+            &s.docs_mkdir(Parameters(DocsMkdirParams {
+                repo: CRM.into(),
+                paths: vec![
+                    "Sujet et cahier des charges".into(),
+                    "Missions".into(),
+                    "Données".into(),
+                ],
+            }))
+            .await
+            .unwrap(),
+        );
+        assert!(
+            fake.lock()
+                .unwrap()
+                .files()
+                .contains_key("docs/intern/Missions/.gitkeep")
+        );
+
+        // Dépôt : un PDF, un CSV, et un ZIP décompressé dans un sous-dossier à son nom.
+        let zip = zip_of(&[
+            ("grille.md", "# Grille\nLe livrable est noté sur 20."),
+            ("__MACOSX/._x", "x"),
+        ]);
+        let up = data(
+            &s.docs_upload(Parameters(DocsUploadParams {
+                repo: CRM.into(),
+                folder: Some("Missions".into()),
+                files: vec![
+                    file(
+                        "Sujet.pdf",
+                        &pdf(&["Contexte : CRM pour alternants", "Livrable : une API REST"]),
+                    ),
+                    file(
+                        "attendus.csv",
+                        "colonne;type\nnom;texte\nemail;texte\n".as_bytes(),
+                    ),
+                    file("Modalités.zip", &zip),
+                ],
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(
+            up["added"],
+            json!([
+                "Missions/Sujet.pdf",
+                "Missions/attendus.csv",
+                "Missions/Modalités/grille.md"
+            ])
+        );
+        let listing = list(&s).await;
+        assert_eq!(listing["files"], 3);
+        let all = paths(&listing);
+        assert!(all.contains(&"Missions/Modalités/".to_string()), "{all:?}");
+        assert!(
+            all.contains(&"Données/".to_string()),
+            "dossier vide gardé : {all:?}"
+        );
+        assert!(!all.iter().any(|p| p.ends_with(".gitkeep")), "{all:?}");
+        assert!(listing["outline"].as_str().unwrap().contains("Sujet.pdf (PDF"));
+
+        // Lecture par l'IA, page par page.
+        let page2 = data(&s.docs_read(read("Missions/Sujet.pdf", Some(2))).await.unwrap());
+        assert_eq!(page2["pages"], 2);
+        assert!(page2["text"].as_str().unwrap().contains("API REST"), "{page2}");
+        let csv = data(&s.docs_read(read("Missions/attendus.csv", None)).await.unwrap());
+        assert!(
+            csv["text"].as_str().unwrap().contains("| email | texte |"),
+            "{csv}"
+        );
+
+        // Recherche plein texte dans tous les documents (PDF et Markdown du ZIP).
+        let found = data(&s.docs_search(search("LIVRABLE", None)).await.unwrap());
+        let hits: Vec<&str> = found["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["path"].as_str().unwrap())
+            .collect();
+        assert!(hits.contains(&"Missions/Sujet.pdf"), "{found}");
+        assert!(hits.contains(&"Missions/Modalités/grille.md"), "{found}");
+
+        // Visionneuse : tableau et octets.
+        let table = data(
+            &s.docs_table(Parameters(DocsTableParams {
+                repo: CRM.into(),
+                path: "Missions/attendus.csv".into(),
+                sheet: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(table["columns"], json!(["colonne", "type"]));
+        assert_eq!(table["total"], 2);
+        let bytes = data(
+            &s.docs_bytes(Parameters(DocsBytesParams {
+                repo: CRM.into(),
+                path: "Missions/Sujet.pdf".into(),
+                offset: None,
+            }))
+            .await
+            .unwrap(),
+        );
+        assert_eq!(bytes["mime"], "application/pdf");
+        assert_eq!(bytes["next"], Value::Null);
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(bytes["data"].as_str().unwrap())
+            .unwrap();
+        assert!(raw.starts_with(b"%PDF"));
+
+        // Renommage d'un dossier (contenu compris), puis suppression d'un fichier.
+        data(
+            &s.docs_move(Parameters(DocsMoveParams {
+                repo: CRM.into(),
+                from: "Missions/Modalités".into(),
+                to: "Sujet et cahier des charges/Modalités".into(),
+            }))
+            .await
+            .unwrap(),
+        );
+        data(
+            &s.docs_delete(Parameters(DocsPathParams {
+                repo: CRM.into(),
+                path: "Missions/attendus.csv".into(),
+            }))
+            .await
+            .unwrap(),
+        );
+        let files: Vec<String> = fake.lock().unwrap().files().into_keys().collect();
+        let moved = "docs/intern/Sujet et cahier des charges/Modalités/grille.md".to_string();
+        assert!(files.contains(&moved), "{files:?}");
+        assert!(
+            !files.iter().any(|f| f.contains("Missions/Modalités")),
+            "{files:?}"
+        );
+        assert!(
+            !files.contains(&"docs/intern/Missions/attendus.csv".to_string()),
+            "{files:?}"
+        );
+
+        // Erreurs lisibles.
+        let r = s.docs_read(read("absent.pdf", None)).await.unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let r = s
+            .docs_upload(Parameters(DocsUploadParams {
+                repo: CRM.into(),
+                folder: Some("../hors".into()),
+                files: vec![file("x.txt", b"x")],
+            }))
+            .await
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn sees_documents_pushed_by_a_teammate() {
+        let (s, fake) = super::tests::crm().await;
+        fake.lock().unwrap().push_files(&[
+            (
+                "docs/intern/Divers/notes.txt",
+                "Point équipe : demo vendredi".as_bytes(),
+            ),
+            ("README.md", b"# CRM"),
+        ]);
+        let listing = list(&s).await;
+        assert_eq!(paths(&listing), ["Divers/", "Divers/notes.txt"]);
+        let found = data(&s.docs_search(search("DEMO", Some("Divers"))).await.unwrap());
+        assert_eq!(found["hits"][0]["path"], "Divers/notes.txt");
+        let none = data(&s.docs_search(search("demo", Some("Missions"))).await.unwrap());
+        assert_eq!(none["hits"], json!([]));
     }
 }

@@ -6,6 +6,7 @@
 mod architecture;
 mod categories;
 mod config;
+mod docs;
 mod engine;
 #[cfg(test)]
 mod fake_github;

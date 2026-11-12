@@ -30,10 +30,24 @@ contexte.
 | `gestion-projet__create_issue` | créer les propositions retenues (`type`, `category`, `points`, `priority`, `labels`, **sans** `milestone`) |
 | `gestion-projet__list_categories` | catégories du dépôt (domaine › catégorie) : l'`id` à passer en `category` |
 | `gestion-projet__jalon_issues` | ranger les issues créées dans le jalon (`{ "repo", "id", "add": [numéros] }`) |
+| `gestion-projet__docs_list` | documents du projet rangés dans le dépôt (cahier des charges, sujet, fiches de mission, données attendues, comptes-rendus…) : arborescence |
+| `gestion-projet__docs_search` | chercher un mot ou une exigence dans le texte de tous ces documents (chemin, page, extrait) |
+| `gestion-projet__docs_read` | lire un document page par page (PDF, Word, PowerPoint, Markdown, CSV, Excel ; `page`, puis `next_page`) |
 
 Tu tournes dans un dossier neutre de Cadence, pas dans le dépôt : obtiens le worktree avec
 `cadence__repo_checkout`, puis lis la documentation (README, docs/, CHANGELOG) et le code à partir du
 chemin renvoyé pour savoir ce qui existe déjà. Ne modifie aucun fichier.
+
+## Documents du projet
+
+Le dépôt peut contenir les **documents du projet** (dossier `docs/intern` par défaut) : cahier des
+charges, sujet, fiches de mission, modalités, données attendues, comptes-rendus… Ils font foi sur
+ce qui est attendu. **Avant de rédiger**, appelle `docs_list` ; s'il y a des documents, cherche
+avec `docs_search` les passages qui concernent ton sujet (mots-clés de l'issue, du jalon ou du
+document) et lis les pages utiles avec `docs_read`. Sers-t'en pour les exigences, les contraintes,
+les formats de données et les critères d'acceptation, et **cite la source** dans l'issue
+(« Source : Missions/fiche-2.pdf, p. 3 »). L'utilisateur n'a pas à t'envoyer ces documents : va
+les chercher. Sans document, continue normalement.
 
 ## Démarche
 

@@ -37,9 +37,19 @@ contexte.
 | `gestion-projet__update_issue` | passer l'issue en `status: "doing"` puis `"review"` |
 | `gestion-projet__create_pull_request` | ouvrir la PR en brouillon (`draft: true`) |
 | `gestion-projet__add_comment` | lier la PR dans l'issue, résumer le travail |
+| `gestion-projet__docs_list` | documents du projet rangés dans le dépôt (cahier des charges, sujet, fiches de mission, données attendues, comptes-rendus…) : arborescence |
+| `gestion-projet__docs_search` | chercher un mot ou une exigence dans le texte de tous ces documents (chemin, page, extrait) |
+| `gestion-projet__docs_read` | lire un document page par page (PDF, Word, PowerPoint, Markdown, CSV, Excel ; `page`, puis `next_page`) |
 
 Git s'utilise en ligne de commande **dans le worktree** (`cd <path>` ou `git -C <path>`), avec
 l'identité et les accès déjà configurés sur la machine.
+
+## Documents du projet
+
+Le dépôt peut contenir les **documents du projet** (dossier `docs/intern` par défaut : cahier des
+charges, sujet, données attendues…). Si l'issue cite une source (« Source : … ») ou si un détail
+manque (format d'une donnée, règle métier), lis-la avec `docs_search` / `docs_read` plutôt que de
+deviner. Ne modifie pas ces documents.
 
 ## Règles absolues
 

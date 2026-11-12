@@ -53,16 +53,55 @@ export interface Account {
   login: string;
   name: string | null;
   avatar_url: string | null;
+  /** Organisations où le compte peut créer un dépôt (vide sans le droit `read:org`). */
+  orgs?: string[];
   repos: string[];
 }
 
-/** Dépôt accessible au compte (`list_account_repos`, réservé à l'UI). */
+/** Dépôt accessible au compte (`list_account_repos`, `create_repo`, réservés à l'UI). */
 export interface AccountRepo {
   full_name: string;
   private: boolean;
   description: string | null;
   updated_at: string | null;
+  /** Droits d'administration : inviter des collaborateurs. */
+  admin?: boolean;
   followed: boolean;
+}
+
+/** Rôle d'un collaborateur invité (`invite_collaborator`). */
+export type Permission = "pull" | "triage" | "push" | "maintain" | "admin";
+
+export const PERMISSIONS: { id: Permission; label: string }[] = [
+  { id: "pull", label: "Lecture" },
+  { id: "triage", label: "Tri des issues" },
+  { id: "push", label: "Écriture" },
+  { id: "maintain", label: "Maintenance" },
+  { id: "admin", label: "Administration" },
+];
+
+/** Collaborateurs d'un dépôt et invitations en attente (`list_collaborators`). */
+export interface Collaborators {
+  repo: string;
+  collaborators: { login: string; avatar_url: string | null; role: string | null }[];
+  invitations: { id: number; login: string; avatar_url: string | null; role: string | null }[];
+}
+
+/** Libellé d'un rôle GitHub (`role_name` ou permission d'invitation). */
+export function permissionLabel(role: string | null | undefined): string {
+  const id = role === "read" ? "pull" : role === "write" ? "push" : role;
+  return PERMISSIONS.find((p) => p.id === id)?.label ?? role ?? "";
+}
+
+/** Nom de dépôt accepté par GitHub (lettres, chiffres, « - », « _ », « . »). */
+export function validRepoName(name: string): boolean {
+  return /^[A-Za-z0-9._-]{1,100}$/.test(name) && name !== "." && name !== "..";
+}
+
+/** Login GitHub saisi (« @ » toléré) ; `null` s'il est invalide. */
+export function parseLogin(input: string): string | null {
+  const login = input.trim().replace(/^@/, "");
+  return /^[A-Za-z0-9-]{1,39}$/.test(login) ? login : null;
 }
 
 /** Clé unique d'une issue, même quand plusieurs dépôts sont affichés. */
@@ -294,10 +333,11 @@ export const views = {
   roadmap: { title: "Roadmap", icon: "roadmap" },
   versions: { title: "Versions", icon: "tag" },
   planning: { title: "Planning", icon: "calendar" },
+  documents: { title: "Documents", icon: "folder" },
   architecture: { title: "Architecture", icon: "folder" },
   designs: { title: "Designs", icon: "layers" },
   "pull-requests": { title: "Pull requests", icon: "pullRequest" },
-  "setup-depots": { title: "Dépôts suivis", icon: "github" },
+  "setup-depots": { title: "Dépôt et équipe", icon: "github" },
 } satisfies Record<string, ViewMeta>;
 
 export type ViewId = keyof typeof views;

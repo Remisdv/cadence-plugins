@@ -325,7 +325,7 @@ fn split_point(text: &str, target: usize) -> usize {
         .unwrap_or(hard)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod tests {
     use super::*;
     use std::io::Write;

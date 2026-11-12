@@ -2,12 +2,13 @@ api = 1
 id = "gestion-projet"
 name = "Gestion de projet"
 version = "0.9.0"
-description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests de vos dépôts suivis, avec des skills pour compléter, implémenter et livrer."
+description = "Issues GitHub, kanban, roadmap, sprints, versions et pull requests d'un dépôt (choisi ou créé depuis l'app), avec des skills pour compléter, implémenter et livrer."
 authors = ["Rémi Lhuillier"]
 icon = "icon.svg"
 category = "projet"
 color = "blue"
-# Connexion GitHub, dépôts suivis, sélecteur de dépôt, clone et worktree à la demande : fournis par Cadence.
+# Connexion GitHub, dépôt actif (sélecteur de la barre), clone et worktree à la demande : fournis par Cadence.
+# Le plugin travaille dans un seul dépôt à la fois : tout ce qu'il gère est enregistré dans ce dépôt.
 # Le service déclare lui-même ses outils externes (git requis, gh optionnel et connecté) : pas de [[requires]].
 services = ["repos"]
 min_cadence = "0.3.0"
@@ -55,6 +56,14 @@ title = "Versions"
 icon = "tag"
 section = "Planification"
 
+# Documents du projet (cahier des charges, sujet, missions, données…), rangés dans le dépôt
+# (docs/intern) ; l'IA y pioche pour créer des issues.
+[[ui.views]]
+id = "documents"
+title = "Documents"
+icon = "folder"
+section = "Conception"
+
 [[ui.views]]
 id = "architecture"
 title = "Architecture"
@@ -73,22 +82,22 @@ title = "Pull requests"
 icon = "pullRequest"
 section = "Code"
 
-# Routes hors de la barre du plugin, ouvertes par `navigate` : détail d'une issue
-# ({ repo, number, from }) et choix des dépôts suivis (bouton « Choisir des dépôts » sans dépôt).
+# Dépôt actif (choisir parmi les dépôts du compte, en créer un) et équipe (inviter par login GitHub).
+[[ui.views]]
+id = "setup-depots"
+title = "Dépôt et équipe"
+icon = "github"
+section = "Dépôt"
+
+# Route hors de la barre du plugin, ouverte par `navigate` : détail d'une issue ({ repo, number, from }).
 [[ui.views]]
 id = "issue"
 title = "Issue"
 icon = "issue"
 hidden = true
 
-[[ui.views]]
-id = "setup-depots"
-title = "Dépôts suivis"
-icon = "github"
-hidden = true
-
-# Pas de [[setup]] : l'onboarding de Cadence enchaîne déjà la connexion GitHub et les dépôts
-# suivis du service repos ; une étape du plugin les redemandait (doublon).
+# Pas de [[setup]] : l'onboarding de Cadence enchaîne déjà la connexion GitHub et le choix du
+# dépôt du service repos ; une étape du plugin le redemandait (doublon).
 
 [settings]
 schema = "settings.schema.json"

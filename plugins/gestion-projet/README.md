@@ -117,6 +117,14 @@ transforme les écrans en issues ; « Créer un design » en commande un nouveau
 
 <img src="../../docs/captures/gestion-projet-designs.png" alt="Visionneuse de designs" width="840">
 
+La vue **Documents** range les documents du projet : cahier des charges, sujet, fiches de mission,
+données attendues (CSV, Excel), comptes-rendus… Ils sont enregistrés dans le dépôt (dossier
+`docs/intern`, réglable), donc partagés avec toute l'équipe, en dossiers et sous-dossiers libres
+(un modèle est proposé). On les dépose par le bouton ou par glisser-déposer ; un ZIP est
+décompressé. Les PDF, tableaux, images, Markdown et textes s'affichent directement dans l'app. L'IA
+y pioche d'elle-même (liste, recherche, lecture page par page) quand elle crée, complète, découpe ou
+propose des issues, et cite ses sources.
+
 ### 7. Livrer une version
 
 La vue **Versions** suit chaque version : avancement en story points, PR fusionnées, jours restants,
@@ -153,15 +161,16 @@ brouillon.
    **Gestion de projet**.
 2. Connectez GitHub : Réglages › Dépôts GitHub › « Se connecter avec GitHub » (avec le compte de la
    CLI `gh`, par le navigateur, avec un code d'appairage ou un jeton personnel).
-3. Choisissez les dépôts à suivre. Le sélecteur en haut de la barre du plugin passe de l'un à
-   l'autre, ou affiche « Tous les dépôts ».
+3. Choisissez le dépôt du projet dans le sélecteur en haut de la barre du plugin (vos dépôts GitHub
+   y sont listés), ou créez-le depuis ce même sélecteur. Invitez l'équipe depuis « Dépôt et équipe ».
 4. Sur **Sprint en cours**, « Démarrer le projet » lance les sprints automatiques.
 
 ## Données et réseau
 
 Le plugin ne contacte que l'API GitHub (`api.github.com`), avec la connexion GitHub de Cadence.
-Votre jeton reste au trousseau du système. Rien n'est stocké en local : catégories, sprints et
-jalons sont enregistrés dans le dépôt (labels, milestones, issue d'état).
+Votre jeton reste au trousseau du système. Tout est enregistré dans le dépôt : catégories, sprints
+et jalons (labels, milestones, issue d'état), documents du projet (`docs/intern`). Seul un cache des
+documents déjà lus est gardé en local.
 
 ## Pour aller plus loin
 

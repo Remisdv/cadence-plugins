@@ -185,11 +185,26 @@ describe("service repos", () => {
     host.select({ kind: "one", repo: "me/app" });
     await tick();
     expect(changes.map((c) => [c.repos.length, c.selection])).toEqual([
-      [2, { kind: "all" }],
+      // Un seul dépôt actif : jamais « tous » dès qu'un dépôt est suivi.
+      [2, { kind: "one", repo: "me/app" }],
       [2, { kind: "one", repo: "me/site" }],
-      // Le dépôt sélectionné n'est plus suivi : retour à « tous ».
-      [1, { kind: "all" }],
+      // Le dépôt sélectionné n'est plus suivi : le premier suivi devient actif.
+      [1, { kind: "one", repo: "me/app" }],
     ]);
+  });
+
+  it("rend un dépôt actif d'un appel (repos.select)", async () => {
+    const { cadence } = connectMock({ repos: { repos: ["me/app"] } });
+    await cadence.ready();
+    const changes: ReposChange[] = [];
+    cadence.repos.onChange((c) => changes.push(c));
+    expect(await cadence.repos.select(" me/neuf ")).toEqual({ kind: "one", repo: "me/neuf" });
+    await tick();
+    expect((await cadence.repos.list()).map((r) => r.fullName)).toEqual(["me/neuf", "me/app"]);
+    expect(changes.at(-1)?.selection).toEqual({ kind: "one", repo: "me/neuf" });
+    await expect(cadence.repos.select("https://github.com/me/x")).rejects.toMatchObject({
+      code: "invalid_params",
+    });
   });
 
   it("refuse un nom de dépôt invalide sans appeler l'hôte", async () => {

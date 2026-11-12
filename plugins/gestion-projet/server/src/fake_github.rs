@@ -43,6 +43,12 @@ pub struct Repo {
     lagging: HashMap<u64, Value>,
     /// Écritures d'issues reçues : horodatage `updated_at` croissant.
     writes: u32,
+    /// API Git (documents du projet) : blobs par sha, arbres (chemin → sha de blob), commits
+    /// (sha → arbre). Un commit inconnu (« c0ffee ») a un arbre vide.
+    pub blobs: HashMap<String, Vec<u8>>,
+    trees: HashMap<String, std::collections::BTreeMap<String, String>>,
+    commits: HashMap<String, String>,
+    git_seq: u32,
 }
 
 impl Repo {
@@ -72,7 +78,148 @@ impl Repo {
             computing: HashMap::new(),
             lagging: HashMap::new(),
             writes: 0,
+            blobs: HashMap::new(),
+            trees: HashMap::new(),
+            commits: HashMap::new(),
+            git_seq: 0,
         }
+    }
+
+    fn next_sha(&mut self, prefix: char) -> String {
+        self.git_seq += 1;
+        format!("{prefix}{:039x}", self.git_seq)
+    }
+
+    /// Fichiers de la branche par défaut : chemin → contenu.
+    pub fn files(&self) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let head = self
+            .branches
+            .get(&self.default_branch)
+            .cloned()
+            .unwrap_or_default();
+        self.tree_of_commit(&head)
+            .into_iter()
+            .map(|(path, sha)| (path, self.blobs.get(&sha).cloned().unwrap_or_default()))
+            .collect()
+    }
+
+    fn tree_of_commit(&self, commit: &str) -> std::collections::BTreeMap<String, String> {
+        self.commits
+            .get(commit)
+            .and_then(|t| self.trees.get(t))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Écrit des fichiers sur la branche par défaut (un commit), comme un push.
+    pub fn push_files(&mut self, files: &[(&str, &[u8])]) {
+        let head = self
+            .branches
+            .get(&self.default_branch)
+            .cloned()
+            .unwrap_or_default();
+        let mut tree = self.tree_of_commit(&head);
+        for (path, content) in files {
+            let sha = blob_sha(content);
+            self.blobs.insert(sha.clone(), content.to_vec());
+            tree.insert(path.to_string(), sha);
+        }
+        let tree_sha = self.next_sha('t');
+        self.trees.insert(tree_sha.clone(), tree);
+        let commit = self.next_sha('c');
+        self.commits.insert(commit.clone(), tree_sha);
+        self.branches.insert(self.default_branch.clone(), commit);
+    }
+
+    fn git(
+        &mut self,
+        method: &str,
+        segs: &[&str],
+        q: &HashMap<String, String>,
+        body: &Value,
+    ) -> Option<(u16, Value)> {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        Some(match (method, segs) {
+            ("GET", ["git", "trees", rest @ ..]) => {
+                let r = rest.join("/");
+                let tree = match self.branches.get(&r).cloned() {
+                    Some(commit) => self.tree_of_commit(&commit),
+                    None => self.trees.get(&r).cloned().unwrap_or_default(),
+                };
+                let recursive = q.get("recursive").is_some();
+                let mut entries = Vec::new();
+                let mut dirs = std::collections::BTreeSet::new();
+                for (path, sha) in &tree {
+                    let mut parts: Vec<&str> = path.split('/').collect();
+                    parts.pop();
+                    for i in 1..=parts.len() {
+                        dirs.insert(parts[..i].join("/"));
+                    }
+                    if recursive || !path.contains('/') {
+                        let size = self.blobs.get(sha).map(Vec::len).unwrap_or(0);
+                        entries.push(json!({ "path": path, "type": "blob", "sha": sha, "size": size, "mode": "100644" }));
+                    }
+                }
+                for d in dirs {
+                    entries.push(json!({ "path": d, "type": "tree", "sha": format!("d{:039x}", d.len()), "mode": "040000" }));
+                }
+                (200, json!({ "sha": r, "tree": entries, "truncated": false }))
+            }
+            ("GET", ["git", "commits", sha]) => {
+                let tree = self.commits.get(*sha).cloned().unwrap_or_else(|| "t-vide".into());
+                (200, json!({ "sha": sha, "tree": { "sha": tree } }))
+            }
+            ("GET", ["git", "blobs", sha]) => match self.blobs.get(*sha) {
+                Some(bytes) => (
+                    200,
+                    json!({ "sha": sha, "encoding": "base64", "content": b64.encode(bytes), "size": bytes.len() }),
+                ),
+                None => not_found(sha),
+            },
+            ("POST", ["git", "blobs"]) => {
+                let bytes = b64
+                    .decode(body["content"].as_str().unwrap_or_default())
+                    .unwrap_or_default();
+                let sha = blob_sha(&bytes);
+                self.blobs.insert(sha.clone(), bytes);
+                (201, json!({ "sha": sha }))
+            }
+            ("POST", ["git", "trees"]) => {
+                let base = body["base_tree"].as_str().unwrap_or_default();
+                let mut tree = self.trees.get(base).cloned().unwrap_or_default();
+                for item in body["tree"].as_array().into_iter().flatten() {
+                    let path = item["path"].as_str().unwrap_or_default().to_string();
+                    match item["sha"].as_str() {
+                        Some(sha) => {
+                            tree.insert(path, sha.to_string());
+                        }
+                        None => {
+                            tree.remove(&path);
+                        }
+                    }
+                }
+                let sha = self.next_sha('t');
+                self.trees.insert(sha.clone(), tree);
+                (201, json!({ "sha": sha }))
+            }
+            ("POST", ["git", "commits"]) => {
+                let sha = self.next_sha('c');
+                self.commits
+                    .insert(sha.clone(), body["tree"].as_str().unwrap_or_default().to_string());
+                (201, json!({ "sha": sha, "message": body["message"] }))
+            }
+            ("PATCH", ["git", "refs", "heads", branch @ ..]) => {
+                let name = branch.join("/");
+                let sha = body["sha"].as_str().unwrap_or_default().to_string();
+                self.branches.insert(name.clone(), sha.clone());
+                (
+                    200,
+                    json!({ "ref": format!("refs/heads/{name}"), "object": { "sha": sha } }),
+                )
+            }
+            _ => return None,
+        })
     }
 
     pub fn issue(&self, number: u64) -> Option<&Value> {
@@ -132,6 +279,9 @@ impl Repo {
         };
         let segs: Vec<String> = rest.split('/').filter(|s| !s.is_empty()).map(decode).collect();
         let segs: Vec<&str> = segs.iter().map(String::as_str).collect();
+        if let Some(res) = self.git(method, segs.as_slice(), &q, &body) {
+            return res;
+        }
         match (method, segs.as_slice()) {
             ("GET", []) => (
                 200,
@@ -565,6 +715,17 @@ fn decode(s: &str) -> String {
 }
 
 /// Lance le faux GitHub ; rend son URL de base et son état partagé.
+/// Sha d'un blob d'après son contenu (comme Git) : un même contenu garde le même sha, ce qui
+/// garde juste le cache local des documents d'un test à l'autre.
+fn blob_sha(content: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut h);
+    let a = h.finish();
+    content.len().hash(&mut h);
+    format!("{a:016x}{:016x}00000000", h.finish())
+}
+
 pub async fn start(repo: Repo) -> (String, Arc<Mutex<Repo>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("port local");
     let url = format!("http://{}", listener.local_addr().expect("adresse locale"));

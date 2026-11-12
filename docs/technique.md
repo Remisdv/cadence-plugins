@@ -84,8 +84,11 @@ services = ["repos"]
 
 - Cadence gère la **connexion GitHub** (gh CLI, navigateur, code d'appairage ou jeton personnel,
   rangé au trousseau) : le plugin ne déclare pas de secret pour son jeton.
-- Le plugin a une liste de **dépôts suivis** et un **sélecteur** en tête de sa barre : un dépôt, ou
-  « Tous les dépôts » pour les vues agrégées.
+- Le plugin travaille dans **un dépôt actif** choisi par le **sélecteur** en tête de sa barre, qui
+  liste les dépôts du compte GitHub connecté (récents en tête) et sait en créer un : pas de lien à
+  coller. Les **dépôts suivis** sont l'actif et les récents (l'IA peut finir une tâche lancée avant
+  un changement de dépôt). Dès qu'un dépôt est suivi, la sélection est toujours un dépôt
+  (`{ kind: "one" }`) ; `{ kind: "all" }` ne reste que sans aucun dépôt.
 - Le serveur reçoit `CADENCE_GITHUB_TOKEN` (si GitHub est connecté) et `CADENCE_REPOS` (JSON des
   dépôts suivis), puis `notifications/cadence/repos` à chaque changement de la liste.
 - La lecture passe par l'API GitHub ; le **clone** n'a lieu qu'à la demande, quand un skill doit
@@ -93,7 +96,8 @@ services = ["repos"]
   prépare un worktree par tâche sous `<données de l'app>/repos/<owner>/<name>/` et l'ouvre à l'IA
   pour cette session seulement.
 - Écrans : `cadence.repos.list()`, `selection()`, `onChange()`, `follow()`, `unfollow()`,
-  `checkout()` (voir [`packages/sdk`](../packages/sdk)). Le contexte d'une action reçoit la sélection
+  `select()` (rend un dépôt actif : suivi et choisi d'un appel), `checkout()` (voir
+  [`packages/sdk`](../packages/sdk)). Le contexte d'une action reçoit la sélection
   courante (`repo` ou `repos`).
 
 `pnpm validate` avertit quand un plugin lit `CADENCE_GITHUB_TOKEN` ou `CADENCE_REPOS`, appelle

@@ -261,7 +261,10 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
 
   const reposChanged = () => {
     const current = selection;
-    if (current.kind === "one" && !repos.some((r) => r.fullName === current.repo)) selection = { kind: "all" };
+    // Un seul dépôt actif : la sélection d'un dépôt retiré passe au premier suivi.
+    if (current.kind === "all" || !repos.some((r) => r.fullName === current.repo)) {
+      selection = repos[0] ? { kind: "one", repo: repos[0].fullName } : { kind: "all" };
+    }
     const change: ReposChange = { repos: [...repos], selection };
     queueMicrotask(() => send("repos", change));
   };
@@ -332,6 +335,14 @@ export function createMockHost(port: Port, options: MockHostOptions = {}): MockH
           reposChanged();
         }
         return repos;
+      case "repos.select":
+        repos = [
+          repos.find((r) => r.fullName === params.repo) ?? repoInfo(params.repo),
+          ...repos.filter((r) => r.fullName !== params.repo),
+        ];
+        selection = { kind: "one", repo: params.repo };
+        reposChanged();
+        return selection;
       case "repos.unfollow":
         if (repos.some((r) => r.fullName === params.repo)) {
           repos = repos.filter((r) => r.fullName !== params.repo);

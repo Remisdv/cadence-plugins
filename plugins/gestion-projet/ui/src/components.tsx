@@ -198,21 +198,23 @@ export function EmptyCard({
 export function NoRepos() {
   return (
     <Card className="flex flex-col items-center gap-3 p-6 text-center">
-      <span className="text-body-sm text-tx2">Aucun dépôt suivi par Gestion de projet.</span>
+      <span className="text-body-sm text-tx2">
+        Choisissez le dépôt du projet (ou créez-le) : tout y sera enregistré.
+      </span>
       <Button
         size="sm"
         variant="secondary"
         icon="github"
         onClick={() => void cadence.navigate("setup-depots")}
       >
-        Choisir des dépôts
+        Choisir un dépôt
       </Button>
     </Card>
   );
 }
 
 export function ToolError({ message, className }: { message: string; className?: string }) {
-  const needsRepos = /non suivi|Aucun dépôt suivi/.test(message);
+  const needsRepos = /non suivi|Aucun dépôt (suivi|choisi)/.test(message);
   return (
     <Callout tone="danger" className={cn("mb-4", className)}>
       <div className="flex flex-col gap-2">
@@ -225,7 +227,7 @@ export function ToolError({ message, className }: { message: string; className?:
               icon="github"
               onClick={() => void cadence.navigate("setup-depots")}
             >
-              Dépôts suivis
+              Dépôt et équipe
             </Button>
           </span>
         )}

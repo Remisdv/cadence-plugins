@@ -25,6 +25,14 @@
       "description": "Méthode utilisée quand l'IA fusionne une PR validée (« Relire et valider ») : squash (un seul commit), merge (commit de fusion) ou rebase.",
       "enum": ["squash", "merge", "rebase"],
       "default": "squash"
+    },
+    "documents_dir": {
+      "type": "string",
+      "title": "Dossier des documents du projet",
+      "description": "Dossier du dépôt (branche par défaut) où sont rangés les documents du projet : cahier des charges, sujet, fiches de mission, données… L'IA y pioche pour créer des issues.",
+      "default": "docs/intern",
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._ -]+)*$",
+      "maxLength": 120
     }
   }
 }

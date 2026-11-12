@@ -12,6 +12,7 @@
   "dependencies": {
     "@cadence/plugin-sdk": "workspace:*",
     "@cadence/ui": "workspace:*",
+    "pdfjs-dist": "6.4.299",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

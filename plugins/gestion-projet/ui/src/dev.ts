@@ -2,13 +2,13 @@
  * Hôte simulé pour `pnpm dev` hors de Cadence : deux dépôts suivis (service `repos` simulé) et
  * des issues, versions, pull requests et releases d'exemple, sans réseau. `?view=sprint`,
  * `roadmap`, `versions`, `pull-requests` ou `setup-depots` ouvre une vue (`&version=0.1.2` : détail
- * d'une version ; `?view=issue&number=156` : détail d'une issue) ; `?repo=all` démarre sur « Tous
- * les dépôts ». Dans Cadence (iframe), ce module
- * n'est pas utilisé.
+ * d'une version ; `?view=issue&number=156` : détail d'une issue). Dans Cadence (iframe), ce
+ * module n'est pas utilisé.
  */
 import type { MockHostOptions } from "@cadence/plugin-sdk";
 import type {
   AccountRepo,
+  Collaborators,
   ArchiTemplate,
   Architecture,
   Issue,
@@ -27,6 +27,7 @@ import archiTemplates from "../../server/src/templates.json";
 // Taxonomie des catégories livrée avec le serveur.
 import defaultCategories from "../../server/src/categories.json";
 import type { CategoryConfig, CategoryList, Domain, DomainView } from "./categories";
+import { docsTools } from "./dev-docs";
 
 const params = new URLSearchParams(location.search);
 
@@ -262,6 +263,18 @@ function resolveCategories(config: CategoryConfig): DomainView[] {
 const categoryList = (repo: string): CategoryList => {
   const config = categoryConfigs[repo] ?? {};
   return { repo, domains: resolveCategories(config), config };
+};
+
+/** Équipe simulée du dépôt actif (« Dépôt et équipe »). */
+const team: {
+  members: Collaborators["collaborators"];
+  invitations: Collaborators["invitations"];
+} = {
+  members: [
+    { login: "RemiSDV", avatar_url: null, role: "admin" },
+    { login: "camille-dev", avatar_url: null, role: "write" },
+  ],
+  invitations: [{ id: 41, login: "alex-design", avatar_url: null, role: "triage" }],
 };
 
 const accountRepos: Omit<AccountRepo, "followed">[] = [
@@ -1229,8 +1242,7 @@ export const devHost: MockHostOptions = {
   },
   repos: {
     repos: ["RemiSDV/cadence", "RemiSDV/cadence-plugins"],
-    selection:
-      params.get("repo") === "all" ? { kind: "all" } : { kind: "one", repo: "RemiSDV/cadence" },
+    selection: { kind: "one", repo: "RemiSDV/cadence" },
   },
   tools: {
     list_issues: ({ repo, state }) => {
@@ -1319,8 +1331,56 @@ export const devHost: MockHostOptions = {
       found.updated_at = new Date().toISOString();
       return { ...found };
     },
-    get_account: () => ({ login: "RemiSDV", name: "Rémi Lhuillier", avatar_url: null, repos: [] }),
-    list_account_repos: () => ({ repos: accountRepos.map((r) => ({ ...r, followed: false })) }),
+    get_account: () => ({
+      login: "RemiSDV",
+      name: "Rémi Lhuillier",
+      avatar_url: null,
+      orgs: ["cadence-org"],
+      repos: [],
+    }),
+    list_account_repos: ({ query }) => {
+      const q = String(query ?? "").toLowerCase();
+      return {
+        repos: accountRepos
+          .filter((r) => !q || r.full_name.toLowerCase().includes(q))
+          .map((r) => ({ ...r, admin: true, followed: false })),
+      };
+    },
+    create_repo: ({ name, owner, description, private: isPrivate }) => {
+      const fullName = `${(owner as string | undefined) ?? "RemiSDV"}/${name as string}`;
+      if (accountRepos.some((r) => r.full_name.toLowerCase() === fullName.toLowerCase()))
+        throw new Error("GitHub : name already exists on this account.");
+      const repo = {
+        full_name: fullName,
+        private: isPrivate !== false,
+        description: (description as string | undefined) ?? null,
+        updated_at: new Date().toISOString(),
+      };
+      accountRepos.unshift(repo);
+      return { ...repo, admin: true, followed: false };
+    },
+    list_collaborators: ({ repo }) => ({
+      repo,
+      collaborators: team.members,
+      invitations: team.invitations,
+    }),
+    invite_collaborator: ({ repo, login, permission }) => {
+      const already = team.members.some((m) => m.login.toLowerCase() === String(login).toLowerCase());
+      if (!already)
+        team.invitations.push({
+          id: Date.now() % 100000,
+          login: login as string,
+          avatar_url: null,
+          role: (permission as string | undefined) ?? "push",
+        });
+      return { repo, login, invited: !already, already_member: already };
+    },
+    remove_collaborator: ({ repo, login, invitation_id }) => {
+      team.invitations = team.invitations.filter((i) => i.id !== invitation_id);
+      team.members = team.members.filter((m) => m.login !== login);
+      return { repo, removed: true };
+    },
     ...planningTools,
+    ...docsTools,
   },
 };
